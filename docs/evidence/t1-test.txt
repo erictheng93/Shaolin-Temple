@@ -1,0 +1,26 @@
+﻿cargo :     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.18s
+位於 線路:2 字元:199
++ ... utf8 ../docs/evidence/t1-clippy.txt; cargo test --locked 2>&1 | Out-F ...
++                                          ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `t...get(s) in 1.18s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+     Running unittests src\lib.rs (target\debug\deps\temple_server-a054da669ba02a43.exe)
+
+running 1 test
+test config::tests::defaults_and_invalid_settings ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\temple_server-ff9242048c2d9de3.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests temple_server
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

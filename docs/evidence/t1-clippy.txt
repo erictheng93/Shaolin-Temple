@@ -1,0 +1,7 @@
+﻿cargo :     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+位於 線路:2 字元:85
++ ... mt --check; cargo clippy --locked --all-targets -- -D warnings 2>&1 | ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `d...get(s) in 0.17s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 

@@ -1,0 +1,161 @@
+{
+  "server": [
+    {
+      "t": "welcome",
+      "selfId": "a",
+      "room": "r",
+      "resumeToken": "t",
+      "serverTime": 0,
+      "players": [
+        {
+          "id": "a",
+          "name": "n",
+          "x": 0,
+          "z": 0,
+          "heading": 0,
+          "zone": "courtyard"
+        }
+      ]
+    },
+    {
+      "t": "join",
+      "player": {
+        "id": "a",
+        "name": "n",
+        "x": 0,
+        "z": 0,
+        "heading": 0,
+        "action": {
+          "id": "bow",
+          "startedAt": 123
+        }
+      }
+    },
+    {
+      "t": "leave",
+      "id": "a"
+    },
+    {
+      "t": "move",
+      "id": "a",
+      "x": 1,
+      "z": 2,
+      "heading": 0,
+      "moving": true
+    },
+    {
+      "t": "moves",
+      "m": [
+        [
+          "a",
+          1.25,
+          -3,
+          0.5,
+          1
+        ],
+        [
+          "b",
+          0,
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "t": "action",
+      "playerId": "a",
+      "id": "bow",
+      "startedAt": 123
+    },
+    {
+      "t": "action",
+      "playerId": "a",
+      "id": "bell",
+      "startedAt": 123,
+      "data": {
+        "count": 1
+      }
+    },
+    {
+      "t": "ack",
+      "reqId": "r1",
+      "ok": true
+    },
+    {
+      "t": "ack",
+      "reqId": "r2",
+      "ok": false,
+      "reason": "unknown_action"
+    },
+    {
+      "t": "pong",
+      "ts": 123.25,
+      "serverTime": 456
+    },
+    {
+      "t": "error",
+      "code": "unsupported_version",
+      "message": "Protocol version 1 required"
+    },
+    {
+      "t": "zone",
+      "id": "a",
+      "zone": "hall",
+      "x": 0,
+      "z": 0,
+      "heading": 0
+    }
+  ],
+  "client": [
+    {
+      "t": "hello",
+      "v": 1,
+      "name": "n"
+    },
+    {
+      "t": "hello",
+      "v": 1,
+      "name": "n",
+      "resumeToken": "t"
+    },
+    {
+      "t": "move",
+      "x": 1,
+      "z": 2,
+      "heading": 0,
+      "seq": 1
+    },
+    {
+      "t": "stop",
+      "x": 1,
+      "z": 2,
+      "heading": 0,
+      "seq": 2
+    },
+    {
+      "t": "action",
+      "reqId": "r1",
+      "id": "bow"
+    },
+    {
+      "t": "action",
+      "reqId": "r2",
+      "id": "bell",
+      "data": {
+        "count": 1
+      }
+    },
+    {
+      "t": "ping",
+      "ts": 123.25
+    },
+    {
+      "t": "zone",
+      "zone": "hall",
+      "x": 0,
+      "z": 0,
+      "heading": 0
+    }
+  ]
+}

@@ -12,6 +12,11 @@
 export const PROTOCOL_VERSION = 1
 /** 單則訊息上限（bytes）。超過即丟棄，伺服器端也應設相同上限。 */
 export const MAX_MESSAGE_BYTES = 16 * 1024
+/**
+ * 伺服器對客戶端字串欄位的上限（UTF-8 bytes，見 server/src/protocol.rs）。超過時整則被視為無效訊息，
+ * 10 秒內累積 21 則無效訊息會被斷線。前端產生的值都遠低於這些上限。
+ */
+export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32, zone: 32, rawName: 256 } as const
 
 export interface PlayerSnapshot {
   id: string

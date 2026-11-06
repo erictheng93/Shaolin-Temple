@@ -1,0 +1,133 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded httparse v1.10.1
+  Downloaded cpufeatures v0.2.17
+  Downloaded crypto-common v0.1.7
+  Downloaded futures-task v0.3.34
+  Downloaded itoa v1.0.18
+  Downloaded cfg-if v1.0.5
+  Downloaded atomic-waker v1.1.2
+  Downloaded thread_local v1.1.10
+  Downloaded http-body v1.1.0
+  Downloaded sha1 v0.10.7
+  Downloaded generic-array v0.14.7
+  Downloaded sync_wrapper v1.0.2
+  Downloaded tracing-serde v0.2.0
+  Downloaded tower-service v0.3.3
+  Downloaded futures-sink v0.3.34
+  Downloaded form_urlencoded v1.2.2
+  Downloaded digest v0.10.7
+  Downloaded rand_chacha v0.9.0
+  Downloaded block-buffer v0.10.4
+  Downloaded serde_urlencoded v0.7.1
+  Downloaded lazy_static v1.5.1
+  Downloaded matchers v0.2.0
+  Downloaded errno v0.3.14
+  Downloaded percent-encoding v2.3.2
+  Downloaded futures-core v0.3.34
+  Downloaded tokio-macros v2.7.2
+  Downloaded tower-layer v0.3.3
+  Downloaded version_check v0.9.5
+  Downloaded signal-hook-registry v1.4.8
+  Downloaded mime v0.3.18
+  Downloaded axum-core v0.5.6
+  Downloaded rand_core v0.9.5
+  Downloaded pin-project-lite v0.2.17
+  Downloaded thiserror-impl v2.0.21
+  Downloaded thiserror v2.0.21
+  Downloaded serde_path_to_error v0.1.20
+  Downloaded quote v1.0.47
+  Downloaded http-body-util v0.1.5
+  Downloaded tracing-log v0.2.0
+  Downloaded httpdate v1.0.3
+  Downloaded data-encoding v2.11.1
+  Downloaded zmij v1.0.23
+  Downloaded unicode-ident v1.0.27
+  Downloaded ppv-lite86 v0.2.21
+  Downloaded nu-ansi-term v0.50.3
+  Downloaded sharded-slab v0.1.7
+  Downloaded once_cell v1.21.4
+  Downloaded serde_derive v1.0.229
+  Downloaded tokio-tungstenite v0.29.0
+  Downloaded tracing-attributes v0.1.31
+  Downloaded ryu v1.0.23
+  Downloaded proc-macro2 v1.0.107
+  Downloaded log v0.4.35
+  Downloaded smallvec v1.16.4
+  Downloaded getrandom v0.3.4
+  Downloaded tracing-core v0.1.36
+  Downloaded slab v0.4.12
+  Downloaded matchit v0.8.4
+  Downloaded tungstenite v0.29.0
+  Downloaded socket2 v0.6.5
+  Downloaded serde_core v1.0.229
+  Downloaded bytes v1.12.1
+  Downloaded bitflags v2.13.2
+  Downloaded serde v1.0.229
+  Downloaded base64 v0.22.1
+  Downloaded tower v0.5.3
+  Downloaded typenum v1.20.1
+  Downloaded rand v0.9.5
+  Downloaded hyper-util v0.1.21
+  Downloaded serde_json v1.0.154
+  Downloaded hyper v1.12.0
+  Downloaded axum v0.8.9
+  Downloaded tracing-subscriber v0.3.23
+  Downloaded tower-http v0.7.1
+  Downloaded futures-util v0.3.34
+  Downloaded aho-corasick v1.1.5
+  Downloaded http v1.5.0
+  Downloaded mio v1.2.4
+  Downloaded zerocopy v0.8.63
+  Downloaded syn v3.0.9
+  Downloaded regex-syntax v0.8.11
+  Downloaded syn v2.0.119
+  Downloaded memchr v2.8.3
+  Downloaded tracing v0.1.44
+  Downloaded regex-automata v0.4.18
+  Downloaded libc v0.2.191
+  Downloaded tokio v1.54.1
+   Compiling temple-server v0.1.0 (/src)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.15s
+     Running unittests src/lib.rs (target/debug/deps/temple_server-cdbe37958ad2f976)
+
+running 3 tests
+test connection::tests::invalid_window_expires ... ok
+test config::tests::defaults_and_invalid_settings ... ok
+test protocol::tests::unicode_names ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/temple_server-4da644a4ba95e52c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/protocol.rs (target/debug/deps/protocol-332dee0bd7ace33b)
+
+running 2 tests
+test malformed_client_fields_rejected ... ok
+test shared_frontend_fixtures_round_trip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/websocket.rs (target/debug/deps/websocket-b697a7e137c41c0b)
+
+running 7 tests
+test origin_rejected_missing_and_foreign ... ok
+test oversized_and_binary_close_codes ... ok
+test unsupported_version_then_close ... ok
+test fragmented_message_limit ... ok
+test exact_byte_limit_and_invalid_schema_do_not_break_session ... ok
+test invalid_messages_ignored_until_twenty_one_and_ping_echoed ... ok
+test hello_timeout ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
+
+   Doc-tests temple_server
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

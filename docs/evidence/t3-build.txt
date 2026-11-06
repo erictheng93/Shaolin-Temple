@@ -1,0 +1,2 @@
+   Compiling temple-server v0.1.0 (/src)
+    Finished `release` profile [optimized] target(s) in 2.50s
