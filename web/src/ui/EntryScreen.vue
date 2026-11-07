@@ -16,7 +16,7 @@ function submit() {
   <section class="entry" aria-labelledby="entry-title">
     <form class="card" @submit.prevent="submit">
       <p class="eyebrow">線上靜心空間</p>
-      <h1 id="entry-title">大雄寶殿</h1>
+      <h1 id="entry-title">少林寺</h1>
       <p class="lead">放慢腳步，與其他人安靜地共處片刻。<br />建議戴上耳機。</p>
 
       <label class="field">

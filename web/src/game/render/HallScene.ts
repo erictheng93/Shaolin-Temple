@@ -5,7 +5,7 @@ import { mergeStatic } from './mergeStatic'
 import { buildStatue, createStatueKit, type StatueId } from './statues'
 
 /**
- * 殿內場景（大雄寶殿）：紅柱、藻井、彩繪樑、光明燈牆、宮燈、三座神龕與神像、供桌與拜墊。
+ * 殿內場景（少林寺）：紅柱、藻井、彩繪樑、光明燈牆、宮燈、三座神龕與神像、供桌與拜墊。
  * 殿門在 +z，神龕在 -z；玩家進殿後面向 -z。
  */
 
