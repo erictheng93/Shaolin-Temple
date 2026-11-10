@@ -39,7 +39,9 @@ export const DEFAULT_SETTINGS: Settings = {
   showStats: false,
 }
 
-const KEY = 'online-temple:settings:v1'
+const KEY = 'shaolin-temple:settings:v1'
+/** 改名前的 key。讀不到新 key 時沿用一次，下次儲存後刪除。 */
+const LEGACY_KEY = 'online-temple:settings:v1'
 
 const clamp01 = (v: unknown, fallback: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback
@@ -48,7 +50,7 @@ const clamp01 = (v: unknown, fallback: number): number =>
 export function loadSettings(): Settings {
   let raw: unknown
   try {
-    raw = JSON.parse(localStorage.getItem(KEY) ?? 'null')
+    raw = JSON.parse(localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY) ?? 'null')
   } catch {
     raw = null
   }
@@ -71,6 +73,7 @@ export function loadSettings(): Settings {
 export function saveSettings(s: Settings): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(s))
+    localStorage.removeItem(LEGACY_KEY)
   } catch {
     // 儲存失敗不影響遊玩。
   }
