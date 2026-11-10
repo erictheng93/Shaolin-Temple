@@ -9,9 +9,10 @@ use tokio::{
 };
 
 const OUTBOUND_CAPACITY: usize = 64;
-/// 單一房間人數上限的上限。預設 50；放寬是為了日後依實測調整而不必改程式，
-/// 但仍設上限，避免誤設極大值讓單房廣播成本（人數平方）失控。
-pub const MAX_ROOM_CAPACITY: usize = 500;
+/// 單一房間人數上限的上限。welcome 以單則訊息帶整房快照，必須放得進
+/// MAX_MESSAGE_BYTES（見 `full_room_welcome_fits_message_limit`）。
+/// ponytail: 要開放更多人須先改成分段快照，並同步調整前端 decode() 與寫入緩衝上限。
+pub const MAX_ROOM_CAPACITY: usize = 50;
 const ROOM_IDLE: Duration = Duration::from_secs(60);
 pub type Outbound = mpsc::Receiver<ServerMessage>;
 struct Player {
@@ -174,6 +175,34 @@ async fn run_room(room_id: String, capacity: usize, mut rx: mpsc::Receiver<RoomC
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{MAX_MESSAGE_BYTES, PlayerAction};
+    #[test]
+    fn full_room_welcome_fits_message_limit() {
+        // 最壞情況：16 個 4-byte 字元的名稱、未四捨五入的 f64。zone 與動作 id 依 T4 限於
+        // 已知場景與允許清單；若改為任意 32 bytes 字串，50 人快照會超過 16 KB。
+        let n = -1.234_567_890_123_456_7e-300;
+        let player = PlayerSnapshot {
+            zone: Some("courtyard".into()),
+            id: format!("p-{:032x}", u128::MAX),
+            name: "😀".repeat(16),
+            x: n,
+            z: n,
+            heading: n,
+            action: Some(PlayerAction {
+                id: "bowl".into(),
+                started_at: n,
+            }),
+        };
+        let welcome = ServerMessage::Welcome {
+            self_id: player.id.clone(),
+            room: format!("room-{}", u64::MAX),
+            resume_token: format!("{:032x}", u128::MAX),
+            server_time: n,
+            players: vec![player; MAX_ROOM_CAPACITY],
+        };
+        let bytes = serde_json::to_string(&welcome).unwrap().len();
+        assert!(bytes <= MAX_MESSAGE_BYTES, "{bytes} > {MAX_MESSAGE_BYTES}");
+    }
     #[tokio::test(start_paused = true)]
     async fn empty_room_stops_after_sixty_seconds() {
         let (tx, rx) = mpsc::channel(8);
