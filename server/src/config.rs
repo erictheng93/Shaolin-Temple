@@ -82,7 +82,7 @@ mod tests {
         for (key, value) in [
             ("PORT", "abc"),
             ("PORT", "0"),
-            ("ROOM_CAPACITY", "501"),
+            ("ROOM_CAPACITY", "51"),
             ("ROOM_CAPACITY", "0"),
             ("ALLOWED_ORIGINS", "*"),
             ("ALLOWED_ORIGINS", "https://example.com/path"),
@@ -93,9 +93,8 @@ mod tests {
                 "{key}={value}"
             );
         }
-        // 上限放寬到 MAX_ROOM_CAPACITY，預設仍為 50
-        let config = Config::parse(|k| Ok((k == "ROOM_CAPACITY").then(|| "500".into()))).unwrap();
-        assert_eq!(config.room_capacity, 500);
+        let config = Config::parse(|k| Ok((k == "ROOM_CAPACITY").then(|| "1".into()))).unwrap();
+        assert_eq!(config.room_capacity, 1);
     }
 
     #[test]

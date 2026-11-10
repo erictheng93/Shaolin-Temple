@@ -10,7 +10,7 @@
 - 框架：Axum 0.8（決策理由見 [TECH_STACK.md](TECH_STACK.md#後端axum)）。起始依賴：`axum 0.8.9`（啟用 `ws`）、`tokio 1.54`、`tower-http 0.7`、`tracing 0.1`、`tracing-subscriber 0.3`、`serde 1`、`serde_json 1`。新增其他依賴需在 PR 說明理由。
 - 協定以前端 [`web/src/game/net/protocol.ts`](../web/src/game/net/protocol.ts) 為準；伺服器行為參考 [`web/scripts/mock-server.mjs`](../web/scripts/mock-server.mjs)。要改協定時先提出，前端與後端同一個 PR 修改。
 - 時間：`serverTime`、`startedAt` 一律為 Unix epoch 毫秒；`pong.ts` 原樣回傳客戶端送來的值。
-- 單一房間上限 **50 人**，以設定值 `ROOM_CAPACITY` 提供，預設 50，可設定範圍 1～500（`MAX_ROOM_CAPACITY`，日後依實測調整不必改程式）。
+- 單一房間上限 **50 人**，以設定值 `ROOM_CAPACITY` 提供，預設 50，可設定範圍 1～50（`MAX_ROOM_CAPACITY`）。`welcome` 以單則訊息帶整房快照，必須放得進 16 KB（`MAX_MESSAGE_BYTES`），要放寬須先改成分段快照並同步調整前端 `decode()` 與寫入緩衝上限。
 - 場景（zone）：每位玩家屬於一個場景（目前 `courtyard`、`hall`），定義與出入口範圍見 [`web/src/game/world/zones.ts`](../web/src/game/world/zones.ts)。同房間的玩家在不同場景時互相看不到。
 - 每個 PR 必須通過：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 - 不使用 `unwrap()`／`expect()` 處理來自網路的資料；客戶端輸入一律視為不可信。
@@ -119,6 +119,7 @@
 2. 測試：同一 `reqId` 送兩次，只廣播一次、兩次都收到相同的 ack。
 4. 測試：站在殿門出入口送 `zone: "hall"` 成功且位置變成殿內落點；站在庭院中央送則收到 `invalid_zone`。
 3. 測試：未知動作回 `ok: false`。
+5. 容量：快照裡的 `zone` 與 `action.id` 只能來自已知場景與動作允許清單，不得存入客戶端送來的任意字串。50 人滿房的 `welcome` 只有在這個前提下才放得進 16 KB（任意 32 bytes 字串時約 17 KB）。`room.rs` 的 `full_room_welcome_fits_message_limit` 須改為取場景清單與動作允許清單中最長的名稱來組快照，不再寫死 `"courtyard"`、`"bowl"`。
 
 交付證據：測試輸出。
 
