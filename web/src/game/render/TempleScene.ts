@@ -168,7 +168,7 @@ export interface TempleScene {
   root: THREE.Group
   /** 可點擊行走的地面，供射線檢測使用。 */
   walkSurface: THREE.Object3D
-  /** 環境動畫（燈籠、香煙、樹影、落葉、晾衣、鐘擺）。t 為秒。 */
+  /** 環境動畫（燈籠、香煙、樹冠、落葉、晾衣、鐘擺）。t 為秒。 */
   update(t: number, dt: number): void
   /** 觸發鐘的擺動。 */
   swingBell(): void
@@ -177,7 +177,7 @@ export interface TempleScene {
 }
 
 /**
- * 建立庭院。貼圖解析度、細節貼圖與陰影依建立當下的畫質決定（之後切換畫質於下次載入生效）。
+ * 建立庭院。貼圖解析度與細節貼圖依建立當下的畫質決定（之後切換畫質於下次載入生效）。
  * onChange 在貼圖載入完成時呼叫，讓依需求繪製的迴圈重繪。
  */
 export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset, onChange: () => void): TempleScene {
@@ -225,7 +225,7 @@ export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset
       material.map = t
       material.color.set(tint)
     })
-    if (preset.detailMaps >= 1) load('nor', false, (t) => (material.normalMap = t))
+    load('nor', false, (t) => (material.normalMap = t))
     if (preset.detailMaps >= 2) {
       load('rough', false, (t) => {
         material.roughnessMap = t
@@ -434,25 +434,6 @@ export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset
   ])
   const canopyMesh = instanced(geo(canopyGeometry()), m.canopy.material, canopyItems)
 
-  // 假樹影：只在沒有即時陰影的畫質使用，以柔邊貼片沿主光反方向拉長。
-  const shadowGeo = geo(new THREE.PlaneGeometry(1, 1))
-  shadowGeo.rotateX(-Math.PI / 2)
-  const shadowMat = tracker.trackMaterial(
-    new THREE.MeshBasicMaterial({
-      map: tracker.track(softCircleTexture('rgba(52,60,38,0.5)', 'rgba(52,60,38,0)')),
-      transparent: true,
-      depthWrite: false,
-    }),
-  )
-  const SHADOW_ROT = -Math.atan2(12, 16) // 主光水平方向 (16, 12)
-  const shadowItems = TREES.map((t) => ({
-    pos: [t.x - 1.6 * t.scale, 0.07, t.z - 1.2 * t.scale] as V3,
-    scale: [5.2 * t.scale, 1, 3.4 * t.scale] as V3,
-    rotY: SHADOW_ROT,
-  }))
-  const shadowMesh = instanced(shadowGeo, shadowMat, shadowItems)
-  shadowMesh.visible = preset.shadowMapSize === 0
-
   // 落葉：一個 InstancedMesh，位置是時間的純函式（不保存狀態）。
   const LEAF_COUNT = 28
   const leaves = new THREE.InstancedMesh(
@@ -504,8 +485,8 @@ export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset
   root.traverse((o) => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
   })
-  for (const o of [ground, mountainMesh, shadowMesh, leaves]) o.castShadow = false
-  mountainMesh.receiveShadow = shadowMesh.receiveShadow = false
+  for (const o of [ground, mountainMesh, leaves]) o.castShadow = false
+  mountainMesh.receiveShadow = false
 
   // 鐘擺：阻尼簡諧運動
   let bellAngle = 0
@@ -523,7 +504,7 @@ export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset
         s.sprite.scale.set(size, size, 1)
         s.material.opacity = Math.sin(p * Math.PI) * 0.35
       }
-      // 樹冠與樹影隨風輕晃
+      // 樹冠隨風輕晃
       canopyItems.forEach((it, i) => {
         const sway = Math.sin(t * 0.9 + i * 1.7) * 0.035
         tmp.position.set(it.pos[0] + sway * 2, it.pos[1], it.pos[2])
@@ -533,17 +514,6 @@ export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset
         canopyMesh.setMatrixAt(i, tmp.matrix)
       })
       canopyMesh.instanceMatrix.needsUpdate = true
-      if (shadowMesh.visible) {
-        shadowItems.forEach((it, i) => {
-          const sway = Math.sin(t * 0.9 + i * 3.4) * 0.04
-          tmp.position.set(it.pos[0] + sway, it.pos[1], it.pos[2])
-          tmp.scale.set(it.scale[0] * (1 + sway), 1, it.scale[2] * (1 - sway))
-          tmp.rotation.set(0, it.rotY, 0)
-          tmp.updateMatrix()
-          shadowMesh.setMatrixAt(i, tmp.matrix)
-        })
-        shadowMesh.instanceMatrix.needsUpdate = true
-      }
       for (let i = 0; i < LEAF_COUNT; i++) {
         const tree = TREES[i % TREES.length]!
         const p = (t * (0.04 + (i % 5) * 0.004) + i * 0.618) % 1

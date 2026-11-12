@@ -36,9 +36,9 @@ npm run mock -- 20                   # mock 伺服器 ws://localhost:8080/ws，2
 
 - **Vue ↔ 核心邊界**：Vue（`src/App.vue`、`src/ui/`）只透過 `onUi(UiState)` 接收低頻摘要（內容改變才推送，最多每 250 ms 一次），透過 GameCore 的方法下指令。高頻狀態（玩家位置、Three.js 物件）不放進 Vue 響應式系統。
 - **GPU 資源**：geometry／material／texture 透過 `render/ResourceTracker` 的 `track()`／`trackMaterial()` 登記，由 tracker 統一釋放。
-- **渲染排程**：依需求繪製（`wake()` 標記 dirty）。移動中以畫質幀率上限繪製，靜止時降到 8／15 FPS，省電模式靜止時完全停止迴圈；背景分頁停止迴圈、暫停 AudioContext、停止送位置。改動任何會讓畫面變化的狀態，記得呼叫 `wake()`。
+- **渲染排程**：前景時一律以畫質的幀率上限繪製（標準 30、高畫質 60 FPS），靜止時不降幀——庭院有持續的環境動畫，也沒有省電畫質；背景分頁停止迴圈、暫停 AudioContext、停止送位置。改動任何會讓畫面變化的狀態，記得呼叫 `wake()`。
 - **角色繪製**：袍、頭、影子以 InstancedMesh 批次繪製（固定 3 個 draw call），容量 `AVATAR_CAPACITY`（160）須大於最高畫質的可見人數；名牌只顯示最近 12 人。
-- **庭院視覺**：`render/TempleScene.ts` 以程序化幾何＋ Poly Haven CC0 貼圖的 `MeshStandardMaterial` 建構（貼圖在 `web/public/textures/`，UV 以公尺為單位）；`SceneRenderer` 負責程序化天空、天空環境貼圖、戶外色調映射與主光陰影。陰影、貼圖解析度與細節貼圖依 `core/settings.ts` 的畫質預設在載入時決定（省電畫質無即時陰影）。細節與量測見 docs/TECH_STACK.md「庭院視覺」。
+- **庭院視覺**：`render/TempleScene.ts` 以程序化幾何＋ Poly Haven CC0 貼圖的 `MeshStandardMaterial` 建構（貼圖在 `web/public/textures/`，UV 以公尺為單位）；`SceneRenderer` 負責程序化天空、天空環境貼圖、戶外色調映射與主光陰影。陰影、貼圖解析度與細節貼圖依 `core/settings.ts` 的畫質預設在載入時決定。細節與量測見 docs/TECH_STACK.md「庭院視覺」。
 - **場地與場景**：`world/zones.ts` 定義庭院與殿內兩個場景（可走範圍、障礙物、出生點、出入口、鏡頭範圍），庭院的細節在 `world/layout.ts`。場景建構、碰撞、尋路（`world/pathfind.ts`）都讀這份資料，改場地要一致；`zones.test.ts` 檢查落點不會卡進障礙物或來回瞬移。殿內場景在 `render/HallScene.ts`，第一次進殿才建立；靜態物件以 `render/mergeStatic.ts` 依材質合併。
 - **神像**：`render/statues.ts` 為程序化造型，每尊一個插槽，可用 `loadStatueModel()` 換成寫實 glTF。方位依傳統以神明為主體：觀音在主佛左手邊（+x，龍邊），關聖帝君在右手邊（-x，虎邊）。
 
