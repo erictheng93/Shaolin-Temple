@@ -2,12 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-專案規範以 [AGENTS.md](AGENTS.md) 為準（繁體中文撰寫說明與報告、識別字用英文、資源釋放、訊息上限等），本檔不重複。版本與技術決策的唯一來源是 [docs/TECH_STACK.md](docs/TECH_STACK.md)；後端任務與驗收標準在 [docs/BACKEND_TASKS.md](docs/BACKEND_TASKS.md)（使用者實作、Claude 稽核）。
+專案規範以 [AGENTS.md](AGENTS.md) 為準（繁體中文撰寫說明與報告、識別字用英文、資源釋放、訊息上限等），本檔不重複。版本與技術決策的唯一來源是 [docs/TECH_STACK.md](docs/TECH_STACK.md)；後端任務與驗收標準在 [docs/BACKEND_TASKS.md](docs/BACKEND_TASKS.md)（T4 起由 Claude 實作並依驗收標準驗證）。
 
 ## 狀態
 
 - `web/`：Vite 8 + Vue 3.5 + TypeScript + 直接操作 Three.js 的前端，已可運作。
-- `server/`：Rust + Axum 後端尚未建立。多人功能目前以 `web/scripts/mock-server.mjs` 測試，它實作與正式伺服器相同的協定。
+- `server/`：Rust + Axum 後端，進度見 docs/BACKEND_TASKS.md。前端開發時仍可用 `web/scripts/mock-server.mjs` 測試多人功能，它實作與正式伺服器相同的協定。
 - 玩法尚未定義；`gameplay/modules/demo.ts` 只是驗證接線的示範，可整個刪除。
 
 ## 指令（皆在 `web/` 執行）
@@ -27,7 +27,7 @@ npm run build:avatar                 # 由 3D白模/ 的高模減面產生 publi
 - 環境變數見 `web/.env.example`：`VITE_WS_URL`（未設定＝離線模式）。本機寫在 `web/.env.local`。
 - CI（`.github/workflows/web.yml`）：`npm ci` → `typecheck` → `test` → `vite build`，Node 22。
 - 無 lint／格式化工具設定。
-- 後端建立後，每個 PR 須通過 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
+- 後端（在 `server/` 執行）每個 PR 須通過 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 
 ## 架構
 
@@ -47,9 +47,11 @@ npm run build:avatar                 # 由 3D白模/ 的高模減面產生 publi
 
 - `src/game/net/protocol.ts` 是前後端協定的定義來源（JSON 草案，版本 1）。編碼集中在 `encode()`／`decode()`；`decode()` 負責驗證，新增伺服器訊息時同步擴充型別與驗證。改協定時前端、mock 伺服器與後端在同一個 PR 修改。
 - 語意分兩類：`move`／`stop` 可取代（`OutboundQueue` 合併未送出的舊位置）；`action` 需確認（帶 `reqId`，伺服器去重並回 `ack`，重送不重複執行）。
-- 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。
-- 伺服器每個 tick 送批次位置 `moves`（`MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
-- `NetworkClient` 負責重連（`backoff.ts`）、心跳、送出節流與 `resumeToken` 恢復；渲染頻率與網路送出頻率各自獨立。
+- 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家。
+- 伺服器每個 tick 送批次位置 `moves`（`MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
+- 遠端玩家的移動（`world/interp.ts`、`Players`）：收到新位置時從目前顯示的位置等速走過去，花的時間等於位置更新的間隔；差距超過 5 公尺直接套用。移動中超過 1 秒沒有更新視為停止。
+- `NetworkClient` 負責重連（`backoff.ts`）、心跳、送出節流與 `resumeToken` 恢復；渲染頻率與網路送出頻率各自獨立。上行座標取到 0.01；切到背景時若在移動會先補送 `stop`；退避計數在收到 `welcome` 才歸零；close code 1013／1008 至少等 5 秒再重連；`unsupported_version` 不再重連並提示重新整理。
+- 後端（`server/`）：每個房間一個 actor task 擁有狀態（`src/room.rs`），連線以 channel 溝通，房間只用 `try_send`。場景邊界與出入口常數在 `src/world.rs`，數值抄自前端的 `world/layout.ts`／`zones.ts`，改場地時兩邊要一起改。
 
 ### 玩法擴充點
 

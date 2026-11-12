@@ -61,6 +61,8 @@ pub struct PlayerSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
     pub id: String,
+    /// 房內短編號（0～65535），`moves`／`sync` 以它代替字串 id。
+    pub n: u16,
     pub name: String,
     pub x: f64,
     pub z: f64,
@@ -68,9 +70,8 @@ pub struct PlayerSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<PlayerAction>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
-#[derive(Copy)]
 pub enum Moving {
     Stopped,
     Moving,
@@ -93,7 +94,10 @@ impl From<Moving> for u8 {
         }
     }
 }
-pub type MoveTuple = (String, f64, f64, f64, Moving);
+/// `[n, x, z, heading, moving]`，`n` 為房內短編號。
+pub type MoveTuple = (u16, f64, f64, f64, Moving);
+/// 單則 `moves`／`sync` 最多筆數，與前端 `MAX_MOVES_PER_MESSAGE` 相同。
+pub const MAX_MOVES_PER_MESSAGE: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -119,6 +123,10 @@ pub enum ServerMessage {
         moving: bool,
     },
     Moves {
+        m: Vec<MoveTuple>,
+    },
+    /// 整批位置校正：客戶端直接套用，不做插值。
+    Sync {
         m: Vec<MoveTuple>,
     },
     Action {
