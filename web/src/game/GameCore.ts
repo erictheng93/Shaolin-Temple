@@ -57,6 +57,10 @@ export interface GameCoreOptions {
 const MOVE_SPEED = 3.2
 const SFX_HEARING_RANGE = 28
 const UI_PUSH_MS = 250
+/** 平常就省電：這麼久沒有操作也沒有移動，就把幀率上限降到 IDLE_FPS；一有操作立即恢復。 */
+const IDLE_AFTER_MS = 15_000
+/** 20 FPS 對緩慢的環境動畫（落葉、樹冠、香煙）仍然順，繪製量是 60 FPS 的三分之一。 */
+const IDLE_FPS = 20
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
 const FADE_MS = 400
 const FADE_HOLD_MS = 150
@@ -100,6 +104,7 @@ export class GameCore {
   private lastRender = 0
   private startTime = performance.now()
   private adaptive = new AdaptiveQuality()
+  private lastInputAt = performance.now()
   private dirty = true
   private snapCamera = true
   private paused = false
@@ -165,6 +170,7 @@ export class GameCore {
         this.wake()
       },
       onActivity: () => {
+        this.lastInputAt = performance.now()
         // 使用者有操作時順便嘗試恢復被系統中斷的音訊（iOS）。
         if (this.audio.audible && !this.audio.running && !this.paused) void this.audio.resume()
         this.wake()
@@ -281,7 +287,8 @@ export class GameCore {
     const preset = QUALITY_PRESETS[this.quality]
 
     // 依目標幀率略過多餘的 rAF（高更新率螢幕上限制在 30/60 FPS）。
-    const minInterval = 1000 / preset.activeFps - 1
+    const fps = time - this.lastInputAt > IDLE_AFTER_MS ? Math.min(IDLE_FPS, preset.activeFps) : preset.activeFps
+    const minInterval = 1000 / fps - 1
     if (!this.dirty && time - this.lastRender < minInterval) {
       this.raf = requestAnimationFrame(this.frame)
       return
@@ -295,7 +302,7 @@ export class GameCore {
     this.update(time, dt, t)
     this.renderer.render()
     // 依實際幀間隔動態調整：變慢時降低解析度、縮小完整模型與投影的範圍，順暢一段時間後再升回。
-    if (this.lastRender && this.adaptive.sample(time, time - this.lastRender, 1000 / preset.activeFps)) {
+    if (this.lastRender && this.adaptive.sample(time, time - this.lastRender, 1000 / fps)) {
       const level = ADAPTIVE_LEVELS[this.adaptive.level]!
       this.renderer.setResolutionScale(level.resolution)
       this.players.nearRadius = level.nearRadius
@@ -369,6 +376,7 @@ export class GameCore {
     }
 
     const sceneMotion = this.zone === 'courtyard' && this.temple.hasTransientMotion()
+    if (moving || wantsMove) this.lastInputAt = now
     return moving || wantsMove || playersActive || cameraMoving || markerActive || sceneMotion
   }
 
