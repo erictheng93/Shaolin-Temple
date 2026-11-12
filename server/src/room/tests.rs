@@ -483,6 +483,27 @@ async fn positions_are_clamped_rejected_and_use_each_zones_bounds() {
     assert_eq!((got[0].1, got[0].2), (7.4, 8.6));
 }
 
+#[tokio::test(start_paused = true)]
+async fn rejected_position_is_applied_later_even_if_the_player_sends_nothing_more() {
+    let room = spawn_room(RoomConfig::new(50));
+    let a = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(TICK).await;
+    watcher.drain();
+    // 網路卡頓後一次湧到：只收到 5 公尺外的 stop，當下超出速度上限
+    a.position(a.x, a.z - 5.0, 0.0, false).await;
+    sleep(TICK * 2).await;
+    assert!(
+        move_tuples(&watcher.drain())
+            .iter()
+            .all(|t| t.2 == round2(a.z))
+    );
+    // 之後沒有任何訊息；上限隨時間放寬（4.8 m/s），約 1 秒後採用
+    sleep(Duration::from_secs(1)).await;
+    let got = move_tuples(&watcher.drain());
+    assert_eq!(got.last().map(|t| t.2), Some(round2(a.z - 5.0)));
+}
+
 // ---- T4：動作 ----
 
 #[tokio::test(start_paused = true)]
