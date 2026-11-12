@@ -1,14 +1,27 @@
-use crate::room::MAX_ROOM_CAPACITY;
+use crate::room::{MAX_ROOM_CAPACITY, RoomConfig};
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
 pub struct Config {
     pub port: u16,
     pub allowed_origins: Vec<String>,
     pub room_capacity: usize,
+    /// 房間廣播 tick 頻率（`TICK_HZ`，1～60，預設 10）。
+    pub tick_hz: u32,
+    /// 斷線保留秒數（`RESUME_GRACE_SECONDS`，1～600，預設 30）。
+    pub resume_grace_seconds: u64,
     pub log_filter: EnvFilter,
 }
 
 impl Config {
+    pub fn room_config(&self) -> RoomConfig {
+        RoomConfig {
+            tick: Duration::from_micros(1_000_000 / u64::from(self.tick_hz)),
+            resume_grace: Duration::from_secs(self.resume_grace_seconds),
+            ..RoomConfig::new(self.room_capacity)
+        }
+    }
+
     pub fn from_env() -> Result<Self, String> {
         Self::parse(|key| match std::env::var(key) {
             Ok(value) => Ok(Some(value)),
@@ -32,6 +45,18 @@ impl Config {
         if !(1..=MAX_ROOM_CAPACITY).contains(&room_capacity) {
             return Err(format!("ROOM_CAPACITY must be in 1..={MAX_ROOM_CAPACITY}"));
         }
+        let tick_hz = get("TICK_HZ")?
+            .unwrap_or_else(|| "10".into())
+            .parse::<u32>()
+            .ok()
+            .filter(|v| (1..=60).contains(v))
+            .ok_or("TICK_HZ must be an integer in 1..=60")?;
+        let resume_grace_seconds = get("RESUME_GRACE_SECONDS")?
+            .unwrap_or_else(|| "30".into())
+            .parse::<u64>()
+            .ok()
+            .filter(|v| (1..=600).contains(v))
+            .ok_or("RESUME_GRACE_SECONDS must be an integer in 1..=600")?;
         let origins = get("ALLOWED_ORIGINS")?.unwrap_or_else(|| "http://localhost:5173".into());
         let allowed_origins = origins
             .split(',')
@@ -43,6 +68,8 @@ impl Config {
             port,
             allowed_origins,
             room_capacity,
+            tick_hz,
+            resume_grace_seconds,
             log_filter,
         })
     }
@@ -79,11 +106,22 @@ mod tests {
         let config = Config::parse(|_| Ok(None)).unwrap();
         assert_eq!(config.port, 8080);
         assert_eq!(config.room_capacity, 50);
+        assert_eq!(config.tick_hz, 10);
+        assert_eq!(config.resume_grace_seconds, 30);
+        let room = config.room_config();
+        assert_eq!(room.tick, Duration::from_millis(100));
+        assert_eq!(room.resume_grace, Duration::from_secs(30));
+        assert_eq!(room.outbound_capacity, 64);
         for (key, value) in [
             ("PORT", "abc"),
             ("PORT", "0"),
             ("ROOM_CAPACITY", "51"),
             ("ROOM_CAPACITY", "0"),
+            ("TICK_HZ", "0"),
+            ("TICK_HZ", "61"),
+            ("TICK_HZ", "fast"),
+            ("RESUME_GRACE_SECONDS", "0"),
+            ("RESUME_GRACE_SECONDS", "601"),
             ("ALLOWED_ORIGINS", "*"),
             ("ALLOWED_ORIGINS", "https://example.com/path"),
             ("RUST_LOG", "[broken"),

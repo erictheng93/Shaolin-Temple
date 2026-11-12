@@ -513,6 +513,7 @@ export class GameCore {
         this.serverOffset = m.serverTime - performance.now()
         this.players.clearRemotes()
         for (const p of m.players) {
+          // 自己的位置由本機權威；短編號只對照遠端玩家，所以 moves／sync 中自己的 n 會因對照不到而被忽略。
           if (p.id === m.selfId) {
             // 伺服器記錄的場景與位置為準（斷線恢復時可能在殿內）。
             const zone: ZoneId = isZoneId(p.zone) ? p.zone : 'courtyard'
@@ -538,24 +539,29 @@ export class GameCore {
         this.events.emit('playerLeft', { id: m.id })
         break
       case 'move':
-        if (m.id !== this.selfId) this.players.setRemoteTarget(m.id, m.x, m.z, m.heading, m.moving)
+        if (m.id !== this.selfId) this.players.setRemoteTarget(m.id, m.x, m.z, m.heading, m.moving, performance.now())
         break
-      case 'moves':
-        for (const [id, x, z, heading, moving] of m.m) {
-          if (id !== this.selfId) this.players.setRemoteTarget(id, x, z, heading, moving === 1)
-        }
+      case 'moves': {
+        const now = performance.now()
+        for (const [n, x, z, heading, moving] of m.m) this.players.setRemoteTargetByN(n, x, z, heading, moving === 1, now)
         break
+      }
+      case 'sync': {
+        const now = performance.now()
+        for (const [n, x, z, heading, moving] of m.m) this.players.syncRemoteByN(n, x, z, heading, moving === 1, now)
+        break
+      }
       case 'action':
         this.onRemoteAction(m)
         break
       case 'zone':
-        if (m.id !== this.selfId) this.players.setRemoteZone(m.id, m.zone, m.x, m.z, m.heading)
+        if (m.id !== this.selfId) this.players.setRemoteZone(m.id, m.zone, m.x, m.z, m.heading, performance.now())
         break
       case 'pong':
         this.serverOffset = m.serverTime - performance.now()
         break
       case 'error':
-        this.opts.onToast(m.message)
+        this.opts.onToast(m.code === 'unsupported_version' ? '遊戲已更新，請重新整理頁面' : m.message)
         break
     }
     if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave') this.pushUi(true)
