@@ -47,7 +47,6 @@ export interface GameCoreOptions {
   canvas: HTMLCanvasElement
   settings: Settings
   wsUrl?: string
-  ambientUrl?: string
   onUi(state: UiState): void
   onToast(message: string): void
 }
@@ -137,7 +136,7 @@ export class GameCore {
     })
     this.renderer.onResize = () => this.wake()
 
-    this.temple = buildTempleScene(this.tracker)
+    this.temple = buildTempleScene(this.tracker, preset, () => this.wake())
     this.renderer.scene.add(this.temple.root)
 
     const markerGeo = this.tracker.track(new THREE.RingGeometry(0.28, 0.4, 24))
@@ -175,7 +174,6 @@ export class GameCore {
     this.net.events.on('rtt', (ms) => (this.rtt = ms))
 
     this.audio.setVolumes(this.volumes())
-    this.audio.onAmbientError = () => this.opts.onToast('背景音樂無法載入，目前只有環境音效')
     this.installGameplay()
     this.actions.subscribe(() => this.pushUi(true))
 
@@ -187,7 +185,7 @@ export class GameCore {
   async enter(playerName: string): Promise<void> {
     this.net.setName(playerName)
     await this.audio.unlock()
-    this.audio.startAmbient(this.opts.ambientUrl)
+    this.audio.startAmbient()
     this.net.connect()
     this.snapCamera = true
     this.wake()

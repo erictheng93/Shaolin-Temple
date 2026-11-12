@@ -12,21 +12,17 @@
     "preview": "vite preview",
     "typecheck": "vue-tsc -b",
     "test": "vitest run",
-    "mock": "node scripts/mock-server.mjs",
-    "render:ambient": "node tools/ambient/render.ts",
-    "check:ambient": "node scripts/check-ambient.mjs"
+    "mock": "node scripts/mock-server.mjs"
   },
   "dependencies": {
     "three": "0.187.0",
     "vue": "3.5.44"
   },
   "devDependencies": {
-    "@breezystack/lamejs": "1.2.7",
     "@types/node": "24.19.2",
     "@types/three": "0.187.0",
     "@vitejs/plugin-vue": "6.0.10",
     "@vue/tsconfig": "0.9.1",
-    "node-web-audio-api": "2.2.0",
     "typescript": "5.9.3",
     "vite": "8.3.6",
     "vitest": "5.1.0",

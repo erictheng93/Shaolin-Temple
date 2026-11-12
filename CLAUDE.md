@@ -16,16 +16,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm ci
 npm run dev                          # http://localhost:5173
 npm run typecheck                    # vue-tsc -b
-npm test                             # vitest run（src/**/*.test.ts、tools/**/*.test.ts）
+npm test                             # vitest run（src/**/*.test.ts）
 npx vitest run src/game/net/net.test.ts        # 單一測試檔
 npx vitest run -t "部分測試名稱"                # 依名稱篩選
 npm run build                        # 型別檢查 + 建置到 web/dist
 npm run mock -- 20                   # mock 伺服器 ws://localhost:8080/ws，20 個機器人
-npm run render:ambient               # 離線產生 public/audio/temple-ambient.mp3（不提交 git）
-npm run check:ambient -- <音樂網址> <遊戲來源>  # 檢查 R2 上音樂檔的 CORS／Range／快取
 ```
 
-- 環境變數見 `web/.env.example`：`VITE_WS_URL`（未設定＝離線模式）、`VITE_AMBIENT_URL`（未設定＝沒有佛樂與風聲，建置時會警告）。本機寫在 `web/.env.local`。
+- 環境變數見 `web/.env.example`：`VITE_WS_URL`（未設定＝離線模式）。本機寫在 `web/.env.local`。
 - CI（`.github/workflows/web.yml`）：`npm ci` → `typecheck` → `test` → `vite build`，Node 22。
 - 無 lint／格式化工具設定。
 - 後端建立後，每個 PR 須通過 `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
@@ -40,6 +38,7 @@ npm run check:ambient -- <音樂網址> <遊戲來源>  # 檢查 R2 上音樂檔
 - **GPU 資源**：geometry／material／texture 透過 `render/ResourceTracker` 的 `track()`／`trackMaterial()` 登記，由 tracker 統一釋放。
 - **渲染排程**：依需求繪製（`wake()` 標記 dirty）。移動中以畫質幀率上限繪製，靜止時降到 8／15 FPS，省電模式靜止時完全停止迴圈；背景分頁停止迴圈、暫停 AudioContext、停止送位置。改動任何會讓畫面變化的狀態，記得呼叫 `wake()`。
 - **角色繪製**：袍、頭、影子以 InstancedMesh 批次繪製（固定 3 個 draw call），容量 `AVATAR_CAPACITY`（160）須大於最高畫質的可見人數；名牌只顯示最近 12 人。
+- **庭院視覺**：`render/TempleScene.ts` 以程序化幾何＋ Poly Haven CC0 貼圖的 `MeshStandardMaterial` 建構（貼圖在 `web/public/textures/`，UV 以公尺為單位）；`SceneRenderer` 負責程序化天空、天空環境貼圖、戶外色調映射與主光陰影。陰影、貼圖解析度與細節貼圖依 `core/settings.ts` 的畫質預設在載入時決定（省電畫質無即時陰影）。細節與量測見 docs/TECH_STACK.md「庭院視覺」。
 - **場地與場景**：`world/zones.ts` 定義庭院與殿內兩個場景（可走範圍、障礙物、出生點、出入口、鏡頭範圍），庭院的細節在 `world/layout.ts`。場景建構、碰撞、尋路（`world/pathfind.ts`）都讀這份資料，改場地要一致；`zones.test.ts` 檢查落點不會卡進障礙物或來回瞬移。殿內場景在 `render/HallScene.ts`，第一次進殿才建立；靜態物件以 `render/mergeStatic.ts` 依材質合併。
 - **神像**：`render/statues.ts` 為程序化造型，每尊一個插槽，可用 `loadStatueModel()` 換成寫實 glTF。方位依傳統以神明為主體：觀音在主佛左手邊（+x，龍邊），關聖帝君在右手邊（-x，虎邊）。
 
@@ -57,9 +56,9 @@ npm run check:ambient -- <音樂網址> <遊戲來源>  # 檢查 R2 上音樂檔
 
 ### 音訊
 
-- 環境音樂（佛樂＋風聲）不在執行時合成：`tools/ambient/score.ts` 是樂譜，`render.ts` 用 `node-web-audio-api` 離線算出可無縫循環的 MP3，正式環境放在 R2，以 HTMLMediaElement（`crossOrigin="anonymous"`）串流後接入 Web Audio。R2 未允許遊戲網域的 CORS 時瀏覽器拒絕載入，遊戲顯示「背景音樂無法載入」提示，只剩鳥叫與音效。部署或更換音樂檔時必須照 docs/TECH_STACK.md「部署檢查」執行 `npm run check:ambient` 並用手機實聽（使用者要求特別留意）。
-- 短音效（鐘、木魚、頌缽、鳥叫）由 `AudioManager` 即時合成為 AudioBuffer。
-- 靜音或音量為 0 時淡出後暫停 AudioContext 與音樂檔；背景時同靜音。
+- 沒有背景音樂，聲音留白大於填滿：環境音（風聲、鳥叫、遠處頌缽、隨機 90～210 秒一聲的遠處鐘聲）全部由 `AudioManager` 在執行時合成，走環境音軌（「環境與音樂」音量）。風聲是可循環的雜訊 AudioBuffer 加 lowpass 與緩慢 LFO；遠鐘純本機播放，不經網路、不觸發鐘亭動畫、不喚醒渲染。沒有音檔或音訊相關環境變數。
+- 短音效（鐘、木魚、頌缽、鳥叫）同樣由 `AudioManager` 即時合成為 AudioBuffer。
+- 靜音或音量為 0 時淡出後暫停 AudioContext，風聲、鳥叫與遠鐘停止；背景時同靜音。
 
 ## 驗證注意
 

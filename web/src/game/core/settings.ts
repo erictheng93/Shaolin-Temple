@@ -11,12 +11,18 @@ export interface QualityPreset {
   /** 畫面靜止時的環境動畫幀率（燭火、香煙）；0 表示完全停止重繪。 */
   idleFps: number
   antialias: boolean
+  /** 主光陰影貼圖邊長；0 表示不開即時陰影（改用假樹影）。於下次載入生效。 */
+  shadowMapSize: number
+  /** 場景貼圖解析度。於下次載入生效。 */
+  textureSize: 512 | 1024
+  /** 細節貼圖：0 只有底色、1 加法線、2 再加粗糙度。於下次載入生效。 */
+  detailMaps: 0 | 1 | 2
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
-  low: { maxPixelRatio: 1, maxPixels: 1280 * 720, activeFps: 30, idleFps: 0, antialias: false },
-  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, idleFps: 8, antialias: false },
-  high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, idleFps: 15, antialias: true },
+  low: { maxPixelRatio: 1, maxPixels: 1280 * 720, activeFps: 30, idleFps: 0, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 0 },
+  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, idleFps: 8, antialias: false, shadowMapSize: 1024, textureSize: 512, detailMaps: 1 },
+  high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, idleFps: 15, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2 },
 }
 
 export interface Settings {

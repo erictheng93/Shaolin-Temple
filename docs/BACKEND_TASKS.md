@@ -193,7 +193,7 @@
 
 ## T9 部署與正式環境壓測（P1）
 
-Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_AMBIENT_URL`，並通過 [TECH_STACK.md](TECH_STACK.md#部署檢查每次上傳或更換音樂檔都要做) 的環境音樂部署檢查（`npm run check:ambient` 全部通過、建置輸出沒有缺少音樂網址的警告、手機實際聽過）；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。
+Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。
 
 ## T10 持久化（P2）
 
