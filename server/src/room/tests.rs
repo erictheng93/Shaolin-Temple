@@ -47,7 +47,7 @@ type RoomTx = mpsc::Sender<RoomCommand>;
 
 fn spawn_room(config: RoomConfig) -> RoomTx {
     let (tx, rx) = mpsc::channel(128);
-    tokio::spawn(run_room(1, config, rx));
+    tokio::spawn(run_room(1, config, rx, Default::default()));
     tx
 }
 
@@ -808,7 +808,7 @@ async fn resume_tokens_are_random_and_unrelated_to_player_ids() {
 #[tokio::test(start_paused = true)]
 async fn empty_room_stops_after_sixty_seconds() {
     let (tx, rx) = mpsc::channel(8);
-    let task = tokio::spawn(run_room(1, RoomConfig::new(50), rx));
+    let task = tokio::spawn(run_room(1, RoomConfig::new(50), rx, Default::default()));
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(59)).await;
     tokio::task::yield_now().await;
@@ -821,7 +821,7 @@ async fn empty_room_stops_after_sixty_seconds() {
 #[tokio::test(start_paused = true)]
 async fn capacity_is_held_during_grace_and_released_after() {
     let (tx, rx) = mpsc::channel(8);
-    tokio::spawn(run_room(1, RoomConfig::new(1), rx));
+    tokio::spawn(run_room(1, RoomConfig::new(1), rx, Default::default()));
     let one = connect(&tx).await;
     let (out, _inbox) = mpsc::channel(64);
     assert!(join(&tx, "full", out).await.is_none());
@@ -837,7 +837,7 @@ async fn capacity_is_held_during_grace_and_released_after() {
 #[tokio::test(start_paused = true)]
 async fn idle_deadline_restarts_when_the_last_player_leaves() {
     let (tx, rx) = mpsc::channel(8);
-    let task = tokio::spawn(run_room(1, RoomConfig::new(1), rx));
+    let task = tokio::spawn(run_room(1, RoomConfig::new(1), rx, Default::default()));
     let one = connect(&tx).await;
     sleep(Duration::from_secs(61)).await;
     assert!(!tx.is_closed(), "a connected player keeps the room open");

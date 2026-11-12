@@ -26,7 +26,7 @@
 | T4 | P0 | T3 | 位置與動作：驗證、速率限制、去重確認（已完成 2026-11-12） |
 | T5 | P0 | T3 | 廣播 tick、批次位置、每連線佇列上限與慢速接收者（已完成 2026-11-12） |
 | T6 | P0 | T3 | 斷線恢復（resumeToken）（已完成 2026-11-12） |
-| T7 | P0 | T5 | 指標、負載測試工具、流量報告 |
+| T7 | P0 | T5 | 指標、負載測試工具、流量報告（已完成 2026-11-12） |
 | T8 | P1 | T7 | 二進位編碼與座標量化（依 T7 量測決定） |
 | T9 | P1 | T7 | 部署到 Dokploy、正式環境壓測 |
 | T10 | P2 | 玩法定案 | PostgreSQL、身分、持久化計數 |
@@ -211,6 +211,15 @@
 4. 前端參考值：mock 伺服器 50 人、約半數移動時，每位玩家約 6.1 KB/s、12 則/s（JSON）。
 
 交付證據：報告文件與原始輸出。
+
+### T7 完成紀錄（2026-11-12）
+
+`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 通過。報告：[LOAD_TEST_2026-11-12.md](LOAD_TEST_2026-11-12.md)（6 個情境、各 60 秒、原始 JSON 輸出）。
+
+- `GET /metrics`（`src/metrics.rs`）：全部 atomic 計數；`METRICS_TOKEN` 設定時須帶 Bearer 權杖，未設定為開放。
+- 負載工具為同 crate 的 `src/bin/loadtest.rs`（`cargo build --release` 一併產生 `target/release/loadtest`），不新增依賴（`futures-util` 由 dev-dependency 改為一般依賴，原本就在 `Cargo.lock`）。
+- 結論：JSON 協定下每連線接收 1.5 KB/s（10% 移動）～5.8 KB/s（50% 移動），超出 150～460 bytes/s 預算 3.3～38.8 倍，95% 以上是 `moves`；詳見報告。
+- 未做到：量測在同一台 Windows 開發機的本機迴路，非 1 vCPU 目標主機、非外部機器，也沒有弱網路與長時間（只有 60 秒）測試；這些留給 T9。CPU 數字重跑差異大，僅供量級參考。
 
 ---
 
