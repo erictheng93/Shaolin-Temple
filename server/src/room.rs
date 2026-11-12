@@ -1,3 +1,4 @@
+use crate::metrics::Metrics;
 use crate::{
     protocol::{
         MAX_MOVES_PER_MESSAGE, MoveTuple, Moving, PlayerAction, PlayerSnapshot, ServerMessage,
@@ -6,6 +7,7 @@ use crate::{
 };
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -175,7 +177,7 @@ impl Membership {
     }
 }
 impl Lobby {
-    pub fn new(config: RoomConfig) -> Self {
+    pub fn new(config: RoomConfig, metrics: Arc<Metrics>) -> Self {
         assert!((1..=MAX_ROOM_CAPACITY).contains(&config.capacity));
         let (tx, mut rx) = mpsc::channel::<Admission>(128);
         tokio::spawn(async move {
@@ -213,7 +215,7 @@ impl Lobby {
                         if assigned.is_none() {
                             next_room += 1;
                             let (tx, rx) = mpsc::channel(128);
-                            tokio::spawn(run_room(next_room, config, rx));
+                            tokio::spawn(run_room(next_room, config, rx, metrics.clone()));
                             if let Some(who) = join(&tx, &request.name, outbound.clone()).await { assigned = Some((who, tx.clone())); }
                             rooms.insert(next_room, tx);
                         }
@@ -290,6 +292,7 @@ struct Room {
     id: String,
     no: u64,
     config: RoomConfig,
+    metrics: Arc<Metrics>,
     players: HashMap<String, Player>,
     next_conn: u64,
 }
@@ -416,19 +419,21 @@ impl Room {
     /// 通知同房（連線中、符合 `to`）的玩家。不可丟棄的訊息放不進佇列代表慢速接收者，
     /// 該連線被中斷（session 以 1013 關閉），玩家進入斷線保留期。
     fn broadcast(&mut self, message: ServerMessage, now: Instant, to: impl Fn(&Player) -> bool) {
-        let failed: Vec<String> = self
+        let failed: Vec<(String, bool)> = self
             .players
             .values()
             .filter(|p| to(p))
-            .filter(|p| {
-                p.link
-                    .as_ref()
-                    .is_some_and(|l| l.tx.try_send(message.clone()).is_err())
+            .filter_map(|p| {
+                let error = p.link.as_ref()?.tx.try_send(message.clone()).err()?;
+                Some((p.id.clone(), matches!(error, TrySendError::Full(_))))
             })
-            .map(|p| p.id.clone())
             .collect();
-        for id in failed {
-            tracing::warn!(player = %id, "slow receiver, closing connection");
+        for (id, full) in failed {
+            // 對方連線已結束（佇列關閉）不算慢速接收者，只有佇列塞滿才計入指標。
+            if full {
+                tracing::warn!(player = %id, "slow receiver, closing connection");
+                self.metrics.slow_receiver_closed();
+            }
             self.detach(&id, now);
         }
     }
@@ -579,7 +584,10 @@ impl Room {
                     r.needs_sync = false;
                 }
             }
-            Err(TrySendError::Full(_)) => r.needs_sync = true,
+            Err(TrySendError::Full(_)) => {
+                r.needs_sync = true;
+                self.metrics.batch_dropped(sync);
+            }
             Err(TrySendError::Closed(_)) => self.detach(id, now),
         }
     }
@@ -640,14 +648,21 @@ impl Room {
     }
 }
 
-async fn run_room(no: u64, config: RoomConfig, mut rx: mpsc::Receiver<RoomCommand>) {
+async fn run_room(
+    no: u64,
+    config: RoomConfig,
+    mut rx: mpsc::Receiver<RoomCommand>,
+    metrics: Arc<Metrics>,
+) {
     let mut room = Room {
         id: format!("room-{no}"),
         no,
         config,
+        metrics,
         players: HashMap::new(),
         next_conn: 0,
     };
+    let mut counted = None;
     let mut empty_since = Some(Instant::now());
     let mut tick = interval(config.tick);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -683,7 +698,16 @@ async fn run_room(no: u64, config: RoomConfig, mut rx: mpsc::Receiver<RoomComman
                     RoomCommand::Zone { who, zone } => room.switch_zone(&who, &zone, now),
                 }
             }
-            _ = tick.tick() => room.tick(Instant::now()),
+            _ = tick.tick() => {
+                let started = std::time::Instant::now();
+                room.tick(Instant::now());
+                room.metrics.tick_done(started.elapsed());
+            }
+        }
+        let roster = Some(room.players.len());
+        if roster != counted {
+            room.metrics.room_occupancy(counted, roster);
+            counted = roster;
         }
         if room.players.is_empty() {
             let since = empty_since.get_or_insert_with(Instant::now);
@@ -694,6 +718,7 @@ async fn run_room(no: u64, config: RoomConfig, mut rx: mpsc::Receiver<RoomComman
             empty_since = None;
         }
     }
+    room.metrics.room_occupancy(counted, None);
 }
 
 #[cfg(test)]

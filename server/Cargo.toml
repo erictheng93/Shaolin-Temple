@@ -3,6 +3,7 @@ name = "temple-server"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
+default-run = "temple-server"
 
 [dependencies]
 axum = { version = "=0.8.9", features = ["ws"] }
@@ -15,7 +16,8 @@ serde_json = "1"
 tokio-tungstenite = "0.29"
 
 rand = "0.9"
+# 負載測試工具（src/bin/loadtest.rs）使用；已是 axum／tokio-tungstenite 的間接依賴。
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["test-util"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

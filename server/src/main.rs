@@ -14,6 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let options = ServerOptions {
         room,
+        metrics_token: config.metrics_token,
         ..ServerOptions::new(config.allowed_origins)
     };
     let server = axum::serve(listener, app_with_options(options))

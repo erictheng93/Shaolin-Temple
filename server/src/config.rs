@@ -10,6 +10,8 @@ pub struct Config {
     pub tick_hz: u32,
     /// 斷線保留秒數（`RESUME_GRACE_SECONDS`，1～600，預設 30）。
     pub resume_grace_seconds: u64,
+    /// `METRICS_TOKEN`：設定後 `/metrics` 須帶 Bearer 權杖；未設定（或空字串）為開放。
+    pub metrics_token: Option<String>,
     pub log_filter: EnvFilter,
 }
 
@@ -70,6 +72,7 @@ impl Config {
             room_capacity,
             tick_hz,
             resume_grace_seconds,
+            metrics_token: get("METRICS_TOKEN")?.filter(|v| !v.is_empty()),
             log_filter,
         })
     }
@@ -108,6 +111,7 @@ mod tests {
         assert_eq!(config.room_capacity, 50);
         assert_eq!(config.tick_hz, 10);
         assert_eq!(config.resume_grace_seconds, 30);
+        assert_eq!(config.metrics_token, None);
         let room = config.room_config();
         assert_eq!(room.tick, Duration::from_millis(100));
         assert_eq!(room.resume_grace, Duration::from_secs(30));
