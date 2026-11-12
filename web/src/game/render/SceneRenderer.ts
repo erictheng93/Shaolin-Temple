@@ -17,7 +17,7 @@ export const OUTDOOR_ENV: Environment = {
   background: SKY_COLOR,
   fog: { near: 30, far: 125 },
   hemi: { sky: '#dfe6f2', ground: '#7a6a4c', intensity: 0.45 },
-  // 清晨低角度的暖色主光，從殿前右側斜照；水平方向與 TempleScene 的假樹影一致，天空的太陽也在這個方向
+  // 清晨低角度的暖色主光，從殿前右側斜照；天空的太陽也在這個方向
   sun: { color: '#ffd2a0', intensity: 3.4, position: [16, 7, 12] },
   outdoor: { exposure: 0.6, environmentIntensity: 0.4 },
 }
@@ -104,15 +104,13 @@ export class SceneRenderer {
     this.scene.add(this.hemi, this.sun, this.sun.target)
 
     // 即時陰影：正交範圍涵蓋整個庭院（含圍牆）。
-    if (preset.shadowMapSize > 0) {
-      this.renderer.shadowMap.enabled = true
-      this.renderer.shadowMap.type = THREE.PCFShadowMap
-      const s = this.sun.shadow
-      s.mapSize.set(preset.shadowMapSize, preset.shadowMapSize)
-      Object.assign(s.camera, { left: -32, right: 32, top: 32, bottom: -32, near: 1, far: 160 })
-      s.bias = -0.0004
-      s.normalBias = 0.04
-    }
+    this.renderer.shadowMap.enabled = true
+    this.renderer.shadowMap.type = THREE.PCFShadowMap
+    const shadow = this.sun.shadow
+    shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize)
+    Object.assign(shadow.camera, { left: -32, right: 32, top: 32, bottom: -32, near: 1, far: 160 })
+    shadow.bias = -0.0004
+    shadow.normalBias = 0.04
 
     // 程序化天空（大氣散射）：不需要 HDR 檔。z 由 shader 固定在遠平面，不受鏡頭 far 影響。
     this.sky.scale.setScalar(10000)
@@ -151,7 +149,7 @@ export class SceneRenderer {
     this.scene.environmentIntensity = env.outdoor?.environmentIntensity ?? 1
     this.renderer.toneMapping = env.outdoor ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping
     this.renderer.toneMappingExposure = env.outdoor?.exposure ?? 1
-    this.sun.castShadow = env.outdoor !== null && this.renderer.shadowMap.enabled
+    this.sun.castShadow = env.outdoor !== null
     this.renderer.setClearColor(env.background)
     this.scene.background = new THREE.Color(env.background)
     this.scene.fog = env.fog ? new THREE.Fog(env.background, env.fog.near, env.fog.far) : null

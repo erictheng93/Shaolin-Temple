@@ -93,7 +93,6 @@ export class GameCore {
   private settings: Settings
   private quality: QualityLevel
   private raf = 0
-  private idleTimer: ReturnType<typeof setTimeout> | null = null
   private lastTime = 0
   private lastRender = 0
   private startTime = performance.now()
@@ -260,22 +259,16 @@ export class GameCore {
 
   // ---------- 渲染迴圈 ----------
 
-  /** 喚醒渲染迴圈；畫面靜止時迴圈會自行停止以節省電力。 */
+  /** 喚醒渲染迴圈並要求立即重繪（迴圈在背景分頁或 context 遺失時停止）。 */
   private wake = (): void => {
     this.dirty = true
     if (this.paused || this.contextLost || this.disposed) return
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer)
-      this.idleTimer = null
-    }
     if (!this.raf) this.raf = requestAnimationFrame(this.frame)
   }
 
   private stopLoop(): void {
     if (this.raf) cancelAnimationFrame(this.raf)
-    if (this.idleTimer) clearTimeout(this.idleTimer)
     this.raf = 0
-    this.idleTimer = null
   }
 
   private frame = (time: number): void => {
@@ -295,24 +288,14 @@ export class GameCore {
     const t = (time - this.startTime) / 1000
     const cpuStart = performance.now()
 
-    const active = this.update(time, dt, t)
+    this.update(time, dt, t)
     this.renderer.render()
     this.lastRender = time
     this.dirty = false
     this.countFrame(performance.now() - cpuStart, time)
 
-    if (active) {
-      this.raf = requestAnimationFrame(this.frame)
-    } else if (preset.idleFps > 0) {
-      // 靜止時以低幀率繪製環境動畫（燈火、香煙）。
-      this.idleTimer = setTimeout(() => {
-        this.idleTimer = null
-        this.raf = requestAnimationFrame(this.frame)
-      }, 1000 / preset.idleFps)
-    } else {
-      // 完全靜止：停止迴圈，等待輸入或網路事件喚醒。下一次喚醒的 dt 不應包含閒置時間。
-      this.lastTime = 0
-    }
+    // 場景有持續的環境動畫（落葉、樹影、香煙），前景時不降幀也不停止；背景分頁由 onVisibility 停止迴圈。
+    this.raf = requestAnimationFrame(this.frame)
   }
 
   private update(now: number, dt: number, t: number): boolean {
@@ -644,7 +627,7 @@ export class GameCore {
   }
 
   private maxVisibleFor(q: QualityLevel): number {
-    return q === 'low' ? 30 : q === 'medium' ? 60 : 120
+    return q === 'medium' ? 60 : 120
   }
 }
 

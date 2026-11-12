@@ -7,7 +7,7 @@ const props = defineProps<{ settings: Settings; activeQuality: QualityLevel }>()
 const emit = defineEmits<{ close: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
-const qualityLabels: Record<QualityLevel, string> = { low: '省電', medium: '標準', high: '高畫質' }
+const qualityLabels: Record<QualityLevel, string> = { medium: '標準', high: '高畫質' }
 
 const volumeFields = [
   { key: 'masterVolume', label: '總音量' },
@@ -39,12 +39,12 @@ const s = props.settings
       <fieldset>
         <legend>畫質</legend>
         <div class="segmented" role="radiogroup" aria-label="畫質">
-          <label v-for="q in (['auto', 'low', 'medium', 'high'] as const)" :key="q">
+          <label v-for="q in (['auto', 'medium', 'high'] as const)" :key="q">
             <input v-model="s.quality" type="radio" name="quality" :value="q" />
             <span>{{ q === 'auto' ? `自動（${qualityLabels[activeQuality]}）` : qualityLabels[q] }}</span>
           </label>
         </div>
-        <p class="note">手機發熱或耗電明顯時，請改用「省電」。抗鋸齒變更於重新整理後生效。</p>
+        <p class="note">手機發熱或耗電明顯時，請改用「標準」。畫質變更於重新整理後完整生效。</p>
       </fieldset>
 
       <fieldset>
