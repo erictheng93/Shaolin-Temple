@@ -4,7 +4,7 @@
 
 ## 目前狀態
 
-- `web/`：前端已建立。包含程序化寺院場景、角色移動、動作與冷卻、多人同步客戶端、設定與效能資訊；聲音包含合成的鐘聲、木魚、頌缽、風聲、鳥叫與五聲音階佛樂。
+- `web/`：前端已建立。包含程序化寺院場景、角色移動、動作與冷卻、多人同步客戶端、設定與效能資訊；聲音包含合成的鐘聲、木魚、頌缽、風聲、鳥叫與遠處鐘聲。
 - 後端：Rust + Axum，依 [docs/BACKEND_TASKS.md](docs/BACKEND_TASKS.md) 的優先級實作。完成前可用開發用 mock 伺服器測試多人功能。
 - 玩法：尚未定義。目前只有一個示範模組（合十、頌缽、敲鐘），用來驗證接線，可以整個刪除。
 
@@ -29,22 +29,6 @@ npm run mock -- 20          # mock 伺服器，20 個機器人，ws://localhost:
 echo VITE_WS_URL=ws://localhost:8080/ws > .env.local
 npm run dev
 ```
-
-環境音樂檔（佛樂＋風聲）不提交到 git，需要時產生：
-
-```bash
-cd web
-npm run render:ambient            # 輸出 public/audio/temple-ambient.mp3（約 2.4 MB，約 20 秒）
-echo VITE_AMBIENT_URL=/audio/temple-ambient.mp3 >> .env.local
-```
-
-正式環境把檔案上傳到 R2，`VITE_AMBIENT_URL` 設為 R2 自訂網域上的網址，並在 R2 設定允許遊戲網域的 CORS。上傳後執行：
-
-```bash
-npm run check:ambient -- https://<R2 自訂網域>/audio/temple-ambient-v1.mp3 https://<遊戲網站>
-```
-
-必須全部通過，並用手機實際聽一次。完整檢查清單見 [docs/TECH_STACK.md](docs/TECH_STACK.md#部署檢查每次上傳或更換音樂檔都要做)。
 
 環境變數見 `web/.env.example`。在遊戲設定中開啟「顯示效能資訊」，可查看 FPS、CPU 時間與 draw call。
 

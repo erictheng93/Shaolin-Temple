@@ -107,6 +107,7 @@ export class AvatarFactory {
     this.robes = make(robeGeo, robeMat)
     this.robes.setColorAt(0, this.localColor) // 建立 instanceColor 緩衝區
     this.heads = make(headGeo, skinMat)
+    this.robes.castShadow = this.heads.castShadow = true
     this.shadows = make(shadowGeo, shadowMat)
     this.shadows.renderOrder = -1
   }
