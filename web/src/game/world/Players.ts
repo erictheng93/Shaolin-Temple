@@ -46,6 +46,8 @@ export class Players {
   readonly remotes = new Map<string, RemotePlayer>()
   private factory: AvatarFactory
   private cullTimer = 0
+  /** 離本機玩家這個距離內的角色用完整模型並投影，其餘用低面數模型（由動態畫質調整）。 */
+  nearRadius = 14
   /** 本機玩家所在場景；只顯示同場景的遠端玩家。 */
   localZone = 'courtyard'
 
@@ -179,7 +181,7 @@ export class Players {
       this.cullTimer = 0
       this.cull()
     }
-    this.factory.sync()
+    this.factory.sync(this.local.mover.x, this.local.mover.z, this.nearRadius)
     return active
   }
 

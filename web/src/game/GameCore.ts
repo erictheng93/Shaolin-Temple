@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
+import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
 import { QUALITY_PRESETS, resolveQuality, type QualityLevel, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
@@ -34,6 +35,8 @@ export interface UiState {
   room: string | null
   online: number
   quality: QualityLevel
+  /** 動態畫質目前的等級（0 為完整）與最大等級。 */
+  adaptive: { level: number; max: number }
   contextLost: boolean
   /** 場景切換中（畫面淡出黑幕）。 */
   fading: boolean
@@ -96,6 +99,7 @@ export class GameCore {
   private lastTime = 0
   private lastRender = 0
   private startTime = performance.now()
+  private adaptive = new AdaptiveQuality()
   private dirty = true
   private snapCamera = true
   private paused = false
@@ -290,6 +294,13 @@ export class GameCore {
 
     this.update(time, dt, t)
     this.renderer.render()
+    // 依實際幀間隔動態調整：變慢時降低解析度、縮小完整模型與投影的範圍，順暢一段時間後再升回。
+    if (this.lastRender && this.adaptive.sample(time, time - this.lastRender, 1000 / preset.activeFps)) {
+      const level = ADAPTIVE_LEVELS[this.adaptive.level]!
+      this.renderer.setResolutionScale(level.resolution)
+      this.players.nearRadius = level.nearRadius
+      this.pushUi(true)
+    }
     this.lastRender = time
     this.dirty = false
     this.countFrame(performance.now() - cpuStart, time)
@@ -601,6 +612,7 @@ export class GameCore {
       room: this.room,
       online: this.net.enabled ? this.players.count : 1,
       quality: this.quality,
+      adaptive: { level: this.adaptive.level, max: ADAPTIVE_LEVELS.length - 1 },
       contextLost: this.contextLost,
       fading: this.fading,
       zone: this.zone,

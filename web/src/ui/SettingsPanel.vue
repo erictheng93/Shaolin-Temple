@@ -44,7 +44,7 @@ const s = props.settings
             <span>{{ q === 'auto' ? `自動（${qualityLabels[activeQuality]}）` : qualityLabels[q] }}</span>
           </label>
         </div>
-        <p class="note">手機發熱或耗電明顯時，請改用「標準」。畫質變更於重新整理後完整生效。</p>
+        <p class="note">畫面變慢時會自動降低解析度與遠處角色的細節，順暢後再恢復。畫質變更於重新整理後完整生效。</p>
       </fieldset>
 
       <fieldset>
