@@ -67,6 +67,7 @@ export class SceneRenderer {
   private preset: QualityPreset
   private resizeObserver: ResizeObserver
   private width = 1
+  private resolutionScale = 1
   private height = 1
 
   // 第三人稱鏡頭參數
@@ -177,6 +178,13 @@ export class SceneRenderer {
     this.resize()
   }
 
+  /** 動態畫質用：在畫質上限之內再縮小繪製解析度（1 為不縮小）。 */
+  setResolutionScale(scale: number): void {
+    if (scale === this.resolutionScale) return
+    this.resolutionScale = scale
+    this.resize()
+  }
+
   /** 依畫質限制像素比例與總像素數。 */
   resize(): void {
     const w = Math.max(1, this.canvas.clientWidth)
@@ -184,6 +192,7 @@ export class SceneRenderer {
     let ratio = Math.min(window.devicePixelRatio || 1, this.preset.maxPixelRatio)
     const pixels = w * h * ratio * ratio
     if (pixels > this.preset.maxPixels) ratio *= Math.sqrt(this.preset.maxPixels / pixels)
+    ratio *= this.resolutionScale
     this.width = w
     this.height = h
     this.renderer.setPixelRatio(ratio)

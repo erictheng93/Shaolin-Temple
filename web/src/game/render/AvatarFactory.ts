@@ -24,7 +24,10 @@ interface AvatarRecord {
 
 const ROBE_COLORS = ['#a35d3a', '#6b7a8f', '#8a7a5a', '#5d6e5a', '#7a5a6e', '#b08a4a', '#4f5d6e', '#9a6a5a']
 const LOCAL_ROBE = '#c9853a'
+const ORIGIN = new THREE.Vector3()
 export const PIVOT_HEIGHT = 0.55
+/** 小沙彌模型的身高（公尺），與 scripts/build-avatar.mjs 的 HEIGHT 一致。 */
+const FIGURE_HEIGHT = 1.15
 /** 同時繪製的角色上限（含自己）。需大於最高畫質的可見人數。 */
 export const AVATAR_CAPACITY = 160
 
@@ -59,29 +62,35 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
 
 /**
  * 角色工廠與批次繪製擁有者。
- * 所有角色的袍、頭、影子各用一個 InstancedMesh 繪製：不論人數多少都是 3 個 draw call（名牌另計，最多 12 個）。
- * 動畫作用在無網格的 rig 節點上，sync() 每幀把節點的世界矩陣寫進批次。
+ * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）與膚色部分（頭與手）各分近、遠兩批，加上影子，不論人數多少都是 5 個 draw call（名牌另計，最多 12 個）。
+ * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
+ * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 從白模減面而來），沒有骨架：
+ * 動畫作用在無網格的 rig 節點上，sync() 把 pivot 的旋轉套在腳底、pivot 的升降轉成壓扁與拉長，整尊一起動。
+ * 模型載入前（或載入失敗時）以簡單的圓柱與球代替。
  */
 export class AvatarFactory {
   private tracker = new ResourceTracker()
-  private robes: THREE.InstancedMesh
-  private heads: THREE.InstancedMesh
+  /** [近, 遠]，各含身體與膚色兩個批次。 */
+  private tiers: Array<{ body: THREE.InstancedMesh; skin: THREE.InstancedMesh; count: number }>
   private shadows: THREE.InstancedMesh
   private records = new Set<AvatarRecord>()
   private robeColors = ROBE_COLORS.map((c) => new THREE.Color(c))
   private localColor = new THREE.Color(LOCAL_ROBE)
+  private pose = new THREE.Matrix4()
+  private poseScale = new THREE.Vector3()
 
   constructor(parent: THREE.Object3D) {
     const t = this.tracker
     const robeGeo = t.track(new THREE.CylinderGeometry(0.2, 0.36, 1.05, 8))
-    robeGeo.translate(0, 0.525 - PIVOT_HEIGHT, 0)
+    robeGeo.translate(0, 0.525, 0)
     const headGeo = t.track(new THREE.IcosahedronGeometry(0.17, 1))
+    headGeo.translate(0, 1.2, 0)
     const shadowGeo = t.track(new THREE.CircleGeometry(0.45, 16))
     shadowGeo.rotateX(-Math.PI / 2)
 
-    // 袍色由 instanceColor 決定，材質本身用白色。
-    const robeMat = t.trackMaterial(new THREE.MeshLambertMaterial({ color: '#ffffff', flatShading: true }))
-    const skinMat = t.trackMaterial(new THREE.MeshLambertMaterial({ color: '#e2c4a4', flatShading: true }))
+    // 袍色由 instanceColor 決定，材質本身用白色；模型的頂點色把鞋子壓暗。
+    const robeMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.85 }))
+    const skinMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#d2a07c', roughness: 0.7 }))
 
     const c = document.createElement('canvas')
     c.width = c.height = 64
@@ -104,12 +113,29 @@ export class AvatarFactory {
       parent.add(mesh)
       return mesh
     }
-    this.robes = make(robeGeo, robeMat)
-    this.robes.setColorAt(0, this.localColor) // 建立 instanceColor 緩衝區
-    this.heads = make(headGeo, skinMat)
-    this.robes.castShadow = this.heads.castShadow = true
+    this.tiers = [true, false].map((near) => {
+      const body = make(robeGeo, robeMat)
+      body.setColorAt(0, this.localColor) // 建立 instanceColor 緩衝區
+      const skin = make(headGeo, skinMat)
+      body.castShadow = skin.castShadow = near
+      return { body, skin, count: 0 }
+    })
     this.shadows = make(shadowGeo, shadowMat)
     this.shadows.renderOrder = -1
+
+    // 動態載入 GLTFLoader（與 statues.ts 共用同一個延後載入的區塊）
+    void import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
+      ;['monk.glb', 'monk-lod.glb'].forEach((file, i) =>
+        new GLTFLoader().load(`${import.meta.env.BASE_URL}models/${file}`, (gltf) => {
+          const geometryOf = (name: string) => (gltf.scene.getObjectByName(name) as THREE.Mesh | undefined)?.geometry
+          const body = geometryOf('body')
+          const skin = geometryOf('skin')
+          if (!body || !skin) return
+          this.tiers[i]!.body.geometry = t.track(body)
+          this.tiers[i]!.skin.geometry = t.track(skin)
+        }),
+      )
+    })
   }
 
   create(opts: { name: string; colorIndex: number; local: boolean }): Avatar {
@@ -133,7 +159,7 @@ export class AvatarFactory {
       label = new THREE.Sprite(labelMat)
       const img = labelTex.image as HTMLCanvasElement
       label.scale.set((img.width / img.height) * 0.28, 0.28, 1)
-      label.position.y = 1.65
+      label.position.y = FIGURE_HEIGHT + 0.3
       root.add(label)
     }
 
@@ -160,28 +186,42 @@ export class AvatarFactory {
     }
   }
 
-  /** 把可見角色的姿勢寫進批次繪製。每次繪製前呼叫一次。 */
-  sync(): void {
+  /**
+   * 把可見角色的姿勢寫進批次繪製。每次繪製前呼叫一次。
+   * 距離 (x, z) 在 nearRadius 內的角色用完整模型並投影，其餘用低面數模型。
+   */
+  sync(x: number, z: number, nearRadius: number): void {
     let i = 0
+    for (const tier of this.tiers) tier.count = 0
     for (const r of this.records) {
-      const { root, pivot, head } = r.rig
+      const { root, pivot } = r.rig
       if (!root.visible || i >= AVATAR_CAPACITY) continue
       root.updateMatrixWorld(true)
-      this.robes.setMatrixAt(i, pivot.matrixWorld)
-      this.robes.setColorAt(i, r.color)
-      this.heads.setMatrixAt(i, head.matrixWorld)
+      // 公仔式動畫：整尊繞腳底傾斜；pivot 下降（蹲坐）時壓扁、上升（走路彈跳、呼吸）時拉長，體積大致不變。
+      const stretch = 1 + (pivot.position.y - PIVOT_HEIGHT) / FIGURE_HEIGHT
+      const side = 1 / Math.sqrt(stretch)
+      this.pose.compose(ORIGIN, pivot.quaternion, this.poseScale.set(side, stretch, side)).premultiply(root.matrixWorld)
+      const tier = this.tiers[(root.position.x - x) ** 2 + (root.position.z - z) ** 2 <= nearRadius * nearRadius ? 0 : 1]!
+      tier.body.setMatrixAt(tier.count, this.pose)
+      tier.body.setColorAt(tier.count, r.color)
+      tier.skin.setMatrixAt(tier.count, this.pose)
+      tier.count++
       this.shadows.setMatrixAt(i, r.shadow.matrixWorld)
       i++
     }
-    for (const m of [this.robes, this.heads, this.shadows]) {
-      m.count = i
-      m.instanceMatrix.needsUpdate = true
+    for (const tier of this.tiers) {
+      for (const m of [tier.body, tier.skin]) {
+        m.count = tier.count
+        m.instanceMatrix.needsUpdate = true
+      }
+      tier.body.instanceColor!.needsUpdate = true
     }
-    this.robes.instanceColor!.needsUpdate = true
+    this.shadows.count = i
+    this.shadows.instanceMatrix.needsUpdate = true
   }
 
   dispose(): void {
-    for (const m of [this.robes, this.heads, this.shadows]) {
+    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin]), this.shadows]) {
       m.removeFromParent()
       m.dispose()
     }
