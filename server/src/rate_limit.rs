@@ -88,6 +88,16 @@ impl RateLimiter {
         Verdict::Pass
     }
 
+    /// 補送先前被丟棄的最新位置：有額度才扣；沒有額度不算一次丟棄。
+    pub fn admit_held(&mut self, now: Instant) -> bool {
+        let allowed = self.all.has_token(now) && self.position.has_token(now);
+        if allowed {
+            self.all.tokens -= 1.0;
+            self.position.tokens -= 1.0;
+        }
+        allowed
+    }
+
     fn drop_message(&mut self, now: Instant) -> Verdict {
         self.dropped += 1;
         let start = match self.streak {
@@ -138,6 +148,18 @@ mod tests {
             .count();
         assert!((15..=18).contains(&passed), "{passed}");
         assert_eq!(limiter.dropped, 30 - passed as u64);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn held_position_passes_once_a_token_is_back_without_counting_as_drop() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
+        for _ in 0..3 {
+            assert_eq!(limiter.admit(&mv(), t0), Verdict::Pass);
+        }
+        assert!(!limiter.admit_held(t0));
+        assert_eq!(limiter.dropped, 0);
+        assert!(limiter.admit_held(t0 + Duration::from_millis(70)));
     }
 
     #[tokio::test(start_paused = true)]

@@ -28,6 +28,30 @@ const ROOM_IDLE: Duration = Duration::from_secs(60);
 /// 位置驗證：容許速度 = MOVE_SPEED × 1.5 倍，再加固定誤差。
 const SPEED_MARGIN: f64 = 1.5;
 const POSITION_SLACK: f64 = 0.5;
+
+/// 嘗試採用玩家最新回報的位置，回傳是否已沒有待採用的位置。
+/// 距離超出「離上次採用經過的時間 × 速度上限」時先留著：上限隨時間放寬，所以之後的 tick 一定會採用。
+/// 網路卡頓後訊息一次湧到時，位置因此只會晚一點對齊，不會停在舊位置（實測見 BACKEND_TASKS）。
+fn apply_wanted(p: &mut Player, at: Instant) -> bool {
+    let Some((x, z, heading, moving)) = p.wanted else {
+        return true;
+    };
+    let (cx, cz) = p.zone.bounds.clamp(x, z);
+    let elapsed = at.saturating_duration_since(p.last_at).as_secs_f64();
+    let limit = world::MOVE_SPEED * elapsed * SPEED_MARGIN + POSITION_SLACK;
+    if (cx - p.x).hypot(cz - p.z) > limit {
+        return false;
+    }
+    let heading = world::normalize_heading(heading);
+    if (cx, cz, heading, moving) != (p.x, p.z, p.heading, p.moving) {
+        p.dirty = true;
+    }
+    (p.x, p.z, p.heading, p.moving) = (cx, cz, heading, moving);
+    p.wanted = None;
+    p.last_at = at;
+    p.last_pos_msg = at;
+    true
+}
 /// 每位玩家快取的 reqId 結果筆數。
 const ACK_CACHE: usize = 64;
 
@@ -118,6 +142,8 @@ struct Player {
     last_at: Instant,
     /// 最後一則被接受的位置訊息時間，停止看門狗以它為基準。
     last_pos_msg: Instant,
+    /// 玩家回報、但超出速度上限而還沒採用的最新位置 `(x, z, heading, moving)`；每個 tick 再試。
+    wanted: Option<(f64, f64, f64, bool)>,
     /// 下個 tick 要廣播這位玩家的位置。
     dirty: bool,
     /// 這位收件人的 moves 曾被丟棄，下個放得進佇列的 tick 改送 sync。
@@ -362,6 +388,7 @@ impl Room {
             grace_until: None,
             last_at: now,
             last_pos_msg: now,
+            wanted: None,
             dirty: false,
             needs_sync: false,
             acks: VecDeque::new(),
@@ -397,6 +424,7 @@ impl Room {
         p.grace_until = None;
         p.needs_sync = false;
         p.last_at = now;
+        p.wanted = None;
         if p.moving {
             p.moving = false;
             p.dirty = true;
@@ -447,6 +475,7 @@ impl Room {
             return;
         };
         if p.link.take().is_some() {
+            p.wanted = None;
             p.grace_until = Some(now + self.config.resume_grace);
             if p.moving {
                 p.moving = false;
@@ -460,21 +489,11 @@ impl Room {
         if !(x.is_finite() && z.is_finite() && heading.is_finite()) {
             return;
         }
-        let (cx, cz) = p.zone.bounds.clamp(x, z);
-        let elapsed = at.saturating_duration_since(p.last_at).as_secs_f64();
-        let limit = world::MOVE_SPEED * elapsed * SPEED_MARGIN + POSITION_SLACK;
-        if (cx - p.x).hypot(cz - p.z) > limit {
-            // 拒絕：維持原位置，下個 tick 重送讓其他人（與之後的 sync）以伺服器位置為準。
-            p.dirty = true;
-            return;
-        }
-        let heading = world::normalize_heading(heading);
-        if (cx, cz, heading, moving) != (p.x, p.z, p.heading, p.moving) {
+        p.wanted = Some((x, z, heading, moving));
+        if !apply_wanted(p, at) {
+            // 暫不採用：維持原位置，下個 tick 重送讓其他人（與之後的 sync）以伺服器位置為準。
             p.dirty = true;
         }
-        (p.x, p.z, p.heading, p.moving) = (cx, cz, heading, moving);
-        p.last_at = at;
-        p.last_pos_msg = at;
     }
 
     fn action(&mut self, who: &Who, req_id: String, action: String, data_ok: bool, now: Instant) {
@@ -542,6 +561,7 @@ impl Room {
         };
         // 位置改為伺服器端的出入口落點，不採用客戶端送來的座標。
         (p.zone, p.x, p.z, p.heading) = (zone, spawn.x, spawn.z, spawn.heading);
+        p.wanted = None;
         p.moving = false;
         p.dirty = false;
         p.last_at = now;
@@ -627,6 +647,7 @@ impl Room {
         }
         // 停止看門狗
         for p in self.players.values_mut() {
+            apply_wanted(p, now);
             if p.moving && now.saturating_duration_since(p.last_pos_msg) > self.config.stale_move {
                 p.moving = false;
                 p.dirty = true;

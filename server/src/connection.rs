@@ -98,6 +98,8 @@ async fn session(mut ws: WebSocket, state: crate::AppState) {
         member.disconnect().await;
     }
 }
+/// 補送被丟棄的最新位置前等待的時間：位置額度每秒 15 則，約 67 ms 補回一則。
+const HELD_RETRY: Duration = Duration::from_millis(70);
 async fn session_inner(
     ws: &mut WebSocket,
     state: &crate::AppState,
@@ -111,6 +113,9 @@ async fn session_inner(
     let mut last_inbound = Instant::now();
     let mut name = None;
     let mut invalid = InvalidMessages::default();
+    // 被速率限制丟棄的最新一則位置：位置是可取代的，該丟的是舊的而不是最新的，
+    // 所以留著最後一則，等有額度時補送（否則卡頓後停下的玩家會一直停在舊位置）。
+    let mut held: Option<(Instant, f64, f64, f64, bool)> = None;
     loop {
         let received = if name.is_none() {
             match timeout_at(deadline, ws.recv()).await {
@@ -129,6 +134,17 @@ async fn session_inner(
                 _ = tokio::time::sleep_until(last_inbound + idle_timeout) => {
                     close(ws, 1001, "idle timeout").await;
                     return;
+                }
+                _ = tokio::time::sleep_until(held.map_or(last_inbound, |h| h.0) + HELD_RETRY), if held.is_some() => {
+                    let now = Instant::now();
+                    if let Some((_, x, z, heading, moving)) = held.take() {
+                        if limiter.admit_held(now) {
+                            member.position(x, z, heading, moving, now);
+                        } else {
+                            held = Some((now, x, z, heading, moving));
+                        }
+                    }
+                    continue;
                 }
                 outbound = member.outbound.recv() => {
                     match outbound {
@@ -201,9 +217,25 @@ async fn session_inner(
             Some(message) if name.is_some() && !matches!(message, ClientMessage::Hello { .. }) => {
                 let now = Instant::now();
                 match limiter.admit(&message, now) {
-                    Verdict::Pass => {}
+                    Verdict::Pass => {
+                        if matches!(
+                            message,
+                            ClientMessage::Move { .. } | ClientMessage::Stop { .. }
+                        ) {
+                            held = None;
+                        }
+                    }
                     Verdict::Drop => {
                         state.metrics.rate_limited();
+                        match message {
+                            ClientMessage::Move { x, z, heading, .. } => {
+                                held = Some((now, x, z, heading, true))
+                            }
+                            ClientMessage::Stop { x, z, heading, .. } => {
+                                held = Some((now, x, z, heading, false))
+                            }
+                            _ => {}
+                        }
                         continue;
                     }
                     Verdict::Close => {
