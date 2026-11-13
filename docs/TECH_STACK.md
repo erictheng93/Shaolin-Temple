@@ -139,7 +139,7 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 
 ### 已知限制與後續
 
-- 角色是 Q 版小沙彌公仔：`web/scripts/build-avatar.mjs`（`npm run build:avatar`）用 meshoptimizer 把 `3D白模/` 的高模（約 33.6 萬面、只有 POSITION）去掉地板、依位置分出膚色／袍／鞋、減到約 6 千面，輸出 `web/public/models/monk.glb`（140 KB，body 與 skin 兩個節點；袍色來自 instanceColor，鞋子以頂點色壓暗）。沒有 UV 與骨架，動畫是整尊傾斜、壓扁與彈跳；之後若用 Blender 展 UV、烘焙法線，輸出同樣兩個節點即可取代。模型載入前或載入失敗時以圓柱與球代替。
+- 角色是 Q 版小沙彌公仔：`web/scripts/build-avatar.mjs`（`npm run build:avatar`）以程式產生整尊模型（不依賴外部模型檔）：光滑的橢球與旋轉體組成頭、耳朵、鐘形的袍、寬袖、合十的手與鞋尖，沒有稜角；輸出 `web/public/models/monk.glb`（約 9,400 面、216 KB）與遠處用的 `monk-lod.glb`（約 1,600 面、41 KB），各含 body 與 skin 兩個節點（袍色來自 instanceColor，袖口與鞋子以頂點色壓暗）。臉不在模型上，由 `AvatarFactory` 把五官畫在圖集、貼合在頭的正面。沒有 UV 與骨架，動畫是整尊傾斜、壓扁與彈跳；之後若用 Blender 展 UV、烘焙法線，輸出同樣兩個節點即可取代。模型載入前或載入失敗時以圓柱與球代替。
 - 角色以 InstancedMesh 批次繪製，不論人數都是 5 個 draw call：身體與膚色部分各分近、遠兩批，加上影子。離本機玩家 `nearRadius` 內用完整模型（約 6 千面）並投射即時陰影；之外用低面數模型（`monk-lod.glb`，約 1.8 千面、43 KB）且不投影，只留腳下的假影子。桌面 Chromium、mock 伺服器 15 人、高畫質：等級 0 時 56～58 draw call、約 15.8 萬三角形（含陰影 pass）；等級 3 時約 5.6～8.7 萬三角形、繪製解析度由 1280×720 降到 768×432。手機未實測。名牌為個別 sprite，只顯示最近 12 人。批次容量 160（`AVATAR_CAPACITY`），需大於最高畫質的可見人數。
 - 可見人數上限（標準 60／高畫質 120）仍需依手機實測調整；人數多時主要成本轉為三角形數與透明的影子重疊。
 - 移動碰撞只把角色推出障礙物，不做尋路。
