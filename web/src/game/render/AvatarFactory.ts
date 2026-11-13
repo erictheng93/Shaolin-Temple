@@ -101,7 +101,11 @@ function makeFaceAtlas(): THREE.CanvasTexture {
   return tex
 }
 
-/** 從膚色網格取出臉部正面的三角形，貼圖座標由 x、y 平面投影而來；臉因此貼合頭的實際曲面。 */
+/**
+ * 從膚色網格取出臉部正面的三角形，貼圖座標由 x、y 平面投影而來；臉因此貼合頭的實際曲面。
+ * 近處與遠處的膚色幾何各呼叫一次。實測遠處（monk-lod.glb）取到 24 個三角形，UV 涵蓋 u 0.07～0.93、v 0.095～0.895，
+ * 五官所在的中央 70% 範圍有 99% 被涵蓋，只缺四個角落，所以兩者用同一個「三個頂點都在範圍內」的條件即可。
+ */
 function makeFaceGeometry(skin: THREE.BufferGeometry): THREE.BufferGeometry {
   const pos = skin.getAttribute('position')
   const nor = skin.getAttribute('normal')
@@ -173,7 +177,8 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
 
 /**
  * 角色工廠與批次繪製擁有者。
- * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）與膚色部分（頭與手）各分近、遠兩批，加上影子，不論人數多少都是 5 個 draw call（名牌另計，最多 12 個）。
+ * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）、膚色部分（頭與手）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個）。
+ * 臉（五官圖集）近遠都畫，各自貼在該 tier 的頭部曲面上，不投影。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
  * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
  * 動畫作用在無網格的 rig 節點上，sync() 把 pivot 的旋轉套在腳底、pivot 的升降轉成身體的壓扁與拉長；頭、手與臉不縮放，只隨肩膀升降。
@@ -181,12 +186,18 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
  */
 export class AvatarFactory {
   private tracker = new ResourceTracker()
-  /** [近, 遠]，各含身體與膚色兩個批次。 */
-  private tiers: Array<{ body: THREE.InstancedMesh; skin: THREE.InstancedMesh; count: number }>
+  /**
+   * [近, 遠]，各含身體、膚色與臉三個批次。
+   * 臉的幾何各自取自該 tier 的膚色幾何（曲面細緻度不同，不能共用）；faceIndex 決定每個角色用圖集的哪一格。
+   */
+  private tiers: Array<{
+    body: THREE.InstancedMesh
+    skin: THREE.InstancedMesh
+    face: THREE.InstancedMesh
+    faceIndex: THREE.InstancedBufferAttribute
+    count: number
+  }>
   private shadows: THREE.InstancedMesh
-  /** 臉：只畫在近處的完整模型上，一個 draw call；每個角色用哪一格由 faceIndex 決定。 */
-  private faces: THREE.InstancedMesh
-  private faceIndex = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY), 1)
   private records = new Set<AvatarRecord>()
   private robeColors = ROBE_COLORS.map((c) => new THREE.Color(c))
   private localColor = new THREE.Color(LOCAL_ROBE)
@@ -231,16 +242,7 @@ export class AvatarFactory {
       parent.add(mesh)
       return mesh
     }
-    this.tiers = [true, false].map((near) => {
-      const body = make(robeGeo, robeMat)
-      body.setColorAt(0, this.localColor) // 建立 instanceColor 緩衝區
-      const skin = make(headGeo, skinMat)
-      body.castShadow = skin.castShadow = near
-      return { body, skin, count: 0 }
-    })
-    this.shadows = make(shadowGeo, shadowMat)
-    this.shadows.renderOrder = -1
-
+    // 臉的材質與圖集兩個 tier 共用
     const faceMat = t.trackMaterial(
       new THREE.MeshStandardMaterial({
         map: t.track(makeFaceAtlas()),
@@ -260,8 +262,21 @@ export class AvatarFactory {
           `#include <uv_vertex>\n vMapUv.x = (vMapUv.x + faceIndex) / ${FACE_COUNT}.0;`,
         )
     }
-    this.faceIndex.setUsage(THREE.DynamicDrawUsage)
-    this.faces = make(t.track(new THREE.BufferGeometry()), faceMat)
+    this.tiers = [true, false].map((near) => {
+      const body = make(robeGeo, robeMat)
+      body.setColorAt(0, this.localColor) // 建立 instanceColor 緩衝區
+      const skin = make(headGeo, skinMat)
+      body.castShadow = skin.castShadow = near
+      // 臉不投影（兩個 tier 都一樣）；幾何在模型載入後才有
+      const face = make(t.track(new THREE.BufferGeometry()), faceMat)
+      face.castShadow = false
+      const faceIndex = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY), 1)
+      faceIndex.setUsage(THREE.DynamicDrawUsage)
+      return { body, skin, face, faceIndex, count: 0 }
+    })
+    this.shadows = make(shadowGeo, shadowMat)
+    this.shadows.renderOrder = -1
+
 
     // 動態載入 GLTFLoader（與 statues.ts 共用同一個延後載入的區塊）
     void import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
@@ -271,13 +286,13 @@ export class AvatarFactory {
           const body = geometryOf('body')
           const skin = geometryOf('skin')
           if (!body || !skin) return
-          this.tiers[i]!.body.geometry = t.track(body)
-          this.tiers[i]!.skin.geometry = t.track(skin)
-          if (i === 0) {
-            const face = t.track(makeFaceGeometry(skin))
-            face.setAttribute('faceIndex', this.faceIndex)
-            this.faces.geometry = face
-          }
+          const tier = this.tiers[i]!
+          tier.body.geometry = t.track(body)
+          tier.skin.geometry = t.track(skin)
+          // 臉取自該 tier 自己的膚色幾何，才會貼合各自的頭部曲面
+          const face = t.track(makeFaceGeometry(skin))
+          face.setAttribute('faceIndex', tier.faceIndex)
+          tier.face.geometry = face
         }),
       )
     })
@@ -352,10 +367,8 @@ export class AvatarFactory {
         .compose(this.shoulderOffset.set(0, SHOULDER_HEIGHT * (stretch - 1), 0).applyQuaternion(pivot.quaternion), pivot.quaternion, AvatarFactory.UNIT_SCALE)
         .premultiply(root.matrixWorld)
       tier.skin.setMatrixAt(tier.count, this.rigidPose)
-      if (tier === this.tiers[0]) {
-        this.faces.setMatrixAt(tier.count, this.rigidPose)
-        this.faceIndex.setX(tier.count, r.rig.face)
-      }
+      tier.face.setMatrixAt(tier.count, this.rigidPose)
+      tier.faceIndex.setX(tier.count, r.rig.face)
       tier.count++
       this.shadows.setMatrixAt(i, r.shadow.matrixWorld)
       i++
@@ -366,17 +379,17 @@ export class AvatarFactory {
         m.instanceMatrix.needsUpdate = true
       }
       tier.body.instanceColor!.needsUpdate = true
+      // 模型還沒載入時沒有臉的幾何（替代用的圓柱與球不畫臉）
+      tier.face.count = tier.face.geometry.getAttribute('position') ? tier.count : 0
+      tier.face.instanceMatrix.needsUpdate = true
+      tier.faceIndex.needsUpdate = true
     }
     this.shadows.count = i
     this.shadows.instanceMatrix.needsUpdate = true
-    // 模型還沒載入時沒有臉的幾何（替代用的圓柱與球不畫臉）
-    this.faces.count = this.faces.geometry.getAttribute('position') ? this.tiers[0]!.count : 0
-    this.faces.instanceMatrix.needsUpdate = true
-    this.faceIndex.needsUpdate = true
   }
 
   dispose(): void {
-    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin]), this.shadows, this.faces]) {
+    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin, tier.face]), this.shadows]) {
       m.removeFromParent()
       m.dispose()
     }
