@@ -7,7 +7,8 @@
 //! - 移動速度 3.2 m/s：`web/src/game/GameCore.ts` 的 `MOVE_SPEED`（第 57 行）
 //! - 動作允許清單：`web/scripts/mock-server.mjs` 的 `ACTIONS`（前端示範模組 `gameplay/modules/demo.ts`）
 //!
-//! 伺服器目前只驗證邊界與出入口，不模擬障礙物（BACKEND_TASKS T4 未要求）。
+//! - 障礙物：`layout.ts` 的 `OBSTACLES`（主殿、鐘亭、香爐、石燈籠、樹）與 `zones.ts` 殿內的神龕、供桌、柱子，
+//!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。
 
 use std::f64::consts::PI;
 
@@ -29,6 +30,30 @@ impl Rect {
             min_z: self.min_z - m,
             max_z: self.max_z + m,
         }
+    }
+    /// 線段 (x0,z0)→(x1,z1) 是否穿過這個矩形的內部（Liang–Barsky）。
+    pub fn crosses(&self, x0: f64, z0: f64, x1: f64, z1: f64) -> bool {
+        let (dx, dz) = (x1 - x0, z1 - z0);
+        let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+        for (d, lo, hi) in [
+            (dx, self.min_x - x0, self.max_x - x0),
+            (dz, self.min_z - z0, self.max_z - z0),
+        ] {
+            if d == 0.0 {
+                if lo >= 0.0 || hi <= 0.0 {
+                    return false;
+                }
+            } else {
+                let (a, b) = if d > 0.0 {
+                    (lo / d, hi / d)
+                } else {
+                    (hi / d, lo / d)
+                };
+                t0 = t0.max(a);
+                t1 = t1.min(b);
+            }
+        }
+        t0 < t1
     }
     pub fn clamp(&self, x: f64, z: f64) -> (f64, f64) {
         (
@@ -59,6 +84,38 @@ pub struct Zone {
     pub bounds: Rect,
     pub spawn: Pose,
     pub portals: &'static [Portal],
+    /// 不可走的矩形（已含角色半徑）。
+    pub obstacles: &'static [Rect],
+}
+impl Zone {
+    /// 從 (x0,z0) 直線走到 (x1,z1) 是否會穿過障礙物。障礙物先內縮 `OBSTACLE_TOLERANCE`，
+    /// 貼著邊走、座標取到 0.01 的正常玩家不會被誤判。起點已在障礙物內時不擋（讓玩家走得出來）。
+    pub fn blocked(&self, x0: f64, z0: f64, x1: f64, z1: f64) -> bool {
+        self.obstacles.iter().any(|o| {
+            let o = o.grow(-OBSTACLE_TOLERANCE);
+            !o.contains(x0, z0) && o.crosses(x0, z0, x1, z1)
+        })
+    }
+}
+
+/// 角色半徑，與前端 `PLAYER_RADIUS` 相同。
+const PLAYER_RADIUS: f64 = 0.35;
+/// 障礙物檢查的容許誤差（公尺）。
+pub const OBSTACLE_TOLERANCE: f64 = 0.1;
+
+const fn solid(min_x: f64, max_x: f64, min_z: f64, max_z: f64) -> Rect {
+    Rect {
+        min_x: min_x - PLAYER_RADIUS,
+        max_x: max_x + PLAYER_RADIUS,
+        min_z: min_z - PLAYER_RADIUS,
+        max_z: max_z + PLAYER_RADIUS,
+    }
+}
+const fn square(x: f64, z: f64, half: f64) -> Rect {
+    solid(x - half, x + half, z - half, z + half)
+}
+const fn tree(x: f64, z: f64, scale: f64) -> Rect {
+    square(x, z, 0.5 * scale)
 }
 
 /// 出入口範圍的容許誤差（公尺）。
@@ -91,6 +148,24 @@ pub static COURTYARD: Zone = Zone {
             heading: PI,
         },
     }],
+    obstacles: &[
+        solid(-7.5, 7.5, -18.0, -6.2), // 主殿
+        solid(10.0, 14.0, -6.0, -2.0), // 鐘亭
+        square(0.0, -1.5, 0.9),        // 香爐
+        square(-4.0, 3.0, 0.35),       // 石燈籠
+        square(4.0, 3.0, 0.35),
+        square(-4.0, -4.0, 0.35),
+        square(4.0, -4.0, 0.35),
+        tree(-16.0, -14.0, 1.3),
+        tree(-15.0, -4.0, 1.0),
+        tree(-17.0, 6.0, 1.2),
+        tree(-14.0, 14.0, 0.9),
+        tree(16.0, -14.0, 1.2),
+        tree(17.0, 5.0, 1.1),
+        tree(14.0, 14.0, 1.0),
+        tree(-9.0, 16.0, 0.8),
+        tree(9.0, 16.5, 0.9),
+    ],
 };
 
 pub static HALL: Zone = Zone {
@@ -120,6 +195,16 @@ pub static HALL: Zone = Zone {
             heading: 0.0,
         },
     }],
+    obstacles: &[
+        solid(-7.6, 7.6, -9.0, -5.2), // 神龕台基
+        solid(-4.6, 4.6, -4.8, -4.0), // 供桌
+        square(-5.2, 5.0, 0.32),      // 柱子
+        square(-5.2, 1.0, 0.32),
+        square(-5.2, -3.0, 0.32),
+        square(5.2, 5.0, 0.32),
+        square(5.2, 1.0, 0.32),
+        square(5.2, -3.0, 0.32),
+    ],
 };
 
 pub static ZONES: [&Zone; 2] = [&COURTYARD, &HALL];
@@ -167,6 +252,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn spawns_are_clear_and_obstacles_block_straight_lines_only_through_them() {
+        for z in ZONES {
+            assert!(!z.obstacles.iter().any(|o| o.contains(z.spawn.x, z.spawn.z)));
+            for portal in z.portals {
+                let target = zone(portal.to).unwrap();
+                let s = portal.spawn;
+                assert!(!target.obstacles.iter().any(|o| o.contains(s.x, s.z)));
+            }
+        }
+        // 穿過香爐（中心 0,-1.5，含餘量半寬 1.25）
+        assert!(COURTYARD.blocked(0.0, 1.0, 0.0, -4.0));
+        // 從旁邊繞過、貼著邊走都不算
+        assert!(!COURTYARD.blocked(2.0, 1.0, 2.0, -4.0));
+        assert!(!COURTYARD.blocked(1.25, 1.0, 1.25, -4.0));
+        // 直接落在障礙物裡
+        assert!(COURTYARD.blocked(0.0, 1.0, 0.0, -1.5));
+        // 已經在裡面時可以走出來
+        assert!(!COURTYARD.blocked(0.0, -1.5, 0.0, 1.0));
+        // 殿內穿過柱子
+        assert!(HALL.blocked(-6.5, 5.0, -4.0, 5.0));
     }
 
     #[test]

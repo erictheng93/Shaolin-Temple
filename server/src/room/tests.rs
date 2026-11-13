@@ -120,9 +120,16 @@ impl Client {
             .unwrap();
     }
     /// 走到殿門口並進殿（以虛擬時間等待，讓速度驗證放行），回到清空訊息的狀態。
+    /// 從出生點走到殿門：繞過香爐，每段都在移動額度內。
+    async fn walk_to_door(&self) {
+        for (x, z) in [(2.0, 5.0), (2.0, -4.0), (0.0, -5.6)] {
+            sleep(Duration::from_secs(2)).await;
+            self.position(x, z, PI, false).await;
+        }
+        sleep(TICK).await;
+    }
     async fn enter_hall(&mut self) {
-        sleep(Duration::from_secs(4)).await;
-        self.position(0.0, -5.6, PI, false).await;
+        self.walk_to_door().await;
         self.zone("hall").await;
         sleep(TICK).await;
         self.drain();
@@ -361,10 +368,9 @@ async fn zone_change_broadcasts_zone_then_syncs_the_switcher() {
     mover.drain();
     // 離殿門太遠（伺服器依速度上限拒絕該位置）時，位置仍在庭院中央
     mover.position(0.0, -5.6, PI, false).await;
-    sleep(Duration::from_secs(4)).await;
+    mover.walk_to_door().await;
     yard.drain();
     mover.drain();
-    mover.position(0.0, -5.6, PI, false).await;
     mover.zone("hall").await;
     sleep(TICK * 2).await;
     // 切換者：先 zone（含伺服器落點），再 sync（殿內的另一位玩家，不含自己）
@@ -409,7 +415,7 @@ async fn only_portal_positions_may_change_zone() {
         );
     }
     // 出入口外 0.6 公尺（容許 0.5）仍是 invalid_zone
-    sleep(Duration::from_secs(4)).await;
+    p.walk_to_door().await;
     p.position(0.0, -4.4, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
@@ -483,25 +489,65 @@ async fn positions_are_clamped_rejected_and_use_each_zones_bounds() {
     assert_eq!((got[0].1, got[0].2), (7.4, 8.6));
 }
 
+/// 本人收到的位置校正：只含自己短編號的 sync。
+fn corrections(c: &mut Client) -> Vec<MoveTuple> {
+    let n = c.n;
+    c.drain()
+        .into_iter()
+        .filter_map(|m| match m {
+            ServerMessage::Sync { m } if m.len() == 1 && m[0].0 == n => Some(m[0]),
+            _ => None,
+        })
+        .collect()
+}
+
 #[tokio::test(start_paused = true)]
-async fn rejected_position_is_applied_later_even_if_the_player_sends_nothing_more() {
+async fn stall_burst_is_accepted_but_teleports_and_wall_passes_are_corrected() {
     let room = spawn_room(RoomConfig::new(50));
-    let a = connect(&room).await;
+    let mut a = connect(&room).await;
     let mut watcher = connect(&room).await;
     sleep(TICK).await;
     watcher.drain();
-    // 網路卡頓後一次湧到：只收到 5 公尺外的 stop，當下超出速度上限
-    a.position(a.x, a.z - 5.0, 0.0, false).await;
+    a.drain();
+    // 網路卡 2 秒後訊息一次湧到：同一瞬間收到沿路的三個位置，總長 6 公尺（3 m/s）——全部採用
+    sleep(Duration::from_secs(2)).await;
+    for step in 1..=3 {
+        a.position(a.x, a.z - 2.0 * f64::from(step), 0.0, step < 3)
+            .await;
+    }
     sleep(TICK * 2).await;
+    assert_eq!(
+        move_tuples(&watcher.drain()).last().map(|t| t.2),
+        Some(round2(a.z - 6.0))
+    );
+    assert!(corrections(&mut a).is_empty());
+    // 額度用完後立刻再跳 5 公尺：被拒，本人收到伺服器上的位置；不會因為等待而自動採用
+    a.position(a.x, a.z - 1.0, 0.0, false).await;
+    sleep(Duration::from_secs(5)).await;
     assert!(
         move_tuples(&watcher.drain())
             .iter()
-            .all(|t| t.2 == round2(a.z))
+            .all(|t| t.2 == round2(a.z - 6.0))
     );
-    // 之後沒有任何訊息；上限隨時間放寬（4.8 m/s），約 1 秒後採用
-    sleep(Duration::from_secs(1)).await;
-    let got = move_tuples(&watcher.drain());
-    assert_eq!(got.last().map(|t| t.2), Some(round2(a.z - 5.0)));
+    let got = corrections(&mut a);
+    assert_eq!(got.len(), 1);
+    assert_eq!((got[0].1, got[0].2), (round2(a.x), round2(a.z - 6.0)));
+    // 額度足夠但直線穿過香爐（中心 0,-1.5）：被拒並校正
+    a.position(0.0, -3.5, 0.0, false).await;
+    sleep(TICK * 2).await;
+    assert_eq!(corrections(&mut a).len(), 1);
+    assert!(
+        move_tuples(&watcher.drain())
+            .iter()
+            .all(|t| t.2 == round2(a.z - 6.0))
+    );
+    // 連續被拒時，校正最多每 300 ms 一則
+    sleep(Duration::from_millis(300)).await;
+    for _ in 0..5 {
+        a.position(0.0, -3.5, 0.0, false).await;
+    }
+    sleep(TICK * 2).await;
+    assert_eq!(corrections(&mut a).len(), 1);
 }
 
 // ---- T4：動作 ----

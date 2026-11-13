@@ -70,6 +70,7 @@ export type ServerMessage =
   /** 批次位置：伺服器每個 tick 一則，只含有變動的玩家。元素為 [n, x, z, heading, moving(0|1)]。 */
   | { t: 'moves'; m: MoveTuple[] }
   /** 整批位置校正（切換場景後、moves 被丟棄後）：直接套用位置、面向與移動狀態，不插值。 */
+  /** 整批校正：直接套用不插值。若含收件人自己的短編號，代表伺服器拒絕了他送出的位置，須回到這個位置。 */
   | { t: 'sync'; m: MoveTuple[] }
   | { t: 'action'; playerId: string; id: string; startedAt: number; data?: Record<string, unknown> }
   | { t: 'ack'; reqId: string; ok: boolean; reason?: string }
