@@ -1,5 +1,5 @@
 // 把 AI 生成的小沙彌白模（約 33 萬面、只有 POSITION）轉成遊戲用模型：
-// 去掉地板 → 依位置分出膚色／袍／鞋 → 減面 → 拆成 body（袍與鞋，帶頂點色）與 skin（頭與手）→ 輸出 GLB。
+// 去掉地板 → 依位置分出膚色／袍／鞋 → 減面 → 拆成 body（袍與鞋，帶頂點色）與 skin（合十的手，加上程序產生的光滑頭、耳朵與頸）→ 輸出 GLB。
 // 用法：node scripts/build-avatar.mjs [來源.glb] [輸出.glb] [目標三角形數]
 // 之後若改用 Blender 流程（展 UV、烘焙法線），輸出同樣的 body／skin 兩個節點即可直接取代。
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -9,6 +9,17 @@ import { MeshoptSimplifier } from 'meshoptimizer'
 const [src = '../3D白模/b5a31ad874d64c96b75e0465e1c34997.glb', out = 'public/models/monk.glb', target = '6000'] = process.argv.slice(2)
 const HEIGHT = 1.15 // 成品身高（公尺）；來源模型高 2 個單位、腳底在 y=-1
 const SHOE = [0.2, 0.18, 0.16]
+// 頭不用白模的：白模的五官減面後只剩凹陷與稜角，而臉改用貼圖畫（AvatarFactory 的臉圖集）。
+// 這裡直接產生一顆光滑的橢球當頭、兩顆小橢球當耳朵、一段短圓柱當頸（成品座標，公尺），白模的膚色部分只留合十的手。
+const HEAD = { c: [0, 0.86, -0.005], r: [0.25, 0.24, 0.24] }
+const EARS = [-1, 1].map((side) => ({ c: [side * 0.245, 0.82, -0.02], r: [0.035, 0.062, 0.046] }))
+/** 頸部：光滑的短圓柱，上端埋進頭裡、下端埋進衣領。 */
+const NECK = { x: 0, z: -0.01, radius: 0.09, bottom: 0.54, top: 0.68 }
+/** 白模的膚色部分只保留合十的手：這個高度以上、或這個高度以上且在手的後方（頸部殘片）的都去掉。 */
+const HANDS_TOP = 0.63
+const NECK_SCRAPS = { above: 0.58, behindZ: 0.13 }
+/** 橢球的經緯分段：完整模型要看不出輪廓的折線，遠處模型從簡。 */
+const [HEAD_SEG, HEAD_RINGS] = Number(target) >= 4000 ? [48, 32] : [16, 12]
 
 // 讀 GLB：單一 mesh、POSITION + uint32 索引
 const glb = readFileSync(src)
@@ -68,6 +79,10 @@ function part(isSkin) {
   for (let i = 0; i < idx.length; i += 3) {
     const tri = [idx[i], idx[i + 1], idx[i + 2]]
     if (tri.filter((v) => cls[v] === 1).length >= 2 !== isSkin) continue
+    if (isSkin && tri.some((v) => {
+      const y = (pos[v * 3 + 1] + 1) * scale
+      return y >= HANDS_TOP || (y >= NECK_SCRAPS.above && pos[v * 3 + 2] * scale < NECK_SCRAPS.behindZ)
+    })) continue
     for (const v of tri) {
       let j = remap.get(v)
       if (j === undefined) {
@@ -79,6 +94,46 @@ function part(isSkin) {
         col.push(...(cls[v] === 2 ? SHOE : [1, 1, 1]))
       }
       indices.push(j)
+    }
+  }
+  if (isSkin) {
+    for (const { c, r, seg, rings } of [{ ...HEAD, seg: HEAD_SEG, rings: HEAD_RINGS }, ...EARS.map((e) => ({ ...e, seg: 12, rings: 8 }))]) {
+      const base = p.length / 3
+      for (let a = 0; a <= rings; a++) {
+        const phi = (a / rings) * Math.PI
+        for (let b = 0; b <= seg; b++) {
+          const theta = (b / seg) * Math.PI * 2
+          const d = [Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta)]
+          p.push(c[0] + d[0] * r[0], c[1] + d[1] * r[1], c[2] + d[2] * r[2])
+          // 橢球的法線：方向除以半徑後正規化
+          const g = [d[0] / r[0], d[1] / r[1], d[2] / r[2]]
+          const len = Math.hypot(...g)
+          n.push(g[0] / len, g[1] / len, g[2] / len)
+        }
+      }
+      for (let a = 0; a < rings; a++) {
+        for (let b = 0; b < seg; b++) {
+          const v = base + a * (seg + 1) + b
+          if (a > 0) indices.push(v, v + seg + 1, v + 1)
+          if (a < rings - 1) indices.push(v + 1, v + seg + 1, v + seg + 2)
+        }
+      }
+    }
+  }
+  if (isSkin) {
+    const base = p.length / 3
+    const seg = 16
+    for (let b = 0; b <= seg; b++) {
+      const theta = (b / seg) * Math.PI * 2
+      const [dx, dz] = [Math.sin(theta), Math.cos(theta)]
+      for (const y of [NECK.bottom, NECK.top]) {
+        p.push(NECK.x + dx * NECK.radius, y, NECK.z + dz * NECK.radius)
+        n.push(dx, 0, dz)
+      }
+    }
+    for (let b = 0; b < seg; b++) {
+      const v = base + b * 2
+      indices.push(v, v + 2, v + 1, v + 1, v + 2, v + 3)
     }
   }
   return { p: new Float32Array(p), n: new Float32Array(n), col: isSkin ? null : new Float32Array(col), indices: new Uint16Array(indices) }

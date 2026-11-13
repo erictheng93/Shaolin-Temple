@@ -1,5 +1,5 @@
 import type { AvatarRig } from '../render/AvatarFactory'
-import { PIVOT_HEIGHT } from '../render/AvatarFactory'
+import { FACE_CALM, FACE_SMILE, PIVOT_HEIGHT } from '../render/AvatarFactory'
 
 /** 動畫片段：p 為 0..1 的進度，直接設定 rig 的姿勢。 */
 export type ClipFn = (rig: AvatarRig, p: number) => void
@@ -31,7 +31,10 @@ const envelope = (p: number, rise = 0.3, fall = 0.35): number =>
  */
 export class AnimationSystem {
   private clips = new Map<string, ClipFn>([
-    ['bow', (rig, p) => { rig.pivot.rotation.x = envelope(p) * 0.75 }],
+    ['bow', (rig, p) => {
+      rig.pivot.rotation.x = envelope(p) * 0.75
+      rig.face = FACE_SMILE
+    }],
     ['nod', (rig, p) => { rig.head.rotation.x = Math.sin(p * Math.PI * 2) * 0.35 * envelope(p, 0.15, 0.15) }],
     ['kneel', (rig, p) => {
       const e = envelope(p, 0.2, 0.2)
@@ -64,6 +67,7 @@ export class AnimationSystem {
     rig.pivot.rotation.set(0, 0, 0)
     rig.pivot.position.y = PIVOT_HEIGHT
     rig.head.rotation.set(0, 0, 0)
+    rig.face = FACE_CALM
 
     if (state.moving) {
       state.walkPhase += dt * 9
