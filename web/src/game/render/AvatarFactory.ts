@@ -170,7 +170,7 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
  * 角色工廠與批次繪製擁有者。
  * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）與膚色部分（頭與手）各分近、遠兩批，加上影子，不論人數多少都是 5 個 draw call（名牌另計，最多 12 個）。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
- * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 從白模減面而來），沒有骨架：
+ * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
  * 動畫作用在無網格的 rig 節點上，sync() 把 pivot 的旋轉套在腳底、pivot 的升降轉成壓扁與拉長，整尊一起動。
  * 模型載入前（或載入失敗時）以簡單的圓柱與球代替。
  */

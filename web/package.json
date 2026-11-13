@@ -13,7 +13,7 @@
     "typecheck": "vue-tsc -b",
     "test": "vitest run",
     "mock": "node scripts/mock-server.mjs",
-    "build:avatar": "node scripts/build-avatar.mjs && node scripts/build-avatar.mjs ../3D白模/b5a31ad874d64c96b75e0465e1c34997.glb public/models/monk-lod.glb 1800"
+    "build:avatar": "node scripts/build-avatar.mjs public/models/monk.glb 1 && node scripts/build-avatar.mjs public/models/monk-lod.glb 0"
   },
   "dependencies": {
     "three": "0.187.0",
@@ -24,7 +24,6 @@
     "@types/three": "0.187.0",
     "@vitejs/plugin-vue": "6.0.10",
     "@vue/tsconfig": "0.9.1",
-    "meshoptimizer": "1.1.1",
     "typescript": "5.9.3",
     "vite": "8.3.6",
     "vitest": "5.1.0",

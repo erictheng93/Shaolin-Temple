@@ -1,142 +1,127 @@
-// 把 AI 生成的小沙彌白模（約 33 萬面、只有 POSITION）轉成遊戲用模型：
-// 去掉地板 → 依位置分出膚色／袍／鞋 → 減面 → 拆成 body（袍與鞋，帶頂點色）與 skin（合十的手，加上程序產生的光滑頭、耳朵與頸）→ 輸出 GLB。
-// 用法：node scripts/build-avatar.mjs [來源.glb] [輸出.glb] [目標三角形數]
+// 產生 Q 版小沙彌公仔模型：全部由光滑的基本形狀組成（橢球、旋轉體），沒有稜角。
+// 輸出兩個節點：body（袍、袖子、鞋，帶頂點色）與 skin（頭、耳朵、合十的手）。
+// 用法：node scripts/build-avatar.mjs [輸出.glb] [細緻度：1 完整模型、0 遠處用的低面數模型]
 // 之後若改用 Blender 流程（展 UV、烘焙法線），輸出同樣的 body／skin 兩個節點即可直接取代。
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+// 臉不在模型上，由 AvatarFactory 的臉圖集貼在頭的正面（+z）。單位公尺，腳底在 y=0。
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { MeshoptSimplifier } from 'meshoptimizer'
 
-const [src = '../3D白模/b5a31ad874d64c96b75e0465e1c34997.glb', out = 'public/models/monk.glb', target = '6000'] = process.argv.slice(2)
-const HEIGHT = 1.15 // 成品身高（公尺）；來源模型高 2 個單位、腳底在 y=-1
+const [out = 'public/models/monk.glb', detail = '1'] = process.argv.slice(2)
+const FINE = detail === '1'
+/** 圓周分段數：完整模型要看不出輪廓的折線，遠處模型從簡。 */
+const seg = (n) => (FINE ? n : Math.max(8, Math.round(n / 3)))
+
+// 頂點色乘上袍色（instanceColor）：袍 1、袖口略深、鞋接近黑。
+const ROBE = [1, 1, 1]
+const TRIM = [0.74, 0.74, 0.74]
 const SHOE = [0.2, 0.18, 0.16]
-// 頭不用白模的：白模的五官減面後只剩凹陷與稜角，而臉改用貼圖畫（AvatarFactory 的臉圖集）。
-// 這裡直接產生一顆光滑的橢球當頭、兩顆小橢球當耳朵、一段短圓柱當頸（成品座標，公尺），白模的膚色部分只留合十的手。
+
 const HEAD = { c: [0, 0.86, -0.005], r: [0.25, 0.24, 0.24] }
-const EARS = [-1, 1].map((side) => ({ c: [side * 0.245, 0.82, -0.02], r: [0.035, 0.062, 0.046] }))
-/** 頸部：光滑的短圓柱，上端埋進頭裡、下端埋進衣領。 */
-const NECK = { x: 0, z: -0.01, radius: 0.09, bottom: 0.54, top: 0.68 }
-/** 白模的膚色部分只保留合十的手：這個高度以上、或這個高度以上且在手的後方（頸部殘片）的都去掉。 */
-const HANDS_TOP = 0.63
-const NECK_SCRAPS = { above: 0.58, behindZ: 0.13 }
-/** 橢球的經緯分段：完整模型要看不出輪廓的折線，遠處模型從簡。 */
-const [HEAD_SEG, HEAD_RINGS] = Number(target) >= 4000 ? [48, 32] : [16, 12]
+/** 袍的輪廓（由上到下的 [半徑, 高度]）：肩膀藏在頭的下緣裡，往下擺成鐘形，下襬收進去一點。 */
+const ROBE_PROFILE = [
+  [0, 0.69],
+  [0.07, 0.68],
+  [0.115, 0.63],
+  [0.14, 0.55],
+  [0.165, 0.42],
+  [0.195, 0.24],
+  [0.215, 0.12],
+  [0.21, 0.075],
+  [0.17, 0.06],
+  [0, 0.08],
+]
+/** 袍的前後厚度相對左右寬度的比例。 */
+const ROBE_DEPTH = 0.9
 
-// 讀 GLB：單一 mesh、POSITION + uint32 索引
-const glb = readFileSync(src)
-const jsonLen = glb.readUInt32LE(12)
-const json = JSON.parse(glb.subarray(20, 20 + jsonLen).toString())
-const bin = glb.subarray(20 + jsonLen + 8)
-const prim = json.meshes[0].primitives[0]
-const read = (accIndex, Type, width) => {
-  const acc = json.accessors[accIndex]
-  const view = json.bufferViews[acc.bufferView]
-  const start = bin.byteOffset + (view.byteOffset ?? 0) + (acc.byteOffset ?? 0)
-  return new Type(bin.buffer.slice(start, start + acc.count * width * Type.BYTES_PER_ELEMENT))
+const mesh = () => ({ p: [], n: [], col: [], indices: [] })
+const norm = (v) => {
+  const l = Math.hypot(...v) || 1
+  return [v[0] / l, v[1] / l, v[2] / l]
 }
-const pos = read(prim.attributes.POSITION, Float32Array, 3)
-const srcIdx = read(prim.indices, Uint32Array, 1)
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 
-// 去掉模型自帶的地板
-const kept = []
-for (let i = 0; i < srcIdx.length; i += 3) {
-  const [a, b, c] = [srcIdx[i], srcIdx[i + 1], srcIdx[i + 2]]
-  if (pos[a * 3 + 1] < -0.985 && pos[b * 3 + 1] < -0.985 && pos[c * 3 + 1] < -0.985) continue
-  kept.push(a, b, c)
-}
-
-// 依位置分類（針對合十姿勢的這尊模型）：0 袍、1 膚色（頭、頸、合十的手）、2 鞋
-const count = pos.length / 3
-const cls = new Uint8Array(count)
-for (let i = 0; i < count; i++) {
-  const [x, y, z] = [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]]
-  cls[i] = y < -0.9 ? 2 : y > 0.1 || (z > 0.27 && Math.abs(x) < 0.12 && y > -0.2) ? 1 : 0
-}
-// 分類當作頂點屬性參與減面，讓膚色與袍的交界不被抹掉
-const attrs = new Float32Array(count * 2)
-for (let i = 0; i < count; i++) {
-  attrs[i * 2] = cls[i] === 1 ? 1 : 0
-  attrs[i * 2 + 1] = cls[i] === 2 ? 1 : 0
-}
-
-await MeshoptSimplifier.ready
-const [idx, error] = MeshoptSimplifier.simplifyWithAttributes(new Uint32Array(kept), pos, 3, attrs, 2, [0.5, 0.5], null, Number(target) * 3, 0.05)
-
-// 整體算平滑法線（面積加權），拆開後頸部接縫才不會有明暗斷差
-const nor = new Float32Array(pos.length)
-for (let i = 0; i < idx.length; i += 3) {
-  const [a, b, c] = [idx[i] * 3, idx[i + 1] * 3, idx[i + 2] * 3]
-  const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2]
-  const vx = pos[c] - pos[a], vy = pos[c + 1] - pos[a + 1], vz = pos[c + 2] - pos[a + 2]
-  const n = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx]
-  for (const v of [a, b, c]) for (let k = 0; k < 3; k++) nor[v + k] += n[k]
-}
-
-/** 取出符合條件的三角形，壓縮頂點並轉成遊戲座標（腳底在 y=0）。 */
-function part(isSkin) {
-  const remap = new Map()
-  const p = [], n = [], col = [], indices = []
-  const scale = HEIGHT / 2
-  for (let i = 0; i < idx.length; i += 3) {
-    const tri = [idx[i], idx[i + 1], idx[i + 2]]
-    if (tri.filter((v) => cls[v] === 1).length >= 2 !== isSkin) continue
-    if (isSkin && tri.some((v) => {
-      const y = (pos[v * 3 + 1] + 1) * scale
-      return y >= HANDS_TOP || (y >= NECK_SCRAPS.above && pos[v * 3 + 2] * scale < NECK_SCRAPS.behindZ)
-    })) continue
-    for (const v of tri) {
-      let j = remap.get(v)
-      if (j === undefined) {
-        j = remap.size
-        remap.set(v, j)
-        p.push(pos[v * 3] * scale, (pos[v * 3 + 1] + 1) * scale, pos[v * 3 + 2] * scale)
-        const len = Math.hypot(nor[v * 3], nor[v * 3 + 1], nor[v * 3 + 2]) || 1
-        n.push(nor[v * 3] / len, nor[v * 3 + 1] / len, nor[v * 3 + 2] / len)
-        col.push(...(cls[v] === 2 ? SHOE : [1, 1, 1]))
-      }
-      indices.push(j)
+/** 把 rings × (segs+1) 的格點接成三角形；格點由上到下、繞 y 軸排列。 */
+function grid(m, base, rings, segs) {
+  for (let a = 0; a < rings; a++) {
+    for (let b = 0; b < segs; b++) {
+      const v = base + a * (segs + 1) + b
+      m.indices.push(v, v + segs + 1, v + 1, v + 1, v + segs + 1, v + segs + 2)
     }
   }
-  if (isSkin) {
-    for (const { c, r, seg, rings } of [{ ...HEAD, seg: HEAD_SEG, rings: HEAD_RINGS }, ...EARS.map((e) => ({ ...e, seg: 12, rings: 8 }))]) {
-      const base = p.length / 3
-      for (let a = 0; a <= rings; a++) {
-        const phi = (a / rings) * Math.PI
-        for (let b = 0; b <= seg; b++) {
-          const theta = (b / seg) * Math.PI * 2
-          const d = [Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta)]
-          p.push(c[0] + d[0] * r[0], c[1] + d[1] * r[1], c[2] + d[2] * r[2])
-          // 橢球的法線：方向除以半徑後正規化
-          const g = [d[0] / r[0], d[1] / r[1], d[2] / r[2]]
-          const len = Math.hypot(...g)
-          n.push(g[0] / len, g[1] / len, g[2] / len)
-        }
-      }
-      for (let a = 0; a < rings; a++) {
-        for (let b = 0; b < seg; b++) {
-          const v = base + a * (seg + 1) + b
-          if (a > 0) indices.push(v, v + seg + 1, v + 1)
-          if (a < rings - 1) indices.push(v + 1, v + seg + 1, v + seg + 2)
-        }
-      }
+}
+
+/** 橢球。axis 有值時，橢球的 y 軸（r[1]）對準這個方向。 */
+function ellipsoid(m, c, r, color, segs, axis = [0, 1, 0]) {
+  const y = norm(axis)
+  const x = norm(cross(Math.abs(y[1]) > 0.9 ? [0, 0, 1] : [0, 1, 0], y))
+  const z = cross(x, y)
+  const world = (v) => [0, 1, 2].map((k) => x[k] * v[0] + y[k] * v[1] + z[k] * v[2])
+  const rings = Math.max(6, Math.round(segs * 0.66))
+  const base = m.p.length / 3
+  for (let a = 0; a <= rings; a++) {
+    const phi = (a / rings) * Math.PI
+    for (let b = 0; b <= segs; b++) {
+      const theta = (b / segs) * Math.PI * 2
+      const d = [Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta)]
+      const at = world([d[0] * r[0], d[1] * r[1], d[2] * r[2]])
+      m.p.push(c[0] + at[0], c[1] + at[1], c[2] + at[2])
+      // 橢球的法線：方向除以半徑後正規化
+      m.n.push(...norm(world([d[0] / r[0], d[1] / r[1], d[2] / r[2]])))
+      m.col.push(...color)
     }
   }
-  if (isSkin) {
-    const base = p.length / 3
-    const seg = 16
-    for (let b = 0; b <= seg; b++) {
-      const theta = (b / seg) * Math.PI * 2
-      const [dx, dz] = [Math.sin(theta), Math.cos(theta)]
-      for (const y of [NECK.bottom, NECK.top]) {
-        p.push(NECK.x + dx * NECK.radius, y, NECK.z + dz * NECK.radius)
-        n.push(dx, 0, dz)
-      }
-    }
-    for (let b = 0; b < seg; b++) {
-      const v = base + b * 2
-      indices.push(v, v + 2, v + 1, v + 1, v + 2, v + 3)
+  grid(m, base, rings, segs)
+}
+
+/** 旋轉體：輪廓先以 Catmull-Rom 內插成平滑曲線，再繞 y 軸一圈。 */
+function lathe(m, profile, color, segs, depth) {
+  const steps = FINE ? 4 : 2
+  const at = (i) => profile[Math.min(profile.length - 1, Math.max(0, i))]
+  const curve = []
+  for (let i = 0; i < profile.length - 1; i++) {
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps
+      const point = [0, 1].map((k) => {
+        const [p0, p1, p2, p3] = [at(i - 1)[k], at(i)[k], at(i + 1)[k], at(i + 2)[k]]
+        return 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t)
+      })
+      curve.push([Math.max(0, point[0]), point[1]])
     }
   }
-  return { p: new Float32Array(p), n: new Float32Array(n), col: isSkin ? null : new Float32Array(col), indices: new Uint16Array(indices) }
+  curve.push(profile.at(-1))
+  const base = m.p.length / 3
+  curve.forEach(([r, y], i) => {
+    const [a, b] = [curve[Math.max(0, i - 1)], curve[Math.min(curve.length - 1, i + 1)]]
+    // 輪廓由上往下走；往外的法線是切線順時針轉 90 度
+    const [nr, ny] = [a[1] - b[1], b[0] - a[0]]
+    for (let s = 0; s <= segs; s++) {
+      const theta = (s / segs) * Math.PI * 2
+      const [sx, sz] = [Math.sin(theta), Math.cos(theta)]
+      m.p.push(sx * r, y, sz * r * depth)
+      m.n.push(...norm([sx * nr, ny, (sz * nr) / depth]))
+      m.col.push(...color)
+    }
+  })
+  grid(m, base, curve.length - 1, segs)
+}
+
+const body = mesh()
+lathe(body, ROBE_PROFILE, ROBE, seg(32), ROBE_DEPTH)
+for (const side of [-1, 1]) {
+  // 袖子：從肩膀垂到胸前合十處的寬袖
+  ellipsoid(body, [side * 0.09, 0.55, 0.08], [0.062, 0.13, 0.066], ROBE, seg(24), [-side * 0.11, -0.1, 0.17])
+  // 袖口
+  ellipsoid(body, [side * 0.04, 0.505, 0.158], [0.05, 0.022, 0.052], TRIM, seg(20), [-side * 0.11, -0.1, 0.17])
+  // 鞋：從下襬前緣露出鞋尖
+  ellipsoid(body, [side * 0.075, 0.036, 0.135], [0.058, 0.036, 0.09], SHOE, seg(20))
+}
+
+const skin = mesh()
+ellipsoid(skin, HEAD.c, HEAD.r, ROBE, seg(40))
+for (const side of [-1, 1]) {
+  ellipsoid(skin, [side * 0.245, 0.82, -0.02], [0.035, 0.062, 0.046], ROBE, seg(16))
+  // 合十的手：兩片手掌貼在一起，指尖朝上略往前
+  ellipsoid(skin, [side * 0.014, 0.535, 0.19], [0.02, 0.06, 0.034], ROBE, seg(16), [0, 1, -0.25])
 }
 
 // 寫 GLB
@@ -159,12 +144,11 @@ const accessor = (array, type, target, withBounds) => {
   return gltf.accessors.length - 1
 }
 const report = []
-for (const [name, isSkin] of [['body', false], ['skin', true]]) {
-  const m = part(isSkin)
+for (const [name, m] of [['body', body], ['skin', skin]]) {
   if (m.p.length / 3 > 65535) throw new Error(`${name} 頂點數超過 16 位元索引上限`)
-  const attributes = { POSITION: accessor(m.p, 'VEC3', 34962, true), NORMAL: accessor(m.n, 'VEC3', 34962) }
-  if (m.col) attributes.COLOR_0 = accessor(m.col, 'VEC3', 34962)
-  gltf.meshes.push({ name, primitives: [{ attributes, indices: accessor(m.indices, 'SCALAR', 34963) }] })
+  const attributes = { POSITION: accessor(new Float32Array(m.p), 'VEC3', 34962, true), NORMAL: accessor(new Float32Array(m.n), 'VEC3', 34962) }
+  if (name === 'body') attributes.COLOR_0 = accessor(new Float32Array(m.col), 'VEC3', 34962)
+  gltf.meshes.push({ name, primitives: [{ attributes, indices: accessor(new Uint16Array(m.indices), 'SCALAR', 34963) }] })
   gltf.nodes.push({ name, mesh: gltf.meshes.length - 1 })
   report.push(`${name} ${m.indices.length / 3} 面／${m.p.length / 3} 頂點`)
 }
@@ -184,4 +168,4 @@ const chunkHeader = (length, type) => {
 mkdirSync(dirname(out), { recursive: true })
 const file = Buffer.concat([header, chunkHeader(jsonBuf.length, 0x4e4f534a), jsonBuf, chunkHeader(offset, 0x004e4942), ...chunks])
 writeFileSync(out, file)
-console.log(`${src}：${srcIdx.length / 3} 面 → ${report.join('、')}（誤差 ${error.toFixed(4)}），${(file.length / 1024).toFixed(0)} KB → ${out}`)
+console.log(`${report.join('、')}，${(file.length / 1024).toFixed(0)} KB → ${out}`)
