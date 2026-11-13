@@ -51,7 +51,8 @@ npm run build:avatar                 # 由 3D白模/ 的高模減面產生 publi
 - 伺服器每個 tick 送批次位置 `moves`（`MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
 - 遠端玩家的移動（`world/interp.ts`、`Players`）：收到新位置時從目前顯示的位置等速走過去，花的時間等於位置更新的間隔；差距超過 5 公尺直接套用。移動中超過 1 秒沒有更新視為停止。
 - `NetworkClient` 負責重連（`backoff.ts`）、心跳、送出節流與 `resumeToken` 恢復；渲染頻率與網路送出頻率各自獨立。上行座標取到 0.01；切到背景時若在移動會先補送 `stop`；退避計數在收到 `welcome` 才歸零；close code 1013／1008 至少等 5 秒再重連；`unsupported_version` 不再重連並提示重新整理。
-- 後端（`server/`）：每個房間一個 actor task 擁有狀態（`src/room.rs`），連線以 channel 溝通，房間只用 `try_send`。場景邊界與出入口常數在 `src/world.rs`，數值抄自前端的 `world/layout.ts`／`zones.ts`，改場地時兩邊要一起改。
+- 後端（`server/`）：每個房間一個 actor task 擁有狀態（`src/room.rs`），連線以 channel 溝通，房間只用 `try_send`。場景邊界與出入口常數在 `src/world.rs`，數值抄自前端的 `world/layout.ts`／`zones.ts`，改場地時兩邊要一起改。障礙物也抄了一份在 `src/world.rs`。
+- 位置由本機先走、伺服器驗證：伺服器以「移動額度」（防瞬移）與障礙物直線檢查（防穿牆）驗證，拒絕時送只含本人短編號的 `sync`，`GameCore.correctLocal()` 把自己拉回該位置。
 
 ### 玩法擴充點
 

@@ -284,8 +284,11 @@ async fn zone_switch_requires_the_portal_and_uses_server_landing_point() {
     let reply = recv_kind(&mut a, "error").await;
     assert_eq!(reply["code"], "invalid_zone");
     // 走到殿門（速度上限允許後才能一次到位），再送 zone；客戶端送來的座標被忽略
-    sleep(Duration::from_millis(3600)).await;
-    send(&mut a, position("stop", 0.0, -5.6)).await;
+    // 繞過香爐分三段走，每段都等移動額度累積夠了再送
+    for (x, z, wait) in [(2.0, 5.0, 1500), (2.0, -4.0, 2000), (0.0, -5.6, 600)] {
+        sleep(Duration::from_millis(wait)).await;
+        send(&mut a, position("stop", x, z)).await;
+    }
     send(
         &mut a,
         json!({ "t": "zone", "zone": "hall", "x": 99, "z": 99, "heading": 1 }),

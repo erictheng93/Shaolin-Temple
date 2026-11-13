@@ -114,6 +114,8 @@ export class GameCore {
 
   private room: string | null = null
   private selfId: string | null = null
+  /** 自己的房內短編號；sync 中出現它代表伺服器校正了自己的位置。 */
+  private selfN = -1
   private serverOffset = 0
   private rtt: number | null = null
   private stats = new Map<string, { label: string; value: string | number }>()
@@ -483,6 +485,16 @@ export class GameCore {
     this.pushUi(true)
   }
 
+  /** 伺服器拒絕了自己送出的位置（跳太遠或穿過障礙物）：回到伺服器上的位置，取消進行中的移動。 */
+  private correctLocal(x: number, z: number): void {
+    const pos = resolveCollisions(x, z, this.moveCfg)
+    Object.assign(this.players.local.mover, { ...pos, target: null })
+    this.path = []
+    this.marker.visible = false
+    this.snapCamera = true
+    this.wake()
+  }
+
   // ---------- 生命週期 ----------
 
   private onVisibility = (): void => {
@@ -513,8 +525,9 @@ export class GameCore {
         this.serverOffset = m.serverTime - performance.now()
         this.players.clearRemotes()
         for (const p of m.players) {
-          // 自己的位置由本機權威；短編號只對照遠端玩家，所以 moves／sync 中自己的 n 會因對照不到而被忽略。
+          // 自己的位置平常由本機決定；短編號只對照遠端玩家，moves 中不會有自己，sync 中的自己是伺服器的校正。
           if (p.id === m.selfId) {
+            this.selfN = p.n
             // 伺服器記錄的場景與位置為準（斷線恢復時可能在殿內）。
             const zone: ZoneId = isZoneId(p.zone) ? p.zone : 'courtyard'
             this.applyZone(zone, { x: p.x, z: p.z, heading: p.heading })
@@ -548,7 +561,10 @@ export class GameCore {
       }
       case 'sync': {
         const now = performance.now()
-        for (const [n, x, z, heading, moving] of m.m) this.players.syncRemoteByN(n, x, z, heading, moving === 1, now)
+        for (const [n, x, z, heading, moving] of m.m) {
+          if (n === this.selfN) this.correctLocal(x, z)
+          else this.players.syncRemoteByN(n, x, z, heading, moving === 1, now)
+        }
         break
       }
       case 'action':
