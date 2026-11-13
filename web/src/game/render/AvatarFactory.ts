@@ -134,6 +134,11 @@ const ORIGIN = new THREE.Vector3()
 export const PIVOT_HEIGHT = 0.55
 /** 小沙彌模型的身高（公尺），與 scripts/build-avatar.mjs 的 HEIGHT 一致。 */
 const FIGURE_HEIGHT = 1.15
+/**
+ * 肩膀（袍頂、頭底）的高度（公尺），取自 scripts/build-avatar.mjs 的 ROBE_PROFILE 與 HEAD。
+ * 頭與手以剛體跟著這個高度上下移動，不做縮放，避免蹲坐時頭被壓扁、臉變形。
+ */
+const SHOULDER_HEIGHT = 0.66
 /** 同時繪製的角色上限（含自己）。需大於最高畫質的可見人數。 */
 export const AVATAR_CAPACITY = 160
 
@@ -171,7 +176,7 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
  * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）與膚色部分（頭與手）各分近、遠兩批，加上影子，不論人數多少都是 5 個 draw call（名牌另計，最多 12 個）。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
  * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
- * 動畫作用在無網格的 rig 節點上，sync() 把 pivot 的旋轉套在腳底、pivot 的升降轉成壓扁與拉長，整尊一起動。
+ * 動畫作用在無網格的 rig 節點上，sync() 把 pivot 的旋轉套在腳底、pivot 的升降轉成身體的壓扁與拉長；頭、手與臉不縮放，只隨肩膀升降。
  * 模型載入前（或載入失敗時）以簡單的圓柱與球代替。
  */
 export class AvatarFactory {
@@ -187,6 +192,10 @@ export class AvatarFactory {
   private localColor = new THREE.Color(LOCAL_ROBE)
   private pose = new THREE.Matrix4()
   private poseScale = new THREE.Vector3()
+  /** 頭、手與臉的剛體姿勢（不縮放），與 shoulderOffset 都是重用的暫存物件。 */
+  private rigidPose = new THREE.Matrix4()
+  private shoulderOffset = new THREE.Vector3()
+  private static readonly UNIT_SCALE = new THREE.Vector3(1, 1, 1)
 
   constructor(parent: THREE.Object3D) {
     const t = this.tracker
@@ -338,9 +347,13 @@ export class AvatarFactory {
       const tier = this.tiers[(root.position.x - x) ** 2 + (root.position.z - z) ** 2 <= nearRadius * nearRadius ? 0 : 1]!
       tier.body.setMatrixAt(tier.count, this.pose)
       tier.body.setColorAt(tier.count, r.color)
-      tier.skin.setMatrixAt(tier.count, this.pose)
+      // 頭、耳朵、手與臉：同樣的傾斜，但不縮放，只跟著肩膀的高度升降（手比袖口多降約 3 公分，可接受）。
+      this.rigidPose
+        .compose(this.shoulderOffset.set(0, SHOULDER_HEIGHT * (stretch - 1), 0).applyQuaternion(pivot.quaternion), pivot.quaternion, AvatarFactory.UNIT_SCALE)
+        .premultiply(root.matrixWorld)
+      tier.skin.setMatrixAt(tier.count, this.rigidPose)
       if (tier === this.tiers[0]) {
-        this.faces.setMatrixAt(tier.count, this.pose)
+        this.faces.setMatrixAt(tier.count, this.rigidPose)
         this.faceIndex.setX(tier.count, r.rig.face)
       }
       tier.count++

@@ -35,7 +35,10 @@ export class AnimationSystem {
       rig.pivot.rotation.x = envelope(p) * 0.75
       rig.face = FACE_SMILE
     }],
-    ['nod', (rig, p) => { rig.head.rotation.x = Math.sin(p * Math.PI * 2) * 0.35 * envelope(p, 0.15, 0.15) }],
+    // 整尊小幅前傾點頭（rig.head 的旋轉不會繪製）：1.2 秒內點兩下，峰值約 0.22 弧度。
+    ['nod', (rig, p) => {
+      rig.pivot.rotation.x = Math.abs(Math.sin(p * Math.PI * 2)) * 0.22 * envelope(p, 0.15, 0.15)
+    }],
     ['kneel', (rig, p) => {
       const e = envelope(p, 0.2, 0.2)
       rig.pivot.position.y = PIVOT_HEIGHT - e * 0.3
