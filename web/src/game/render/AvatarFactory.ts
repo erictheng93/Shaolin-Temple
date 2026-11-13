@@ -8,7 +8,14 @@ export interface AvatarRig {
   /** 腰部樞紐：鞠躬、呼吸等動作旋轉這裡。 */
   pivot: THREE.Group
   head: THREE.Group
+  /** 表情（FACE_* 常數）。AnimationSystem 每幀重設為平常的臉，動作片段可以改。 */
+  face: number
 }
+
+/** 平常的臉：豆豆眼。 */
+export const FACE_CALM = 0
+/** 瞇瞇笑眼：合十時。 */
+export const FACE_SMILE = 1
 
 export interface Avatar extends AvatarRig {
   setLabelVisible(visible: boolean): void
@@ -20,6 +27,105 @@ interface AvatarRecord {
   rig: AvatarRig
   shadow: THREE.Object3D
   color: THREE.Color
+}
+
+/** 臉圖集的格數（橫向排列）。 */
+const FACE_COUNT = 2
+/** 臉在模型上的範圍（公尺，模型面向 +z）：以 x、y 平面投影成貼圖座標。 */
+const FACE_RECT = { x: 0.19, yMin: 0.64, yMax: 1.02, zMin: 0.05 }
+
+/** 畫出臉圖集：每格一種表情（順序同 FACE_* 常數），透明底，只有五官與腮紅。 */
+function makeFaceAtlas(): THREE.CanvasTexture {
+  const S = 256
+  const c = document.createElement('canvas')
+  c.width = S * FACE_COUNT
+  c.height = S
+  const g = c.getContext('2d')!
+  const INK = '#3a2a22'
+  g.lineCap = 'round'
+  const blush = (ox: number, x: number, y: number, rx: number, ry: number, a: number) => {
+    const grad = g.createRadialGradient(ox + x, y, 0, ox + x, y, rx)
+    grad.addColorStop(0, `rgba(235,120,110,${a})`)
+    grad.addColorStop(1, 'rgba(235,120,110,0)')
+    g.save()
+    g.translate(0, y * (1 - ry / rx))
+    g.scale(1, ry / rx)
+    g.fillStyle = grad
+    g.fillRect(ox + x - rx, y - rx, rx * 2, rx * 2)
+    g.restore()
+  }
+  const EY = 150 // 眼睛高度（畫布座標，往下為正）；偏低顯得稚氣
+  // 0：豆豆眼
+  {
+    const ox = 0
+    for (const sx of [-1, 1]) {
+      blush(ox, 128 + sx * 68, EY + 30, 30, 18, 0.55)
+      g.fillStyle = INK
+      g.beginPath()
+      g.ellipse(ox + 128 + sx * 46, EY, 9, 11, 0, 0, Math.PI * 2)
+      g.fill()
+      g.fillStyle = 'rgba(255,255,255,0.9)'
+      g.beginPath()
+      g.arc(ox + 128 + sx * 46 - 3, EY - 4, 2.6, 0, Math.PI * 2)
+      g.fill()
+    }
+    g.strokeStyle = INK
+    g.lineWidth = 4
+    g.beginPath()
+    g.arc(ox + 128, EY + 22, 10, Math.PI * 0.15, Math.PI * 0.85)
+    g.stroke()
+  }
+  // 1：瞇瞇笑眼
+  {
+    const ox = S
+    g.strokeStyle = INK
+    for (const sx of [-1, 1]) {
+      blush(ox, 128 + sx * 66, EY + 26, 32, 20, 0.6)
+      g.lineWidth = 5.5
+      g.beginPath()
+      g.arc(ox + 128 + sx * 46, EY + 8, 17, Math.PI * 1.15, Math.PI * 1.85)
+      g.stroke()
+    }
+    // ω 嘴
+    g.lineWidth = 4
+    g.beginPath()
+    g.arc(ox + 128 - 8, EY + 26, 8, 0, Math.PI)
+    g.stroke()
+    g.beginPath()
+    g.arc(ox + 128 + 8, EY + 26, 8, 0, Math.PI)
+    g.stroke()
+  }
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 4
+  return tex
+}
+
+/** 從膚色網格取出臉部正面的三角形，貼圖座標由 x、y 平面投影而來；臉因此貼合頭的實際曲面。 */
+function makeFaceGeometry(skin: THREE.BufferGeometry): THREE.BufferGeometry {
+  const pos = skin.getAttribute('position')
+  const nor = skin.getAttribute('normal')
+  const index = skin.getIndex()!
+  const R = FACE_RECT
+  const inside = (i: number) =>
+    Math.abs(pos.getX(i)) <= R.x && pos.getY(i) >= R.yMin && pos.getY(i) <= R.yMax && pos.getZ(i) >= R.zMin
+  const p: number[] = []
+  const n: number[] = []
+  const uv: number[] = []
+  for (let t = 0; t < index.count; t += 3) {
+    const tri = [index.getX(t), index.getX(t + 1), index.getX(t + 2)]
+    if (!tri.every(inside)) continue
+    for (const i of tri) {
+      p.push(pos.getX(i), pos.getY(i), pos.getZ(i))
+      n.push(nor.getX(i), nor.getY(i), nor.getZ(i))
+      uv.push((pos.getX(i) + R.x) / (R.x * 2), (pos.getY(i) - R.yMin) / (R.yMax - R.yMin))
+    }
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(p, 3))
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(n, 3))
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
+  return geo
 }
 
 const ROBE_COLORS = ['#a35d3a', '#6b7a8f', '#8a7a5a', '#5d6e5a', '#7a5a6e', '#b08a4a', '#4f5d6e', '#9a6a5a']
@@ -73,6 +179,9 @@ export class AvatarFactory {
   /** [近, 遠]，各含身體與膚色兩個批次。 */
   private tiers: Array<{ body: THREE.InstancedMesh; skin: THREE.InstancedMesh; count: number }>
   private shadows: THREE.InstancedMesh
+  /** 臉：只畫在近處的完整模型上，一個 draw call；每個角色用哪一格由 faceIndex 決定。 */
+  private faces: THREE.InstancedMesh
+  private faceIndex = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY), 1)
   private records = new Set<AvatarRecord>()
   private robeColors = ROBE_COLORS.map((c) => new THREE.Color(c))
   private localColor = new THREE.Color(LOCAL_ROBE)
@@ -123,6 +232,28 @@ export class AvatarFactory {
     this.shadows = make(shadowGeo, shadowMat)
     this.shadows.renderOrder = -1
 
+    const faceMat = t.trackMaterial(
+      new THREE.MeshStandardMaterial({
+        map: t.track(makeFaceAtlas()),
+        transparent: true,
+        depthWrite: false,
+        roughness: 0.7,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      }),
+    )
+    faceMat.onBeforeCompile = (shader) => {
+      shader.vertexShader =
+        'attribute float faceIndex;\n' +
+        shader.vertexShader.replace(
+          '#include <uv_vertex>',
+          `#include <uv_vertex>\n vMapUv.x = (vMapUv.x + faceIndex) / ${FACE_COUNT}.0;`,
+        )
+    }
+    this.faceIndex.setUsage(THREE.DynamicDrawUsage)
+    this.faces = make(t.track(new THREE.BufferGeometry()), faceMat)
+
     // 動態載入 GLTFLoader（與 statues.ts 共用同一個延後載入的區塊）
     void import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
       ;['monk.glb', 'monk-lod.glb'].forEach((file, i) =>
@@ -133,6 +264,11 @@ export class AvatarFactory {
           if (!body || !skin) return
           this.tiers[i]!.body.geometry = t.track(body)
           this.tiers[i]!.skin.geometry = t.track(skin)
+          if (i === 0) {
+            const face = t.track(makeFaceGeometry(skin))
+            face.setAttribute('faceIndex', this.faceIndex)
+            this.faces.geometry = face
+          }
         }),
       )
     })
@@ -163,18 +299,16 @@ export class AvatarFactory {
       root.add(label)
     }
 
+    const rig: AvatarRig = { root, pivot, head, face: FACE_CALM }
     const record: AvatarRecord = {
-      rig: { root, pivot, head },
+      rig,
       shadow,
       color: opts.local ? this.localColor : this.robeColors[opts.colorIndex % this.robeColors.length]!,
     }
     this.records.add(record)
 
-    return {
-      root,
-      pivot,
-      head,
-      setLabelVisible(visible) {
+    return Object.assign(rig, {
+      setLabelVisible(visible: boolean) {
         if (label) label.visible = visible
       },
       dispose: () => {
@@ -183,7 +317,7 @@ export class AvatarFactory {
         labelTex?.dispose()
         labelMat?.dispose()
       },
-    }
+    })
   }
 
   /**
@@ -205,6 +339,10 @@ export class AvatarFactory {
       tier.body.setMatrixAt(tier.count, this.pose)
       tier.body.setColorAt(tier.count, r.color)
       tier.skin.setMatrixAt(tier.count, this.pose)
+      if (tier === this.tiers[0]) {
+        this.faces.setMatrixAt(tier.count, this.pose)
+        this.faceIndex.setX(tier.count, r.rig.face)
+      }
       tier.count++
       this.shadows.setMatrixAt(i, r.shadow.matrixWorld)
       i++
@@ -218,10 +356,14 @@ export class AvatarFactory {
     }
     this.shadows.count = i
     this.shadows.instanceMatrix.needsUpdate = true
+    // 模型還沒載入時沒有臉的幾何（替代用的圓柱與球不畫臉）
+    this.faces.count = this.faces.geometry.getAttribute('position') ? this.tiers[0]!.count : 0
+    this.faces.instanceMatrix.needsUpdate = true
+    this.faceIndex.needsUpdate = true
   }
 
   dispose(): void {
-    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin]), this.shadows]) {
+    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin]), this.shadows, this.faces]) {
       m.removeFromParent()
       m.dispose()
     }
