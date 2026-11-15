@@ -17,7 +17,7 @@
 
 | 工具 | 什麼情況才需要 | 版本 |
 | --- | --- | --- |
-| Node.js、npm | 一律需要（改程式、跑測試、看畫面） | `^20.19.0` 或 `>=22.12.0`，CI 用 22 |
+| Node.js、npm | 一律需要（改程式、跑測試、看畫面） | `>=22.18.0`，CI 用 22。mock 伺服器直接載入 TypeScript 檔，需要 22.18 起內建的型別移除 |
 | Rust（rustup） | 只有跑或修改後端時 | `server/rust-toolchain.toml` 固定為 1.95.0，rustup 會自動安裝，並帶 rustfmt 與 clippy |
 | KTX-Software（`ktx`） | 只有新增或替換貼圖時（`npm run build:textures`） | 場景貼圖用 v4.4.2 編碼，庭院烘焙貼圖用 v5.0.0-rc2 編碼；兩個版本都能執行現有腳本 |
 | Blender | 只有重新烘焙庭院光照（`npm run bake:lightmaps`）或處理神像模型（`npm run build:statues`）時 | 烘焙所用的版本是 Blender 5.3.0；神像烘焙用 Cycles，有 NVIDIA 顯示卡時自動用 OptiX／CUDA |
