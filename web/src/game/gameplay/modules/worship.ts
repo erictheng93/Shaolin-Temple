@@ -3,6 +3,8 @@ import { synthesizeQing } from '../../audio/AudioManager'
 import { FACE_SMILE, PIVOT_HEIGHT, PROP_INCENSE } from '../../render/AvatarFactory'
 import { censerForPosition, pickCenserSpot, pickCushion } from '../../world/worship'
 import type { GameplayModule } from '../types'
+import { installBell } from './bell'
+import { installChant } from './chant'
 
 /** 跪拜：跪下（前 KNEEL_IN）→ 叩拜三次 → 起身（最後 1 - KNEEL_OUT）。 */
 export const PROSTRATE_MS = 8000
@@ -57,7 +59,8 @@ export const incenseClip: ClipFn = (rig, p) => {
 }
 
 /**
- * 參拜玩法：合十、跪拜（殿內走到空蒲團）、上香（走到最近的香爐前）、敲鐘（庭院）。
+ * 參拜玩法：合十、跪拜（殿內走到空蒲團）、誦經敲木魚（殿內走到空蒲團，chant.ts）、上香（走到最近的香爐前）、
+ * 敲鐘（庭院走到鐘亭前，bell.ts）。動作列依註冊順序排列。
  * 上香插下的香由每個客戶端各自依執行者插香當下的位置推出是哪個香爐，不經伺服器、不需新的協定欄位。
  */
 export const worshipModule: GameplayModule = {
@@ -96,6 +99,7 @@ export const worshipModule: GameplayModule = {
         approach: pickCushion,
         onConfirmed: counted,
       }),
+      installChant(api, counted),
       api.actions.register({
         id: 'incense',
         label: '上香',
@@ -108,19 +112,8 @@ export const worshipModule: GameplayModule = {
         approach: pickCenserSpot,
         onConfirmed: counted,
       }),
-      api.actions.register({
-        id: 'bell',
-        label: '敲鐘',
-        glyph: '🔔',
-        cooldownMs: 8000,
-        animation: 'nod',
-        durationMs: 1200,
-        sound: 'bell',
-        unavailableReason: (zone) => (zone === 'courtyard' ? null : '鐘亭在庭院，出殿後再敲'),
-      }),
+      installBell(api),
       api.events.on('actionPerformed', (e) => {
-        // 任何玩家敲鐘時，鐘都會擺動。
-        if (e.actionId === 'bell') api.scene.swingBell()
         // 插香的那一刻依執行者當時的位置找香爐；遠端玩家的最後一筆位置通常比動作晚到，所以不在收到動作時就決定。
         if (e.actionId === 'incense') {
           const timer = setTimeout(

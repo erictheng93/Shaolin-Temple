@@ -285,8 +285,12 @@ export class AudioManager {
     return this.buffers.has(name) || this.pendingUrls.has(name) || this.pendingSynths.has(name)
   }
 
-  /** 播放短音效。gain 可用於距離衰減。超過同時發聲上限或音效音量為 0 時略過。 */
-  play(name: string, opts: { gain?: number; rate?: number } = {}): void {
+  /**
+   * 播放短音效。gain 可用於距離衰減。超過同時發聲上限或音效音量為 0 時略過。
+   * at 是預定的播放時間（performance.now 毫秒）：在 AudioContext 的時間軸上排程，不受計時器誤差影響
+   * （節拍類的聲音先排好接下來幾百毫秒內的拍點）；已經過去或沒給時立即播放。
+   */
+  play(name: string, opts: { gain?: number; rate?: number; at?: number } = {}): void {
     const ctx = this.ctx
     const buffer = this.buffers.get(name)
     if (!ctx || !buffer || !this.sfxBus || ctx.state !== 'running' || this.voices >= MAX_VOICES) return
@@ -305,7 +309,7 @@ export class AudioManager {
       src.disconnect()
       g.disconnect()
     }
-    src.start()
+    src.start(opts.at === undefined ? 0 : ctx.currentTime + Math.max(0, (opts.at - performance.now()) / 1000))
   }
 
   /** 開始環境音：風聲、鳥鳴、遠處頌缽與遠鐘。 */
