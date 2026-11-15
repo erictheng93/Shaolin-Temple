@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { Sky } from 'three/examples/jsm/objects/Sky.js'
 import type { QualityPreset } from '../core/settings'
+import { OUTDOOR_SUN_POSITION } from './courtyardBake'
 import { SKY_COLOR } from './TempleScene'
 
 /** 場景環境：背景、霧、半球光與主光。 */
@@ -9,7 +10,7 @@ export interface Environment {
   fog: { near: number; far: number } | null
   hemi: { sky: string; ground: string; intensity: number }
   sun: { color: string; intensity: number; position: [number, number, number] }
-  /** 戶外：程序化天空、天空環境光反射、色調映射與即時陰影。null 表示室內，維持原本未經色調映射的畫面。 */
+  /** 戶外：程序化天空、天空環境光反射、色調映射與即時陰影（畫質有開陰影貼圖時）。null 表示室內，維持原本未經色調映射的畫面。 */
   outdoor: { exposure: number; environmentIntensity: number } | null
 }
 
@@ -17,8 +18,8 @@ export const OUTDOOR_ENV: Environment = {
   background: SKY_COLOR,
   fog: { near: 30, far: 125 },
   hemi: { sky: '#dfe6f2', ground: '#7a6a4c', intensity: 0.45 },
-  // 清晨低角度的暖色主光，從殿前右側斜照；天空的太陽也在這個方向
-  sun: { color: '#ffd2a0', intensity: 3.4, position: [16, 7, 12] },
+  // 清晨低角度的暖色主光，從殿前右側斜照；天空的太陽與烘焙的影子也在這個方向
+  sun: { color: '#ffd2a0', intensity: 3.4, position: [...OUTDOOR_SUN_POSITION] },
   outdoor: { exposure: 0.6, environmentIntensity: 0.4 },
 }
 
@@ -104,11 +105,12 @@ export class SceneRenderer {
     this.sun = new THREE.DirectionalLight()
     this.scene.add(this.hemi, this.sun, this.sun.target)
 
-    // 即時陰影：正交範圍涵蓋整個庭院（含圍牆）。
-    this.renderer.shadowMap.enabled = true
+    // 即時陰影：靜態物件的影子已烘焙（courtyardBake.ts），陰影貼圖只剩角色投影（以及烘焙貼圖未套上前的靜態物件）。
+    // 標準畫質（shadowMapSize 0）完全不建陰影貼圖，角色只有腳下的假影子。正交範圍涵蓋整個庭院（含圍牆）。
+    this.renderer.shadowMap.enabled = preset.shadowMapSize > 0
     this.renderer.shadowMap.type = THREE.PCFShadowMap
     const shadow = this.sun.shadow
-    shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize)
+    if (preset.shadowMapSize > 0) shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize)
     Object.assign(shadow.camera, { left: -32, right: 32, top: 32, bottom: -32, near: 1, far: 160 })
     shadow.bias = -0.0004
     shadow.normalBias = 0.04
@@ -150,7 +152,7 @@ export class SceneRenderer {
     this.scene.environmentIntensity = env.outdoor?.environmentIntensity ?? 1
     this.renderer.toneMapping = env.outdoor ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping
     this.renderer.toneMappingExposure = env.outdoor?.exposure ?? 1
-    this.sun.castShadow = env.outdoor !== null
+    this.sun.castShadow = env.outdoor !== null && this.renderer.shadowMap.enabled
     this.renderer.setClearColor(env.background)
     this.scene.background = new THREE.Color(env.background)
     this.scene.fog = env.fog ? new THREE.Fog(env.background, env.fog.near, env.fog.far) : null

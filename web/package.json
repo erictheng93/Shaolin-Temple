@@ -14,6 +14,7 @@
     "test": "vitest run",
     "mock": "node scripts/mock-server.mjs",
     "build:textures": "node scripts/build-textures.mjs",
+    "bake:lightmaps": "node scripts/bake-lightmaps.mjs",
     "build:avatar": "node scripts/build-avatar.mjs public/models/monk.glb 1 && node scripts/build-avatar.mjs public/models/monk-lod.glb 0"
   },
   "dependencies": {
