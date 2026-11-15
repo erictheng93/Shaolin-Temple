@@ -1,10 +1,11 @@
 /**
- * 音訊管理：環境音樂（循環音檔）與短音效分開、獨立音量、淡入淡出、背景暫停。
+ * 音訊管理：環境音（風聲、鳥鳴、遠處鐘聲與頌缽）與短音效分開、獨立音量、淡入淡出、背景暫停。
  *
- * 耗電原則：手機上不即時合成長時間的音樂。
- * - 佛樂與風聲是預先產生的循環 MP3（tools/ambient/），以 HTMLMediaElement 串流播放，由 VITE_AMBIENT_URL 指向 R2。
+ * 聲音留白大於填滿，沒有背景音樂。
+ * - 風聲：一段幾秒的循環雜訊 AudioBuffer，經 lowpass，增益與截止頻率由兩個極慢的 LFO 起伏成陣風。
  * - 鐘、木魚、頌缽、鳥叫是一次性合成的短 AudioBuffer，只在觸發時播放。
- * - 靜音或總音量為 0 時暫停整個 AudioContext；環境音量為 0 時停止音樂檔與鳥叫；切到背景時同樣暫停。
+ * - 遠處鐘聲：隨機間隔響一聲低音量、壓暗高頻的鐘，純本機，不經網路也不連動庭院鐘亭。
+ * - 靜音或總音量為 0 時暫停整個 AudioContext；環境音量為 0 時停止風聲、鳥叫與遠處鐘聲；切到背景時同樣暫停。
  *   暫停後音訊執行緒不再運算，才真正省電。
  * - AudioContext 只能在使用者操作後建立／恢復，因此 unlock() 必須在點擊事件中呼叫。
  */
@@ -12,6 +13,24 @@
 type SynthName = 'bell' | 'wood' | 'bowl'
 
 const MAX_VOICES = 12
+
+/** 風聲循環雜訊長度與首尾交叉淡化長度（秒）。 */
+const WIND_LOOP_SECONDS = 6
+const WIND_FADE_SECONDS = 1
+/** 風聲：基礎增益與陣風起伏幅度（增益 0.02–0.08）、截止頻率中心與幅度（Hz）、兩個 LFO 的頻率（Hz，週期約 9 秒與 14 秒）。 */
+const WIND_GAIN = 0.05
+const WIND_GAIN_DEPTH = 0.03
+const WIND_CUTOFF_HZ = 450
+const WIND_CUTOFF_DEPTH = 200
+const WIND_GAIN_LFO_HZ = 0.11
+const WIND_CUTOFF_LFO_HZ = 0.07
+
+/** 遠鐘間隔（毫秒）、音量、lowpass 截止頻率（Hz）與播放速率（<1 更低沉、餘韻更長）。 */
+export const FAR_BELL_MIN_MS = 90_000
+export const FAR_BELL_MAX_MS = 210_000
+const FAR_BELL_GAIN = 0.1
+const FAR_BELL_CUTOFF_HZ = 500
+const FAR_BELL_RATE = 0.85
 
 export interface Volumes {
   master: number
@@ -98,10 +117,43 @@ export function synthesizeBirdCall(ctx: BaseAudioContext, random: () => number =
 
 const BIRD_VARIANTS = 5
 
+/** 下一聲遠鐘的等待時間（毫秒）；random 可注入。 */
+export function nextFarBellDelayMs(random: () => number = Math.random): number {
+  return FAR_BELL_MIN_MS + random() * (FAR_BELL_MAX_MS - FAR_BELL_MIN_MS)
+}
+
+/** 合成可無縫循環的風聲雜訊：單極點 lowpass 白噪音，尾段以等功率交叉淡化疊回開頭。 */
+export function synthesizeWindNoise(ctx: BaseAudioContext, random: () => number = Math.random): AudioBuffer {
+  const sr = ctx.sampleRate
+  const len = Math.floor(sr * WIND_LOOP_SECONDS)
+  const fade = Math.floor(sr * WIND_FADE_SECONDS)
+  const raw = new Float32Array(len + fade)
+  let y = 0
+  for (let i = 0; i < raw.length; i++) {
+    y += 0.05 * (random() * 2 - 1 - y)
+    raw[i] = y
+  }
+  const buffer = ctx.createBuffer(1, len, sr)
+  const data = buffer.getChannelData(0)
+  let peak = 0
+  for (let i = 0; i < len; i++) {
+    let v = raw[i]!
+    if (i < fade) {
+      const w = (i / fade) * (Math.PI / 2)
+      v = v * Math.sin(w) + raw[len + i]! * Math.cos(w)
+    }
+    data[i] = v
+    peak = Math.max(peak, Math.abs(v))
+  }
+  const norm = peak > 0 ? 0.8 / peak : 1
+  for (let i = 0; i < len; i++) data[i]! *= norm
+  return buffer
+}
+
 /**
  * 依音量與前景狀態決定音訊該運作到什麼程度（純函式，方便測試）。
  * - audible=false：整個 AudioContext 暫停。
- * - musicOn=false：音樂檔、鳥叫與遠處頌缽停止。
+ * - musicOn=false：風聲、鳥叫、遠處頌缽與遠鐘停止。
  */
 export function runState(v: Volumes, hidden: boolean, ambientStarted: boolean): { audible: boolean; musicOn: boolean } {
   const audible = !hidden && !v.muted && v.master > 0
@@ -119,8 +171,9 @@ export class AudioManager {
   private birdBuffers: AudioBuffer[] = []
   private birdTimer: ReturnType<typeof setTimeout> | null = null
   private bowlTimer: ReturnType<typeof setTimeout> | null = null
-  private media: HTMLAudioElement | null = null
-  private mediaNode: MediaElementAudioSourceNode | null = null
+  private farBellTimer: ReturnType<typeof setTimeout> | null = null
+  private windBuffer: AudioBuffer | null = null
+  private wind: { sources: AudioScheduledSourceNode[]; nodes: AudioNode[] } | null = null
   private ambientStarted = false
   private volumes: Volumes = { master: 0.8, music: 0.6, sfx: 0.8, muted: false }
   private hidden = false
@@ -128,8 +181,6 @@ export class AudioManager {
   private stateToken = 0
   /** 室內：鳥叫變小、像是從殿外傳來。 */
   private indoor = false
-  /** 環境音樂檔載入失敗時呼叫（例如網址錯誤或 R2 未開 CORS）。 */
-  onAmbientError: ((url: string) => void) | null = null
 
   get unlocked(): boolean {
     return this.ctx !== null
@@ -161,6 +212,7 @@ export class AudioManager {
       this.master.connect(ctx.destination)
       for (const n of ['bell', 'wood', 'bowl'] as const) this.buffers.set(n, synthesize(ctx, n))
       this.birdBuffers = Array.from({ length: BIRD_VARIANTS }, () => synthesizeBirdCall(ctx))
+      this.windBuffer = synthesizeWindNoise(ctx)
       for (const [name, url] of this.pendingUrls) void this.loadSfx(name, url)
       this.pendingUrls.clear()
     }
@@ -210,48 +262,18 @@ export class AudioManager {
     src.start()
   }
 
-  /**
-   * 開始環境音。url 為循環音樂檔（佛樂＋風聲）；未提供時只有鳥叫與遠處頌缽。
-   * 音樂檔與頁面不同來源時，R2 須回應 CORS 標頭，否則 Web Audio 會輸出靜音。
-   */
-  startAmbient(url?: string): void {
-    const ctx = this.ctx
-    if (!ctx || !this.musicBus) return
+  /** 開始環境音：風聲、鳥鳴、遠處頌缽與遠鐘。 */
+  startAmbient(): void {
+    if (!this.ctx || !this.musicBus) return
     this.stopAmbient()
     this.ambientStarted = true
-    if (url) {
-      const media = new Audio()
-      media.crossOrigin = 'anonymous'
-      media.src = url
-      media.loop = true
-      media.preload = 'auto'
-      // 設了 crossOrigin，R2 未回 CORS 標頭時瀏覽器會拒絕載入並觸發 error，而不是靜音播放。
-      media.addEventListener(
-        'error',
-        () => {
-          console.warn('環境音樂載入失敗（檢查網址與 R2 CORS）：', url, media.error)
-          this.onAmbientError?.(url)
-        },
-        { once: true },
-      )
-      this.media = media
-      this.mediaNode = ctx.createMediaElementSource(media)
-      this.mediaNode.connect(this.musicBus)
-    }
     void this.applyRunState(1.5)
   }
 
   stopAmbient(): void {
     this.ambientStarted = false
     this.stopAmbientTimers()
-    if (this.media) {
-      this.media.pause()
-      this.media.removeAttribute('src')
-      this.media.load()
-      this.mediaNode?.disconnect()
-      this.media = null
-      this.mediaNode = null
-    }
+    this.stopWind()
   }
 
   setIndoor(indoor: boolean): void {
@@ -275,6 +297,7 @@ export class AudioManager {
     const ctx = this.ctx
     this.ctx = null
     this.buffers.clear()
+    this.windBuffer = null
     if (ctx) await ctx.close().catch(() => {})
   }
 
@@ -297,14 +320,15 @@ export class AudioManager {
     }
 
     if (musicOn) {
-      if (this.media?.paused) void this.media.play().catch(() => {})
+      this.startWind()
       if (!this.birdTimer) this.scheduleBirds()
       if (!this.bowlTimer) this.scheduleDistantBowl()
+      if (!this.farBellTimer) this.scheduleFarBell()
     } else {
       this.stopAmbientTimers()
-      // 等淡出結束再暫停音樂檔，避免突然中斷。
+      // 等淡出結束再停止風聲，避免突然中斷。
       setTimeout(() => {
-        if (token === this.stateToken) this.media?.pause()
+        if (token === this.stateToken) this.stopWind()
       }, fadeSeconds * 1000)
     }
 
@@ -317,7 +341,83 @@ export class AudioManager {
   private stopAmbientTimers(): void {
     if (this.birdTimer) clearTimeout(this.birdTimer)
     if (this.bowlTimer) clearTimeout(this.bowlTimer)
-    this.birdTimer = this.bowlTimer = null
+    if (this.farBellTimer) clearTimeout(this.farBellTimer)
+    this.birdTimer = this.bowlTimer = this.farBellTimer = null
+  }
+
+  /** 風聲：循環雜訊 → lowpass → 增益 → 環境音軌；兩個極慢的 LFO 調變增益與截止頻率。 */
+  private startWind(): void {
+    const ctx = this.ctx
+    if (!ctx || !this.musicBus || !this.windBuffer || this.wind) return
+    const src = ctx.createBufferSource()
+    src.buffer = this.windBuffer
+    src.loop = true
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.frequency.value = WIND_CUTOFF_HZ
+    filter.Q.value = 0.7
+    const gain = ctx.createGain()
+    gain.gain.value = WIND_GAIN
+    const modulate = (param: AudioParam, hz: number, depth: number): [AudioScheduledSourceNode, AudioNode[]] => {
+      const lfo = ctx.createOscillator()
+      lfo.frequency.value = hz
+      const amount = ctx.createGain()
+      amount.gain.value = depth
+      lfo.connect(amount).connect(param)
+      return [lfo, [lfo, amount]]
+    }
+    const [gainLfo, gainNodes] = modulate(gain.gain, WIND_GAIN_LFO_HZ, WIND_GAIN_DEPTH)
+    const [cutLfo, cutNodes] = modulate(filter.frequency, WIND_CUTOFF_LFO_HZ, WIND_CUTOFF_DEPTH)
+    src.connect(filter).connect(gain).connect(this.musicBus)
+    src.start(0, Math.random() * this.windBuffer.duration)
+    gainLfo.start()
+    cutLfo.start()
+    this.wind = { sources: [src, gainLfo, cutLfo], nodes: [src, filter, gain, ...gainNodes, ...cutNodes] }
+  }
+
+  private stopWind(): void {
+    const wind = this.wind
+    if (!wind) return
+    this.wind = null
+    for (const s of wind.sources) {
+      try {
+        s.stop()
+      } catch {
+        // AudioContext 已關閉時忽略。
+      }
+    }
+    for (const n of wind.nodes) n.disconnect()
+  }
+
+  /** 每隔 90–210 秒一聲遠處鐘聲。AudioContext 暫停時計時器已被清除，恢復後重新排程，不累積。 */
+  private scheduleFarBell(): void {
+    this.farBellTimer = setTimeout(() => {
+      this.playFarBell()
+      this.scheduleFarBell()
+    }, nextFarBellDelayMs())
+  }
+
+  /** 沿用寺鐘音色，放慢速率、壓暗高頻、音量低，走環境音軌。只在本機播放。 */
+  private playFarBell(): void {
+    const ctx = this.ctx
+    const buffer = this.buffers.get('bell')
+    if (!ctx || !buffer || !this.musicBus || ctx.state !== 'running' || this.voices >= MAX_VOICES) return
+    if (this.volumes.music <= 0) return
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    src.playbackRate.value = FAR_BELL_RATE
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.frequency.value = FAR_BELL_CUTOFF_HZ
+    const gain = ctx.createGain()
+    gain.gain.value = FAR_BELL_GAIN
+    src.connect(filter).connect(gain).connect(this.musicBus)
+    this.voices++
+    src.onended = () => {
+      this.voices--
+      for (const n of [src, filter, gain]) n.disconnect()
+    }
+    src.start()
   }
 
   /** 每隔數秒隨機一聲鳥叫，偶爾有另一隻鳥回應。 */

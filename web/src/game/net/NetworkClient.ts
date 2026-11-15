@@ -10,6 +10,12 @@ import {
   type ServerMessage,
 } from './protocol'
 
+/** 伺服器因過載（1013）或違規（1008）關閉連線後，下一次重連至少等待的毫秒數。 */
+export const PENALTY_RECONNECT_MS = 5000
+const PENALTY_CLOSE_CODES = [1013, 1008]
+/** 位置座標與面向的上行精度（0.01）。 */
+const round2 = (v: number): number => Math.round(v * 100) / 100
+
 export type ConnectionStatus = 'offline' | 'connecting' | 'online' | 'reconnecting' | 'closed'
 
 interface NetworkEvents extends Record<string, unknown> {
@@ -50,6 +56,10 @@ export class NetworkClient {
   private reqCounter = 0
   private resumeToken: string | undefined
   private background = false
+  /** 收到 unsupported_version：版本不符，重連也不會成功，不再重連。 */
+  private versionRejected = false
+  /** 最後一次排入佇列的位置，進入背景時據此判斷要不要補送 stop。 */
+  private lastPos: { x: number; z: number; heading: number; moving: boolean } | null = null
   private disposed = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private flushTimer: ReturnType<typeof setInterval> | null = null
@@ -81,7 +91,7 @@ export class NetworkClient {
   }
 
   connect(): void {
-    if (!this.opts.url || this.disposed || this.ws) return
+    if (!this.opts.url || this.disposed || this.versionRejected || this.ws) return
     this.setStatus(this.attempt === 0 ? 'connecting' : 'reconnecting')
     let ws: WebSocket
     try {
@@ -92,7 +102,6 @@ export class NetworkClient {
     }
     this.ws = ws
     ws.onopen = () => {
-      this.attempt = 0
       this.sendNow({ t: 'hello', v: PROTOCOL_VERSION, name: this.opts.name, resumeToken: this.resumeToken })
       // 重送尚未確認的操作；伺服器以 reqId 去重。
       for (const p of this.pending.values()) this.sendNow(p.msg)
@@ -100,7 +109,7 @@ export class NetworkClient {
       this.startTimers()
     }
     ws.onmessage = (ev) => this.onMessage(ev.data)
-    ws.onclose = () => this.onSocketClosed()
+    ws.onclose = (ev) => this.onSocketClosed(ev.code)
     // onerror 之後一定會有 onclose，統一在 onclose 處理。
     ws.onerror = () => {}
   }
@@ -108,7 +117,9 @@ export class NetworkClient {
   /** 位置更新（可取代）。只放進佇列，由定時器以 sendHz 送出。 */
   sendPosition(x: number, z: number, heading: number, moving: boolean): void {
     if (!this.enabled || this.background) return
-    this.queue.push({ t: moving ? 'move' : 'stop', x, z, heading, seq: ++this.seq })
+    this.lastPos = { x: round2(x), z: round2(z), heading: round2(heading), moving }
+    const p = this.lastPos
+    this.queue.push({ t: moving ? 'move' : 'stop', x: p.x, z: p.z, heading: p.heading, seq: ++this.seq })
   }
 
   /**
@@ -143,8 +154,14 @@ export class NetworkClient {
   setBackground(background: boolean): void {
     this.background = background
     if (background) {
+      // 背景分頁不再送位置；若最後狀態是移動中，先補一則 stop，否則其他人會看到角色一直走。
+      const last = this.lastPos
+      if (this.enabled && last?.moving) {
+        this.sendNow({ t: 'stop', x: last.x, z: last.z, heading: last.heading, seq: ++this.seq })
+        last.moving = false
+      }
       this.queue.clear()
-    } else if (this.enabled && !this.ws && !this.disposed) {
+    } else if (this.enabled && !this.ws && !this.disposed && !this.versionRejected) {
       // 回前景時若已斷線，不等退避計時直接重連。
       this.clearReconnectTimer()
       this.connect()
@@ -171,7 +188,7 @@ export class NetworkClient {
   }
 
   private onBrowserOnline = (): void => {
-    if (this.enabled && !this.ws && !this.disposed) {
+    if (this.enabled && !this.ws && !this.disposed && !this.versionRejected) {
       this.clearReconnectTimer()
       this.connect()
     }
@@ -182,6 +199,8 @@ export class NetworkClient {
     if (!msg) return
     switch (msg.t) {
       case 'welcome':
+        this.attempt = 0 // 收到 welcome 才算連線成功；只 onopen 就被踢的情況仍要持續退避。
+        this.lastPos = null
         this.resumeToken = msg.resumeToken
         // 伺服器快照是權威狀態：斷線期間累積的位置與場景訊息已過時。
         this.queue.clear()
@@ -195,6 +214,9 @@ export class NetworkClient {
         }
         break
       }
+      case 'error':
+        if (msg.code === 'unsupported_version') this.versionRejected = true
+        break
       case 'pong':
         this.events.emit('rtt', Math.max(0, performance.now() - msg.ts))
         break
@@ -202,16 +224,20 @@ export class NetworkClient {
     this.events.emit('message', msg)
   }
 
-  private onSocketClosed(): void {
+  private onSocketClosed(code: number): void {
     this.ws = null
     this.stopTimers()
     if (this.disposed) return
-    this.scheduleReconnect()
+    if (this.versionRejected) {
+      this.setStatus('closed')
+      return
+    }
+    this.scheduleReconnect(PENALTY_CLOSE_CODES.includes(code) ? PENALTY_RECONNECT_MS : 0)
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(minDelayMs = 0): void {
     this.setStatus('reconnecting')
-    const delay = backoffDelay(this.attempt++)
+    const delay = Math.max(minDelayMs, backoffDelay(this.attempt++))
     this.clearReconnectTimer()
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null

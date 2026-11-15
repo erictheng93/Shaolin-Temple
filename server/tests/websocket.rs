@@ -162,7 +162,15 @@ async fn exact_byte_limit_and_invalid_schema_do_not_break_session() {
 
 #[tokio::test]
 async fn fifty_one_players_split_and_leave_is_room_local() {
-    let server = server().await;
+    // T6 之後 leave 要等斷線保留期結束才廣播；這裡縮短保留期以免測試等 30 秒。
+    let server = server_with(temple_server::ServerOptions {
+        room: temple_server::room::RoomConfig {
+            resume_grace: Duration::from_millis(300),
+            ..temple_server::room::RoomConfig::new(50)
+        },
+        ..temple_server::ServerOptions::new(vec!["http://localhost:5173".into()])
+    })
+    .await;
     let mut clients = Vec::new();
     let mut ids = std::collections::HashSet::new();
     let mut room_a = String::new();
@@ -289,9 +297,8 @@ async fn over_limit_strings_count_as_invalid() {
 #[tokio::test]
 async fn idle_timeout_closes_silent_connection_but_not_active_one() {
     let server = server_with(temple_server::ServerOptions {
-        allowed_origins: vec!["http://localhost:5173".into()],
-        room_capacity: 50,
         idle_timeout: Duration::from_millis(400),
+        ..temple_server::ServerOptions::new(vec!["http://localhost:5173".into()])
     })
     .await;
     let mut active = connect(&server).await;
@@ -323,12 +330,7 @@ async fn idle_timeout_closes_silent_connection_but_not_active_one() {
 #[tokio::test]
 async fn trailing_slash_origin_setting_still_accepts_browser_origin() {
     let origin = temple_server::config::normalize_origin("http://localhost:5173/").unwrap();
-    let server = server_with(temple_server::ServerOptions {
-        allowed_origins: vec![origin],
-        room_capacity: 50,
-        idle_timeout: temple_server::DEFAULT_IDLE_TIMEOUT,
-    })
-    .await;
+    let server = server_with(temple_server::ServerOptions::new(vec![origin])).await;
     let mut ws = connect(&server).await; // 瀏覽器送的是沒有結尾斜線的 Origin
     text(&mut ws, HELLO).await;
 }

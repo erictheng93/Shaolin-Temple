@@ -1,0 +1,51 @@
+//! 負載工具的 smoke 測試：對本機伺服器跑幾秒，確認工具能連線、送出與統計，且伺服器沒有關閉任何連線。
+
+use temple_server::{ServerOptions, app_with_options};
+
+#[tokio::test]
+async fn loadtest_smoke_against_local_server() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let options = ServerOptions::new(vec!["http://localhost:5173".into()]);
+        axum::serve(listener, app_with_options(options))
+            .await
+            .unwrap();
+    });
+    let url = format!("ws://{addr}/ws");
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_loadtest"))
+            .args([
+                "--url",
+                &url,
+                "--connections",
+                "6",
+                "--moving-ratio",
+                "0.5",
+                "--seconds",
+                "3",
+                "--ramp-ms",
+                "5",
+                "--settle-ms",
+                "300",
+            ])
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    task.abort();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let last = stdout.lines().last().unwrap();
+    let result: serde_json::Value = serde_json::from_str(last).unwrap();
+    assert_eq!(result["connected"], 6);
+    assert_eq!(result["moving_players"], 3);
+    assert_eq!(result["connect_failed"], 0);
+    assert_eq!(result["closed_by_server"], 0);
+    assert!(result["recv_bytes_per_conn_s"].as_f64().unwrap() > 100.0);
+    assert!(result["sent_bytes_per_conn_s"].as_f64().unwrap() > 50.0);
+    assert!(result["moves_interval_ms"]["samples"].as_u64().unwrap() > 20);
+    let p50 = result["moves_interval_ms"]["p50"].as_f64().unwrap();
+    assert!((50.0..200.0).contains(&p50), "p50 = {p50}");
+}

@@ -36,7 +36,6 @@ onMounted(() => {
       canvas: canvas.value,
       settings: { ...settings },
       wsUrl: import.meta.env.VITE_WS_URL || undefined,
-      ambientUrl: import.meta.env.VITE_AMBIENT_URL || undefined,
       onUi: (s) => (ui.value = s),
       onToast: toast,
     })

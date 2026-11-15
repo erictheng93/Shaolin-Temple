@@ -2,11 +2,18 @@
  * 前端與 Rust 伺服器之間的訊息格式草案（協定版本 1）。
  *
  * 目前使用 JSON 以便除錯；編碼集中在 encode()/decode()，之後改二進位只需替換這兩個函式。
- * 後端尚未實作，欄位以伺服器定案為準。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v1.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」。
  *
  * 語意分類：
  * - 可取代：move/stop。尚未送出的舊位置可被新位置覆蓋。
  * - 需確認：action。帶 reqId，伺服器以 reqId 去重並回 ack，重試不會重複執行。
+ *
+ * 位置廣播：
+ * - 玩家加入房間時伺服器指派房內短編號 n（0～65535，離開後回收）；moves／sync 以 n 取代字串 id。
+ *   客戶端以 welcome／join 建立 n → 玩家對照，leave 時移除，對照不到的 n 直接忽略。
+ * - moves 是增量（只含有變動的玩家）；sync 是整批校正（收件人所在場景的所有其他玩家），客戶端直接套用、不插值。
+ * - moves／sync／action 只送給同場景玩家；zone／join／leave 送給同房所有人。
+ * - 上行 move／stop 的座標與 heading 四捨五入到 0.01。
  */
 
 export const PROTOCOL_VERSION = 1
@@ -20,6 +27,8 @@ export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32
 
 export interface PlayerSnapshot {
   id: string
+  /** 房內短編號（0～65535），moves／sync 以此指稱玩家。 */
+  n: number
   name: string
   x: number
   z: number
@@ -31,8 +40,8 @@ export interface PlayerSnapshot {
   zone?: string
 }
 
-/** 批次位置的單筆：[id, x, z, heading, moving]，moving 為 0 或 1。座標建議四捨五入到 0.01 公尺。 */
-export type MoveTuple = [id: string, x: number, z: number, heading: number, moving: 0 | 1]
+/** 批次位置的單筆：[n, x, z, heading, moving]，n 為房內短編號，moving 為 0 或 1。座標四捨五入到 0.01 公尺。 */
+export type MoveTuple = [n: number, x: number, z: number, heading: number, moving: 0 | 1]
 
 /** 單則 moves 最多筆數；超過時伺服器應拆成多則。 */
 export const MAX_MOVES_PER_MESSAGE = 200
@@ -58,8 +67,11 @@ export type ServerMessage =
   | { t: 'join'; player: PlayerSnapshot }
   | { t: 'leave'; id: string }
   | { t: 'move'; id: string; x: number; z: number; heading: number; moving: boolean }
-  /** 批次位置：伺服器每個 tick 一則，只含有變動的玩家。元素為 [id, x, z, heading, moving(0|1)]。 */
+  /** 批次位置：伺服器每個 tick 一則，只含有變動的玩家。元素為 [n, x, z, heading, moving(0|1)]。 */
   | { t: 'moves'; m: MoveTuple[] }
+  /** 整批位置校正（切換場景後、moves 被丟棄後）：直接套用位置、面向與移動狀態，不插值。 */
+  /** 整批校正：直接套用不插值。若含收件人自己的短編號，代表伺服器拒絕了他送出的位置，須回到這個位置。 */
+  | { t: 'sync'; m: MoveTuple[] }
   | { t: 'action'; playerId: string; id: string; startedAt: number; data?: Record<string, unknown> }
   | { t: 'ack'; reqId: string; ok: boolean; reason?: string }
   /** 某玩家切換場景。 */
@@ -76,9 +88,11 @@ const isObj = (v: unknown): v is Record<string, unknown> =>
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.length <= 256
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
+const isShortId = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 65535
+
 function isPlayer(v: unknown): v is PlayerSnapshot {
   if (!isObj(v)) return false
-  if (!isStr(v.id) || !isStr(v.name) || !isNum(v.x) || !isNum(v.z) || !isNum(v.heading)) return false
+  if (!isStr(v.id) || !isShortId(v.n) || !isStr(v.name) || !isNum(v.x) || !isNum(v.z) || !isNum(v.heading)) return false
   if (v.zone !== undefined && !isStr(v.zone)) return false
   if (v.action === undefined) return true
   return isObj(v.action) && isStr(v.action.id) && isNum(v.action.startedAt)
@@ -88,7 +102,7 @@ function isMoveTuple(v: unknown): v is MoveTuple {
   return (
     Array.isArray(v) &&
     v.length === 5 &&
-    isStr(v[0]) &&
+    isShortId(v[0]) &&
     isNum(v[1]) &&
     isNum(v[2]) &&
     isNum(v[3]) &&
@@ -127,6 +141,10 @@ export function decode(raw: unknown): ServerMessage | null {
         ? (m as ServerMessage)
         : null
     case 'moves':
+      return Array.isArray(m.m) && m.m.length <= MAX_MOVES_PER_MESSAGE && m.m.every(isMoveTuple)
+        ? (m as ServerMessage)
+        : null
+    case 'sync':
       return Array.isArray(m.m) && m.m.length <= MAX_MOVES_PER_MESSAGE && m.m.every(isMoveTuple)
         ? (m as ServerMessage)
         : null

@@ -17,7 +17,6 @@
     "allowImportingTsExtensions": true
   },
   "include": [
-    "vite.config.ts",
-    "tools/**/*.ts"
+    "vite.config.ts"
   ]
 }

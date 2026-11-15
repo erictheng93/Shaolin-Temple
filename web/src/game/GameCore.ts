@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
+import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
 import { QUALITY_PRESETS, resolveQuality, type QualityLevel, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
@@ -34,6 +35,8 @@ export interface UiState {
   room: string | null
   online: number
   quality: QualityLevel
+  /** 動態畫質目前的等級（0 為完整）與最大等級。 */
+  adaptive: { level: number; max: number }
   contextLost: boolean
   /** 場景切換中（畫面淡出黑幕）。 */
   fading: boolean
@@ -47,7 +50,6 @@ export interface GameCoreOptions {
   canvas: HTMLCanvasElement
   settings: Settings
   wsUrl?: string
-  ambientUrl?: string
   onUi(state: UiState): void
   onToast(message: string): void
 }
@@ -55,6 +57,10 @@ export interface GameCoreOptions {
 const MOVE_SPEED = 3.2
 const SFX_HEARING_RANGE = 28
 const UI_PUSH_MS = 250
+/** 平常就省電：這麼久沒有操作也沒有移動，就把幀率上限降到 IDLE_FPS；一有操作立即恢復。 */
+const IDLE_AFTER_MS = 15_000
+/** 20 FPS 對緩慢的環境動畫（落葉、樹冠、香煙）仍然順，繪製量是 60 FPS 的三分之一。 */
+const IDLE_FPS = 20
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
 const FADE_MS = 400
 const FADE_HOLD_MS = 150
@@ -94,10 +100,11 @@ export class GameCore {
   private settings: Settings
   private quality: QualityLevel
   private raf = 0
-  private idleTimer: ReturnType<typeof setTimeout> | null = null
   private lastTime = 0
   private lastRender = 0
   private startTime = performance.now()
+  private adaptive = new AdaptiveQuality()
+  private lastInputAt = performance.now()
   private dirty = true
   private snapCamera = true
   private paused = false
@@ -107,6 +114,8 @@ export class GameCore {
 
   private room: string | null = null
   private selfId: string | null = null
+  /** 自己的房內短編號；sync 中出現它代表伺服器校正了自己的位置。 */
+  private selfN = -1
   private serverOffset = 0
   private rtt: number | null = null
   private stats = new Map<string, { label: string; value: string | number }>()
@@ -137,7 +146,7 @@ export class GameCore {
     })
     this.renderer.onResize = () => this.wake()
 
-    this.temple = buildTempleScene(this.tracker)
+    this.temple = buildTempleScene(this.renderer.renderer, this.tracker, preset, () => this.wake())
     this.renderer.scene.add(this.temple.root)
 
     const markerGeo = this.tracker.track(new THREE.RingGeometry(0.28, 0.4, 24))
@@ -163,6 +172,7 @@ export class GameCore {
         this.wake()
       },
       onActivity: () => {
+        this.lastInputAt = performance.now()
         // 使用者有操作時順便嘗試恢復被系統中斷的音訊（iOS）。
         if (this.audio.audible && !this.audio.running && !this.paused) void this.audio.resume()
         this.wake()
@@ -175,7 +185,6 @@ export class GameCore {
     this.net.events.on('rtt', (ms) => (this.rtt = ms))
 
     this.audio.setVolumes(this.volumes())
-    this.audio.onAmbientError = () => this.opts.onToast('背景音樂無法載入，目前只有環境音效')
     this.installGameplay()
     this.actions.subscribe(() => this.pushUi(true))
 
@@ -187,7 +196,7 @@ export class GameCore {
   async enter(playerName: string): Promise<void> {
     this.net.setName(playerName)
     await this.audio.unlock()
-    this.audio.startAmbient(this.opts.ambientUrl)
+    this.audio.startAmbient()
     this.net.connect()
     this.snapCamera = true
     this.wake()
@@ -262,22 +271,16 @@ export class GameCore {
 
   // ---------- 渲染迴圈 ----------
 
-  /** 喚醒渲染迴圈；畫面靜止時迴圈會自行停止以節省電力。 */
+  /** 喚醒渲染迴圈並要求立即重繪（迴圈在背景分頁或 context 遺失時停止）。 */
   private wake = (): void => {
     this.dirty = true
     if (this.paused || this.contextLost || this.disposed) return
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer)
-      this.idleTimer = null
-    }
     if (!this.raf) this.raf = requestAnimationFrame(this.frame)
   }
 
   private stopLoop(): void {
     if (this.raf) cancelAnimationFrame(this.raf)
-    if (this.idleTimer) clearTimeout(this.idleTimer)
     this.raf = 0
-    this.idleTimer = null
   }
 
   private frame = (time: number): void => {
@@ -286,7 +289,8 @@ export class GameCore {
     const preset = QUALITY_PRESETS[this.quality]
 
     // 依目標幀率略過多餘的 rAF（高更新率螢幕上限制在 30/60 FPS）。
-    const minInterval = 1000 / preset.activeFps - 1
+    const fps = time - this.lastInputAt > IDLE_AFTER_MS ? Math.min(IDLE_FPS, preset.activeFps) : preset.activeFps
+    const minInterval = 1000 / fps - 1
     if (!this.dirty && time - this.lastRender < minInterval) {
       this.raf = requestAnimationFrame(this.frame)
       return
@@ -297,24 +301,21 @@ export class GameCore {
     const t = (time - this.startTime) / 1000
     const cpuStart = performance.now()
 
-    const active = this.update(time, dt, t)
+    this.update(time, dt, t)
     this.renderer.render()
+    // 依實際幀間隔動態調整：變慢時降低解析度、縮小完整模型與投影的範圍，順暢一段時間後再升回。
+    if (this.lastRender && this.adaptive.sample(time, time - this.lastRender, 1000 / fps)) {
+      const level = ADAPTIVE_LEVELS[this.adaptive.level]!
+      this.renderer.setResolutionScale(level.resolution)
+      this.players.nearRadius = level.nearRadius
+      this.pushUi(true)
+    }
     this.lastRender = time
     this.dirty = false
     this.countFrame(performance.now() - cpuStart, time)
 
-    if (active) {
-      this.raf = requestAnimationFrame(this.frame)
-    } else if (preset.idleFps > 0) {
-      // 靜止時以低幀率繪製環境動畫（燈火、香煙）。
-      this.idleTimer = setTimeout(() => {
-        this.idleTimer = null
-        this.raf = requestAnimationFrame(this.frame)
-      }, 1000 / preset.idleFps)
-    } else {
-      // 完全靜止：停止迴圈，等待輸入或網路事件喚醒。下一次喚醒的 dt 不應包含閒置時間。
-      this.lastTime = 0
-    }
+    // 場景有持續的環境動畫（落葉、樹影、香煙），前景時不降幀也不停止；背景分頁由 onVisibility 停止迴圈。
+    this.raf = requestAnimationFrame(this.frame)
   }
 
   private update(now: number, dt: number, t: number): boolean {
@@ -377,6 +378,7 @@ export class GameCore {
     }
 
     const sceneMotion = this.zone === 'courtyard' && this.temple.hasTransientMotion()
+    if (moving || wantsMove) this.lastInputAt = now
     return moving || wantsMove || playersActive || cameraMoving || markerActive || sceneMotion
   }
 
@@ -483,6 +485,16 @@ export class GameCore {
     this.pushUi(true)
   }
 
+  /** 伺服器拒絕了自己送出的位置（跳太遠或穿過障礙物）：回到伺服器上的位置，取消進行中的移動。 */
+  private correctLocal(x: number, z: number): void {
+    const pos = resolveCollisions(x, z, this.moveCfg)
+    Object.assign(this.players.local.mover, { ...pos, target: null })
+    this.path = []
+    this.marker.visible = false
+    this.snapCamera = true
+    this.wake()
+  }
+
   // ---------- 生命週期 ----------
 
   private onVisibility = (): void => {
@@ -513,7 +525,9 @@ export class GameCore {
         this.serverOffset = m.serverTime - performance.now()
         this.players.clearRemotes()
         for (const p of m.players) {
+          // 自己的位置平常由本機決定；短編號只對照遠端玩家，moves 中不會有自己，sync 中的自己是伺服器的校正。
           if (p.id === m.selfId) {
+            this.selfN = p.n
             // 伺服器記錄的場景與位置為準（斷線恢復時可能在殿內）。
             const zone: ZoneId = isZoneId(p.zone) ? p.zone : 'courtyard'
             this.applyZone(zone, { x: p.x, z: p.z, heading: p.heading })
@@ -538,24 +552,32 @@ export class GameCore {
         this.events.emit('playerLeft', { id: m.id })
         break
       case 'move':
-        if (m.id !== this.selfId) this.players.setRemoteTarget(m.id, m.x, m.z, m.heading, m.moving)
+        if (m.id !== this.selfId) this.players.setRemoteTarget(m.id, m.x, m.z, m.heading, m.moving, performance.now())
         break
-      case 'moves':
-        for (const [id, x, z, heading, moving] of m.m) {
-          if (id !== this.selfId) this.players.setRemoteTarget(id, x, z, heading, moving === 1)
+      case 'moves': {
+        const now = performance.now()
+        for (const [n, x, z, heading, moving] of m.m) this.players.setRemoteTargetByN(n, x, z, heading, moving === 1, now)
+        break
+      }
+      case 'sync': {
+        const now = performance.now()
+        for (const [n, x, z, heading, moving] of m.m) {
+          if (n === this.selfN) this.correctLocal(x, z)
+          else this.players.syncRemoteByN(n, x, z, heading, moving === 1, now)
         }
         break
+      }
       case 'action':
         this.onRemoteAction(m)
         break
       case 'zone':
-        if (m.id !== this.selfId) this.players.setRemoteZone(m.id, m.zone, m.x, m.z, m.heading)
+        if (m.id !== this.selfId) this.players.setRemoteZone(m.id, m.zone, m.x, m.z, m.heading, performance.now())
         break
       case 'pong':
         this.serverOffset = m.serverTime - performance.now()
         break
       case 'error':
-        this.opts.onToast(m.message)
+        this.opts.onToast(m.code === 'unsupported_version' ? '遊戲已更新，請重新整理頁面' : m.message)
         break
     }
     if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave') this.pushUi(true)
@@ -620,6 +642,7 @@ export class GameCore {
       room: this.room,
       online: this.net.enabled ? this.players.count : 1,
       quality: this.quality,
+      adaptive: { level: this.adaptive.level, max: ADAPTIVE_LEVELS.length - 1 },
       contextLost: this.contextLost,
       fading: this.fading,
       zone: this.zone,
@@ -646,7 +669,7 @@ export class GameCore {
   }
 
   private maxVisibleFor(q: QualityLevel): number {
-    return q === 'low' ? 30 : q === 'medium' ? 60 : 120
+    return q === 'medium' ? 60 : 120
   }
 }
 

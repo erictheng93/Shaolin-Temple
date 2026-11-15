@@ -1,5 +1,7 @@
-use crate::protocol::{
-    ClientMessage, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_name,
+use crate::{
+    metrics::Metrics,
+    protocol::{ClientMessage, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_name},
+    rate_limit::{RateLimiter, Verdict},
 };
 use axum::{
     extract::{
@@ -34,7 +36,7 @@ pub async fn upgrade(
         .read_buffer_size(4096)
         .write_buffer_size(0)
         .max_write_buffer_size(MAX_MESSAGE_BYTES * 2)
-        .on_upgrade(move |ws| session(ws, state.lobby, state.idle_timeout)))
+        .on_upgrade(move |ws| session(ws, state)))
 }
 async fn send(ws: &mut WebSocket, msg: Message) -> bool {
     matches!(
@@ -62,11 +64,16 @@ async fn close(ws: &mut WebSocket, code: u16, reason: &'static str) {
     })
     .await;
 }
-async fn json(ws: &mut WebSocket, msg: ServerMessage) -> bool {
-    match serde_json::to_string(&msg) {
-        Ok(raw) => send(ws, Message::Text(raw.into())).await,
-        Err(_) => false,
+async fn json(ws: &mut WebSocket, metrics: &Metrics, msg: ServerMessage) -> bool {
+    let Ok(raw) = serde_json::to_string(&msg) else {
+        return false;
+    };
+    let bytes = raw.len();
+    let sent = send(ws, Message::Text(raw.into())).await;
+    if sent {
+        metrics.message_out(&msg, bytes);
     }
+    sent
 }
 #[derive(Default)]
 struct InvalidMessages(VecDeque<Instant>);
@@ -83,25 +90,32 @@ impl InvalidMessages {
         self.0.len() > 20
     }
 }
-async fn session(mut ws: WebSocket, lobby: crate::room::Lobby, idle_timeout: Duration) {
+async fn session(mut ws: WebSocket, state: crate::AppState) {
+    let _open = state.metrics.connection_opened();
     let mut membership = None;
-    session_inner(&mut ws, &lobby, &mut membership, idle_timeout).await;
+    session_inner(&mut ws, &state, &mut membership).await;
     if let Some(member) = membership {
-        member.leave().await;
+        member.disconnect().await;
     }
 }
+/// 補送被丟棄的最新位置前等待的時間：位置額度每秒 15 則，約 67 ms 補回一則。
+const HELD_RETRY: Duration = Duration::from_millis(70);
 async fn session_inner(
     ws: &mut WebSocket,
-    lobby: &crate::room::Lobby,
+    state: &crate::AppState,
     membership: &mut Option<crate::room::Membership>,
-    idle_timeout: Duration,
 ) {
+    let idle_timeout = state.idle_timeout;
+    let mut limiter = RateLimiter::new(Instant::now(), state.rate_close_after);
     let deadline = Instant::now() + Duration::from_secs(5);
     // 握手後最後一次收到任何資料（含控制幀）的時間；超過 idle_timeout 沒有任何輸入即關閉，
     // 避免對方斷電／斷網而沒有關閉握手時，連線與房間名額永遠被佔用。
     let mut last_inbound = Instant::now();
     let mut name = None;
     let mut invalid = InvalidMessages::default();
+    // 被速率限制丟棄的最新一則位置：位置是可取代的，該丟的是舊的而不是最新的，
+    // 所以留著最後一則，等有額度時補送（否則卡頓後停下的玩家會一直停在舊位置）。
+    let mut held: Option<(Instant, f64, f64, f64, bool)> = None;
     loop {
         let received = if name.is_none() {
             match timeout_at(deadline, ws.recv()).await {
@@ -121,9 +135,20 @@ async fn session_inner(
                     close(ws, 1001, "idle timeout").await;
                     return;
                 }
+                _ = tokio::time::sleep_until(held.map_or(last_inbound, |h| h.0) + HELD_RETRY), if held.is_some() => {
+                    let now = Instant::now();
+                    if let Some((_, x, z, heading, moving)) = held.take() {
+                        if limiter.admit_held(now) {
+                            member.position(x, z, heading, moving, now);
+                        } else {
+                            held = Some((now, x, z, heading, moving));
+                        }
+                    }
+                    continue;
+                }
                 outbound = member.outbound.recv() => {
                     match outbound {
-                        Some(message) => { if !json(ws, message).await { return; } }
+                        Some(message) => { if !json(ws, &state.metrics, message).await { return; } }
                         None => { close(ws, 1013, "room disconnected").await; return; }
                     }
                     continue;
@@ -131,6 +156,9 @@ async fn session_inner(
             }
         };
         last_inbound = Instant::now();
+        if let Some(Ok(Message::Text(raw))) = &received {
+            state.metrics.message_in(raw.len());
+        }
         let raw = match received {
             Some(Ok(Message::Text(raw))) => raw,
             Some(Ok(Message::Binary(_))) => {
@@ -160,11 +188,14 @@ async fn session_inner(
             .filter(ClientMessage::within_limits);
         match parsed {
             Some(ClientMessage::Hello {
-                v, name: requested, ..
+                v,
+                name: requested,
+                resume_token,
             }) if name.is_none() => {
                 if v != PROTOCOL_VERSION {
                     json(
                         ws,
+                        &state.metrics,
                         ServerMessage::Error {
                             code: "unsupported_version".into(),
                             message: "Protocol version 1 required".into(),
@@ -175,7 +206,7 @@ async fn session_inner(
                     return;
                 }
                 let cleaned = clean_name(&requested);
-                *membership = lobby.join(cleaned.clone()).await;
+                *membership = state.lobby.join(cleaned.clone(), resume_token).await;
                 if membership.is_none() {
                     close(ws, 1013, "server busy").await;
                     return;
@@ -183,22 +214,65 @@ async fn session_inner(
                 name = Some(cleaned);
                 tracing::debug!("hello accepted");
             }
-            Some(ClientMessage::Ping { ts }) if name.is_some() => {
-                let server_time = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as f64;
-                if !json(ws, ServerMessage::Pong { ts, server_time }).await {
-                    return;
+            Some(message) if name.is_some() && !matches!(message, ClientMessage::Hello { .. }) => {
+                let now = Instant::now();
+                match limiter.admit(&message, now) {
+                    Verdict::Pass => {
+                        if matches!(
+                            message,
+                            ClientMessage::Move { .. } | ClientMessage::Stop { .. }
+                        ) {
+                            held = None;
+                        }
+                    }
+                    Verdict::Drop => {
+                        state.metrics.rate_limited();
+                        match message {
+                            ClientMessage::Move { x, z, heading, .. } => {
+                                held = Some((now, x, z, heading, true))
+                            }
+                            ClientMessage::Stop { x, z, heading, .. } => {
+                                held = Some((now, x, z, heading, false))
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    Verdict::Close => {
+                        tracing::info!(dropped = limiter.dropped, "rate limit exceeded");
+                        close(ws, 1008, "rate limit exceeded").await;
+                        return;
+                    }
                 }
-            }
-            Some(
-                ClientMessage::Move { .. }
-                | ClientMessage::Stop { .. }
-                | ClientMessage::Action { .. }
-                | ClientMessage::Zone { .. },
-            ) if name.is_some() => {
-                // T3 connects this validated protocol boundary to room commands.
+                let Some(member) = membership.as_ref() else {
+                    return;
+                };
+                match message {
+                    ClientMessage::Ping { ts } => {
+                        let server_time = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as f64;
+                        if !json(ws, &state.metrics, ServerMessage::Pong { ts, server_time }).await
+                        {
+                            return;
+                        }
+                    }
+                    ClientMessage::Move { x, z, heading, .. } => {
+                        member.position(x, z, heading, true, now)
+                    }
+                    ClientMessage::Stop { x, z, heading, .. } => {
+                        member.position(x, z, heading, false, now)
+                    }
+                    ClientMessage::Action {
+                        req_id, id, data, ..
+                    } => {
+                        let data_ok = data.is_none_or(|d| d.is_empty());
+                        member.action(req_id, id, data_ok).await
+                    }
+                    ClientMessage::Zone { zone, .. } => member.zone(zone).await,
+                    ClientMessage::Hello { .. } => {}
+                }
             }
             _ => {
                 if invalid.record(Instant::now()) {

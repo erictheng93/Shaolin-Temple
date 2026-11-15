@@ -1,5 +1,7 @@
 import * as THREE from 'three'
+import { Sky } from 'three/examples/jsm/objects/Sky.js'
 import type { QualityPreset } from '../core/settings'
+import { OUTDOOR_SUN_POSITION } from './courtyardBake'
 import { SKY_COLOR } from './TempleScene'
 
 /** 場景環境：背景、霧、半球光與主光。 */
@@ -8,13 +10,17 @@ export interface Environment {
   fog: { near: number; far: number } | null
   hemi: { sky: string; ground: string; intensity: number }
   sun: { color: string; intensity: number; position: [number, number, number] }
+  /** 戶外：程序化天空、天空環境光反射、色調映射與即時陰影（畫質有開陰影貼圖時）。null 表示室內，維持原本未經色調映射的畫面。 */
+  outdoor: { exposure: number; environmentIntensity: number } | null
 }
 
 export const OUTDOOR_ENV: Environment = {
   background: SKY_COLOR,
-  fog: { near: 28, far: 95 },
-  hemi: { sky: '#eef3f6', ground: '#6b6450', intensity: 2.2 },
-  sun: { color: '#fff0d4', intensity: 1.8, position: [12, 22, 10] },
+  fog: { near: 30, far: 125 },
+  hemi: { sky: '#dfe6f2', ground: '#7a6a4c', intensity: 0.45 },
+  // 清晨低角度的暖色主光，從殿前右側斜照；天空的太陽與烘焙的影子也在這個方向
+  sun: { color: '#ffd2a0', intensity: 3.4, position: [...OUTDOOR_SUN_POSITION] },
+  outdoor: { exposure: 0.6, environmentIntensity: 0.4 },
 }
 
 /** 殿內：暗而暖，主光從殿門方向斜照神龕，讓神像正面受光。 */
@@ -23,6 +29,7 @@ export const HALL_ENV: Environment = {
   fog: { near: 16, far: 38 },
   hemi: { sky: '#ffe2b8', ground: '#3a2418', intensity: 1.5 },
   sun: { color: '#ffd29a', intensity: 1.9, position: [1.5, 6, 9] },
+  outdoor: null,
 }
 
 export type CameraBounds = { minX: number; maxX: number; minZ: number; maxZ: number; maxY: number }
@@ -61,6 +68,7 @@ export class SceneRenderer {
   private preset: QualityPreset
   private resizeObserver: ResizeObserver
   private width = 1
+  private resolutionScale = 1
   private height = 1
 
   // 第三人稱鏡頭參數
@@ -76,6 +84,9 @@ export class SceneRenderer {
   private desired = new THREE.Vector3()
   private hemi: THREE.HemisphereLight
   private sun: THREE.DirectionalLight
+  private sky = new Sky()
+  private skyEnv: THREE.WebGLRenderTarget | null = null
+  private env: Environment = OUTDOOR_ENV
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -93,6 +104,25 @@ export class SceneRenderer {
     this.hemi = new THREE.HemisphereLight()
     this.sun = new THREE.DirectionalLight()
     this.scene.add(this.hemi, this.sun, this.sun.target)
+
+    // 即時陰影：靜態物件的影子已烘焙（courtyardBake.ts），陰影貼圖只剩角色投影（以及烘焙貼圖未套上前的靜態物件）。
+    // 標準畫質（shadowMapSize 0）完全不建陰影貼圖，角色只有腳下的假影子。正交範圍涵蓋整個庭院（含圍牆）。
+    this.renderer.shadowMap.enabled = preset.shadowMapSize > 0
+    this.renderer.shadowMap.type = THREE.PCFShadowMap
+    const shadow = this.sun.shadow
+    if (preset.shadowMapSize > 0) shadow.mapSize.set(preset.shadowMapSize, preset.shadowMapSize)
+    Object.assign(shadow.camera, { left: -32, right: 32, top: 32, bottom: -32, near: 1, far: 160 })
+    shadow.bias = -0.0004
+    shadow.normalBias = 0.04
+
+    // 程序化天空（大氣散射）：不需要 HDR 檔。z 由 shader 固定在遠平面，不受鏡頭 far 影響。
+    this.sky.scale.setScalar(10000)
+    Object.assign(this.sky.material.uniforms.turbidity!, { value: 5 })
+    Object.assign(this.sky.material.uniforms.rayleigh!, { value: 2.2 })
+    Object.assign(this.sky.material.uniforms.mieCoefficient!, { value: 0.006 })
+    Object.assign(this.sky.material.uniforms.mieDirectionalG!, { value: 0.82 })
+    this.sky.material.uniforms.sunPosition!.value.set(...OUTDOOR_ENV.sun.position).normalize()
+    this.scene.add(this.sky)
     this.setEnvironment(OUTDOOR_ENV)
 
     canvas.addEventListener('webglcontextlost', this.onLost)
@@ -102,7 +132,27 @@ export class SceneRenderer {
     this.resize()
   }
 
+  /** 把天空烘成環境貼圖，供寫實材質的環境光與反射使用。context 恢復後內容會遺失，需重建。 */
+  private bakeSkyEnvironment(): THREE.Texture {
+    this.skyEnv?.dispose()
+    const pmrem = new THREE.PMREMGenerator(this.renderer)
+    const scene = new THREE.Scene()
+    const parent = this.sky.parent
+    scene.add(this.sky)
+    this.skyEnv = pmrem.fromScene(scene, 0, 0.1, 100)
+    parent?.add(this.sky)
+    pmrem.dispose()
+    return this.skyEnv.texture
+  }
+
   setEnvironment(env: Environment): void {
+    this.env = env
+    this.sky.visible = env.outdoor !== null
+    this.scene.environment = env.outdoor ? (this.skyEnv?.texture ?? this.bakeSkyEnvironment()) : null
+    this.scene.environmentIntensity = env.outdoor?.environmentIntensity ?? 1
+    this.renderer.toneMapping = env.outdoor ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping
+    this.renderer.toneMappingExposure = env.outdoor?.exposure ?? 1
+    this.sun.castShadow = env.outdoor !== null && this.renderer.shadowMap.enabled
     this.renderer.setClearColor(env.background)
     this.scene.background = new THREE.Color(env.background)
     this.scene.fog = env.fog ? new THREE.Fog(env.background, env.fog.near, env.fog.far) : null
@@ -111,7 +161,8 @@ export class SceneRenderer {
     this.hemi.intensity = env.hemi.intensity
     this.sun.color.set(env.sun.color)
     this.sun.intensity = env.sun.intensity
-    this.sun.position.set(...env.sun.position)
+    // 拉遠主光，讓陰影的正交視錐包住整個場地（平行光只看方向，不影響照明）
+    this.sun.position.set(...env.sun.position).multiplyScalar(env.outdoor ? 4 : 1)
     this.sun.target.position.set(0, 0, 0)
   }
 
@@ -129,6 +180,13 @@ export class SceneRenderer {
     this.resize()
   }
 
+  /** 動態畫質用：在畫質上限之內再縮小繪製解析度（1 為不縮小）。 */
+  setResolutionScale(scale: number): void {
+    if (scale === this.resolutionScale) return
+    this.resolutionScale = scale
+    this.resize()
+  }
+
   /** 依畫質限制像素比例與總像素數。 */
   resize(): void {
     const w = Math.max(1, this.canvas.clientWidth)
@@ -136,6 +194,7 @@ export class SceneRenderer {
     let ratio = Math.min(window.devicePixelRatio || 1, this.preset.maxPixelRatio)
     const pixels = w * h * ratio * ratio
     if (pixels > this.preset.maxPixels) ratio *= Math.sqrt(this.preset.maxPixels / pixels)
+    ratio *= this.resolutionScale
     this.width = w
     this.height = h
     this.renderer.setPixelRatio(ratio)
@@ -207,6 +266,9 @@ export class SceneRenderer {
     this.canvas.removeEventListener('webglcontextlost', this.onLost)
     this.canvas.removeEventListener('webglcontextrestored', this.onRestored)
     this.resizeObserver.disconnect()
+    this.skyEnv?.dispose()
+    this.sky.geometry.dispose()
+    this.sky.material.dispose()
     this.renderer.dispose()
   }
 
@@ -217,6 +279,10 @@ export class SceneRenderer {
   }
 
   private onRestored = (): void => {
+    if (this.skyEnv) {
+      this.bakeSkyEnvironment()
+      this.setEnvironment(this.env)
+    }
     this.callbacks.onContextRestored()
   }
 }

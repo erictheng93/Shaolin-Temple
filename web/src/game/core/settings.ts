@@ -1,4 +1,4 @@
-export type QualityLevel = 'low' | 'medium' | 'high'
+export type QualityLevel = 'medium' | 'high'
 export type QualitySetting = 'auto' | QualityLevel
 
 export interface QualityPreset {
@@ -6,17 +6,22 @@ export interface QualityPreset {
   maxPixelRatio: number
   /** 繪製緩衝區總像素上限，高解析度手機也不會超過。 */
   maxPixels: number
-  /** 有移動或動畫時的目標幀率。 */
+  /** 前景時的目標幀率（場景有持續的環境動畫，靜止時也以此幀率繪製）。 */
   activeFps: number
-  /** 畫面靜止時的環境動畫幀率（燭火、香煙）；0 表示完全停止重繪。 */
-  idleFps: number
   antialias: boolean
+  /**
+   * 主光即時陰影貼圖邊長；0 表示不建陰影貼圖。靜態物件的影子是烘焙的，陰影貼圖只給近處角色投影。於下次載入生效。
+   */
+  shadowMapSize: number
+  /** 場景貼圖解析度。於下次載入生效。 */
+  textureSize: 512 | 1024
+  /** 細節貼圖：1 為底色加法線、2 再加粗糙度。於下次載入生效。 */
+  detailMaps: 1 | 2
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
-  low: { maxPixelRatio: 1, maxPixels: 1280 * 720, activeFps: 30, idleFps: 0, antialias: false },
-  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, idleFps: 8, antialias: false },
-  high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, idleFps: 15, antialias: true },
+  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1 },
+  high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2 },
 }
 
 export interface Settings {
@@ -58,7 +63,7 @@ export function loadSettings(): Settings {
   const r = raw as Partial<Record<keyof Settings, unknown>>
   const d = DEFAULT_SETTINGS
   return {
-    quality: (['auto', 'low', 'medium', 'high'] as const).includes(r.quality as QualitySetting)
+    quality: (['auto', 'medium', 'high'] as const).includes(r.quality as QualitySetting)
       ? (r.quality as QualitySetting)
       : d.quality,
     masterVolume: clamp01(r.masterVolume, d.masterVolume),
@@ -83,8 +88,7 @@ export function saveSettings(s: Settings): void {
 export function detectQuality(): QualityLevel {
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
   const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
-  if (mem !== undefined && mem <= 2) return 'low'
-  return coarse ? 'medium' : 'high'
+  return coarse || (mem !== undefined && mem <= 2) ? 'medium' : 'high'
 }
 
 export function resolveQuality(q: QualitySetting): QualityLevel {

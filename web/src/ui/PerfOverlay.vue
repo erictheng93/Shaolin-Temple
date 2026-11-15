@@ -9,7 +9,7 @@ defineProps<{ ui: UiState }>()
     <div>{{ ui.perf.fps }} FPS</div>
     <div>CPU {{ ui.perf.frameMs.toFixed(1) }} ms</div>
     <div>{{ ui.perf.calls }} draw · {{ (ui.perf.triangles / 1000).toFixed(1) }}k tri</div>
-    <div>畫質 {{ ui.quality }}</div>
+    <div>畫質 {{ ui.quality }} · 省電 {{ ui.adaptive.level }}/{{ ui.adaptive.max }}</div>
     <div v-if="ui.perf.rttMs !== null">RTT {{ Math.round(ui.perf.rttMs) }} ms</div>
   </aside>
 </template>
