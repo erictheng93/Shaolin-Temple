@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { QualityPreset } from '../core/settings'
 import { BELL_PAVILION, CENSER, HALL, LANTERNS, TREES } from '../world/layout'
@@ -10,7 +11,8 @@ export const SKY_COLOR = '#dfe2e4'
 export const TEMPLE_NAME = '少林寺'
 
 /**
- * 貼圖來自 Poly Haven（CC0），放在 public/textures/<id>_<diff|nor|rough>_<512|1k>.jpg。
+ * 貼圖來自 Poly Haven（CC0），原檔在 assets/textures/<id>_<diff|nor|rough>_<512|1k>.jpg，
+ * 以 `npm run build:textures` 編碼成 public/textures/ 的同名 .ktx2。
  * tile 是貼圖一次重複涵蓋的實際公尺數；fallback 是貼圖載入前的底色。
  */
 const TEX = {
@@ -180,7 +182,12 @@ export interface TempleScene {
  * 建立庭院。貼圖解析度與細節貼圖依建立當下的畫質決定（之後切換畫質於下次載入生效）。
  * onChange 在貼圖載入完成時呼叫，讓依需求繪製的迴圈重繪。
  */
-export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset, onChange: () => void): TempleScene {
+export function buildTempleScene(
+  renderer: THREE.WebGLRenderer,
+  tracker: ResourceTracker,
+  preset: QualityPreset,
+  onChange: () => void,
+): TempleScene {
   const root = new THREE.Group()
   root.name = 'temple'
 
@@ -191,43 +198,57 @@ export function buildTempleScene(tracker: ResourceTracker, preset: QualityPreset
     tile: 1,
   })
 
-  const loader = new THREE.TextureLoader()
+  // KTX2（BasisLZ）：手機轉成 ASTC／ETC2、桌面轉成 BC，GPU 記憶體約為未壓縮的 1/4～1/8，
+  // 也省掉主執行緒解 JPEG 與產生 mipmap。轉碼 worker 在全部貼圖載入後釋放。
+  const loader = tracker.track(new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}basis/`).detectSupport(renderer))
+  let pending = 0
+  const settle = () => {
+    if (--pending === 0) loader.dispose()
+  }
   const res = preset.textureSize === 1024 ? '1k' : '512'
   const anisotropy = preset.textureSize === 1024 ? 8 : 2
   /** 同一張貼圖只載入與上傳一次，多個材質共用（建立材質都在任何貼圖載入完成之前）。 */
-  const textures = new Map<string, { tex: THREE.Texture; waiting: Array<() => void> }>()
-  /** 寫實材質。貼圖載入前先用 fallback 底色，載入後才套上，避免畫面先變黑。 */
+  const textures = new Map<string, Array<(t: THREE.Texture) => void>>()
+  /** 寫實材質。貼圖載入前先用 fallback 底色，載入後才套上，避免畫面先變黑；載入失敗就維持底色。 */
   const pbr = (def: { id: string; tile: number; fallback: string }, tint = '#ffffff', params: THREE.MeshStandardMaterialParameters = {}): Surface => {
     const material = std({ color: def.fallback, roughness: 0.9, ...params })
-    const load = (kind: string, srgb: boolean, apply: (t: THREE.Texture) => void) => {
-      const url = `${import.meta.env.BASE_URL}textures/${def.id}_${kind}_${res}.jpg`
-      let entry = textures.get(url)
-      if (!entry) {
-        const waiting: Array<() => void> = []
-        const tex = tracker.track(
-          loader.load(url, () => {
-            waiting.forEach((f) => f())
+    const load = (kind: string, apply: (t: THREE.Texture) => void) => {
+      const url = `${import.meta.env.BASE_URL}textures/${def.id}_${kind}_${res}.ktx2`
+      let waiting = textures.get(url)
+      if (!waiting) {
+        const list: Array<(t: THREE.Texture) => void> = []
+        textures.set(url, (waiting = list))
+        pending++
+        loader.load(
+          url,
+          (tex) => {
+            settle()
+            tracker.track(tex)
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+            tex.anisotropy = anisotropy
+            // 色彩空間由 KTX2 檔頭決定（底色為 sRGB，法線與粗糙度為線性）。
+            list.forEach((f) => f(tex))
             onChange()
-          }),
+          },
+          undefined,
+          (err) => {
+            settle()
+            console.warn('貼圖載入失敗', url, err)
+          },
         )
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-        tex.anisotropy = anisotropy
-        if (srgb) tex.colorSpace = THREE.SRGBColorSpace
-        textures.set(url, (entry = { tex, waiting }))
       }
-      const t = entry.tex
-      entry.waiting.push(() => {
+      waiting.push((t) => {
         apply(t)
         material.needsUpdate = true
       })
     }
-    load('diff', true, (t) => {
+    load('diff', (t) => {
       material.map = t
       material.color.set(tint)
     })
-    load('nor', false, (t) => (material.normalMap = t))
+    load('nor', (t) => (material.normalMap = t))
     if (preset.detailMaps >= 2) {
-      load('rough', false, (t) => {
+      load('rough', (t) => {
         material.roughnessMap = t
         material.roughness = 1
       })

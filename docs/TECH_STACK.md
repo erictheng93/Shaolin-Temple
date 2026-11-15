@@ -153,7 +153,7 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 
 方向：小範圍場景、寫實材質與光照；幾何仍是程序化產生，寫實模型（樹、建築細部、角色）待 Blender 減面流程建立後替換。
 
-- **材質**：`MeshStandardMaterial`＋ Poly Haven 的 CC0 貼圖（鋪石、石牆、紅灰泥、屋瓦、草地、樹皮），放在 `web/public/textures/<id>_<diff|nor|rough>_<512|1k>.jpg`。UV 以公尺為單位（`texBox`、`hipRoof`），紋理密度不隨物件大小改變。貼圖載入前顯示底色，載入後才套用；相同網址只上傳一次。
+- **材質**：`MeshStandardMaterial`＋ Poly Haven 的 CC0 貼圖（鋪石、石牆、紅灰泥、屋瓦、草地、樹皮），原檔放在 `web/assets/textures/<id>_<diff|nor|rough>_<512|1k>.jpg`，以 `npm run build:textures`（需 Khronos KTX-Software 的 `ktx`，PATH 或環境變數 `KTX`）編碼成 `web/public/textures/` 的同名 `.ktx2`（ETC1S/BasisLZ，含 mipmap）。執行時由 `KTX2Loader` 依裝置轉成 ASTC／ETC2（手機）或 BC（桌面），GPU 記憶體約為未壓縮的 1/4～1/8，也省掉主執行緒解 JPEG 與產生 mipmap；轉碼器是 three 附的 `basis_transcoder`，複製在 `web/public/basis/`，升級 three 時要重新複製（`basis.test.ts` 會檢查）。UV 以公尺為單位（`texBox`、`hipRoof`），紋理密度不隨物件大小改變。貼圖載入前顯示底色，載入後才套用；相同網址只上傳一次。
 - **光照**：程序化天空（three 的 `Sky`，大氣散射）烘成 PMREM 環境貼圖提供環境光與反射，不需要 HDR 檔；低角度暖色主光；ACES 色調映射只用於戶外，殿內維持原本未經色調映射的畫面。WebGL context 恢復時重新烘環境貼圖。
 - **陰影**：一盞平行光的陰影貼圖涵蓋整個庭院，兩種畫質都開啟。
 - **屋頂與圍牆**：`hipRoof()` 產生下緩上陡、四角起翹的曲面屋頂（主殿重簷、鐘亭攢尖）；庭院外圍有石基紅牆瓦頂的圍牆與山門缺口，距可走範圍約 3 公尺，不需要碰撞。
@@ -161,8 +161,8 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 
 | 畫質 | 陰影貼圖 | 貼圖 | 細節貼圖 | 貼圖下載量 |
 | --- | --- | --- | --- | --- |
-| 標準（手機預設） | 1024 | 512 | 底色＋法線 | 512 版三種貼圖合計約 0.7 MB，未單獨量測 |
-| 高畫質（電腦預設） | 2048 | 1k | 底色＋法線＋粗糙度 | 約 12 MB |
+| 標準（手機預設） | 1024 | 512 | 底色＋法線 | KTX2 約 0.88 MB（JPG 為 0.61 MB）＋轉碼器 gzip 約 0.26 MB |
+| 高畫質（電腦預設） | 2048 | 1k | 底色＋法線＋粗糙度 | KTX2 約 3.6 MB（JPG 為 12.7 MB）＋轉碼器 |
 
 以上各項於載入時決定，遊戲中切換畫質要重新載入才生效。
 
