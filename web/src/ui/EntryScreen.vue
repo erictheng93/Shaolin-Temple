@@ -34,16 +34,18 @@ function submit() {
 </template>
 
 <style scoped>
+/* 用 flex + margin:auto 置中：卡片比畫面高時（橫向手機）可以捲動，頂端不會被切掉。 */
 .entry {
   position: absolute;
   inset: 0;
-  display: grid;
-  place-items: center;
+  display: flex;
+  overflow-y: auto;
   padding: 16px;
   background: radial-gradient(ellipse at center, rgba(27, 29, 36, 0.35), rgba(27, 29, 36, 0.85));
 }
 
 .card {
+  margin: auto;
   width: min(380px, 100%);
   padding: 32px 28px 24px;
   text-align: center;
@@ -124,5 +126,30 @@ h1 {
   font-size: 0.78rem;
   line-height: 1.7;
   color: var(--ink-faint);
+}
+
+/* 橫向手機：壓縮間距，讓按鈕盡量不用捲動就看得到。 */
+@media (max-height: 480px) {
+  .card {
+    padding: 16px 24px 14px;
+  }
+
+  h1 {
+    margin: 4px 0 6px;
+    font-size: 1.8rem;
+  }
+
+  .lead {
+    margin-bottom: 12px;
+    line-height: 1.5;
+  }
+
+  .enter {
+    margin-top: 12px;
+  }
+
+  .hint {
+    margin-top: 10px;
+  }
 }
 </style>
