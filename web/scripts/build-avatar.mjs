@@ -8,8 +8,10 @@ import { dirname } from 'node:path'
 
 const [out = 'public/models/monk.glb', detail = '1'] = process.argv.slice(2)
 const FINE = detail === '1'
-/** 圓周分段數：完整模型要看不出輪廓的折線，遠處模型從簡。 */
-const seg = (n) => (FINE ? n : Math.max(8, Math.round(n / 3)))
+/** 圓周分段數：完整模型取 fine，遠處模型取 lod。 */
+const seg = (fine, lod) => (FINE ? fine : lod)
+/** 橢球的緯度環數：只有完整模型指定，遠處模型維持預設。 */
+const rg = (n) => (FINE ? n : undefined)
 
 // 頂點色乘上袍色（instanceColor）：袍 1、袖口略深、鞋接近黑。
 const ROBE = [1, 1, 1]
@@ -51,12 +53,12 @@ function grid(m, base, rings, segs) {
 }
 
 /** 橢球。axis 有值時，橢球的 y 軸（r[1]）對準這個方向。 */
-function ellipsoid(m, c, r, color, segs, axis = [0, 1, 0]) {
+function ellipsoid(m, c, r, color, segs, axis = [0, 1, 0], ringCount = Math.max(6, Math.round(segs * 0.66))) {
   const y = norm(axis)
   const x = norm(cross(Math.abs(y[1]) > 0.9 ? [0, 0, 1] : [0, 1, 0], y))
   const z = cross(x, y)
   const world = (v) => [0, 1, 2].map((k) => x[k] * v[0] + y[k] * v[1] + z[k] * v[2])
-  const rings = Math.max(6, Math.round(segs * 0.66))
+  const rings = ringCount
   const base = m.p.length / 3
   for (let a = 0; a <= rings; a++) {
     const phi = (a / rings) * Math.PI
@@ -75,7 +77,7 @@ function ellipsoid(m, c, r, color, segs, axis = [0, 1, 0]) {
 
 /** 旋轉體：輪廓先以 Catmull-Rom 內插成平滑曲線，再繞 y 軸一圈。 */
 function lathe(m, profile, color, segs, depth) {
-  const steps = FINE ? 4 : 2
+  const steps = FINE ? 3 : 2
   const at = (i) => profile[Math.min(profile.length - 1, Math.max(0, i))]
   const curve = []
   for (let i = 0; i < profile.length - 1; i++) {
@@ -106,22 +108,22 @@ function lathe(m, profile, color, segs, depth) {
 }
 
 const body = mesh()
-lathe(body, ROBE_PROFILE, ROBE, seg(32), ROBE_DEPTH)
+lathe(body, ROBE_PROFILE, ROBE, seg(24, 11), ROBE_DEPTH)
 for (const side of [-1, 1]) {
   // 袖子：從肩膀垂到胸前合十處的寬袖
-  ellipsoid(body, [side * 0.09, 0.55, 0.08], [0.062, 0.13, 0.066], ROBE, seg(24), [-side * 0.11, -0.1, 0.17])
+  ellipsoid(body, [side * 0.09, 0.55, 0.08], [0.062, 0.13, 0.066], ROBE, seg(16, 8), [-side * 0.11, -0.1, 0.17], rg(10))
   // 袖口
-  ellipsoid(body, [side * 0.04, 0.505, 0.158], [0.05, 0.022, 0.052], TRIM, seg(20), [-side * 0.11, -0.1, 0.17])
+  ellipsoid(body, [side * 0.04, 0.505, 0.158], [0.05, 0.022, 0.052], TRIM, seg(12, 8), [-side * 0.11, -0.1, 0.17], rg(6))
   // 鞋：從下襬前緣露出鞋尖
-  ellipsoid(body, [side * 0.075, 0.036, 0.135], [0.058, 0.036, 0.09], SHOE, seg(20))
+  ellipsoid(body, [side * 0.075, 0.036, 0.135], [0.058, 0.036, 0.09], SHOE, seg(12, 8), undefined, rg(6))
 }
 
 const skin = mesh()
-ellipsoid(skin, HEAD.c, HEAD.r, ROBE, seg(40))
+ellipsoid(skin, HEAD.c, HEAD.r, ROBE, seg(32, 13), undefined, rg(21))
 for (const side of [-1, 1]) {
-  ellipsoid(skin, [side * 0.245, 0.82, -0.02], [0.035, 0.062, 0.046], ROBE, seg(16))
+  ellipsoid(skin, [side * 0.245, 0.82, -0.02], [0.035, 0.062, 0.046], ROBE, seg(10, 8), undefined, rg(7))
   // 合十的手：兩片手掌貼在一起，指尖朝上略往前
-  ellipsoid(skin, [side * 0.014, 0.535, 0.19], [0.02, 0.06, 0.034], ROBE, seg(16), [0, 1, -0.25])
+  ellipsoid(skin, [side * 0.014, 0.535, 0.19], [0.02, 0.06, 0.034], ROBE, seg(10, 8), [0, 1, -0.25], rg(7))
 }
 
 // 寫 GLB
