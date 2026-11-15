@@ -19,7 +19,7 @@
 | --- | --- | --- |
 | Node.js、npm | 一律需要（改程式、跑測試、看畫面） | `^20.19.0` 或 `>=22.12.0`，CI 用 22 |
 | Rust（rustup） | 只有跑或修改後端時 | `server/rust-toolchain.toml` 固定為 1.95.0，rustup 會自動安裝，並帶 rustfmt 與 clippy |
-| KTX-Software（`ktx`） | 只有新增或替換貼圖時（`npm run build:textures`） | 現有貼圖用 v4.4.2 編碼；v5.0.0-rc2 也驗證過可以執行現有腳本 |
+| KTX-Software（`ktx`） | 只有新增或替換貼圖時（`npm run build:textures`） | 場景貼圖用 v4.4.2 編碼，庭院烘焙貼圖用 v5.0.0-rc2 編碼；兩個版本都能執行現有腳本 |
 | Blender | 只有重新烘焙庭院光照（`npm run bake:lightmaps`）或處理模型時 | 烘焙所用的版本是 Blender 5.3.0 |
 | Docker | 只有要在本機建後端映像時（CI 會建） | 不限 |
 

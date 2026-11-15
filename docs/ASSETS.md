@@ -33,7 +33,7 @@
 
 ## Basis 轉碼器
 
-`web/public/basis/`（`basis_transcoder.js`、`basis_transcoder.wasm`）是 three.js 隨附的 Basis Universal 轉碼器副本，與 `node_modules/three/examples/jsm/libs/basis/` 逐位元相同（見 `basis.test.ts`）。three.js 本身是 MIT 授權（版權為 three.js authors）。three 隨附的 README 說明這兩個檔案來自 [Basis Universal](https://github.com/BinomialLLC/basis_universal)，但沒有另外註明轉碼器的授權。Basis Universal 上游倉庫的授權待確認（一般認知為 Apache-2.0，尚未對照上游倉庫確認）。
+`web/public/basis/`（`basis_transcoder.js`、`basis_transcoder.wasm`）是 three.js 隨附的 Basis Universal 轉碼器副本，與 `node_modules/three/examples/jsm/libs/basis/` 逐位元相同（見 `basis.test.ts`）。three.js 本身是 MIT 授權（版權為 three.js authors）。three 隨附的 README 說明這兩個檔案來自 [Basis Universal](https://github.com/BinomialLLC/basis_universal)，但沒有另外註明轉碼器的授權。Basis Universal 上游倉庫的授權是 Apache-2.0（2026-11-15 由 GitHub 的授權欄位查得）。
 
 ## 殿內神像（已選定，尚未接入）
 
