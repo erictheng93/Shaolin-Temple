@@ -32,6 +32,14 @@ export interface GameActionDef {
    * 回傳字串表示現在找不到可用的點（提示玩家原因）。
    */
   approach?: (ctx: SpotContext) => Pose | string
+  /**
+   * 可提前結束的鎖定動作（需搭配 locksMovement）：鎖定期間玩家點擊地面、用方向鍵或按任何動作時立即結束，
+   * 改為執行這個動作 id（通常是 hidden 的「起身」）。它和一般動作一樣送給伺服器並轉送給同場景的人，
+   * 其他玩家收到後原本的動作片段被取代、解除鎖定，畫面上也停止。按的若是同一個動作，只結束、不重新開始。
+   */
+  endAction?: string
+  /** 不顯示在動作列（例如只用來結束其他動作的「起身」）。 */
+  hidden?: boolean
 }
 
 export class ActionRegistry {

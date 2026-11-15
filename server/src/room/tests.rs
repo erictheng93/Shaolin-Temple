@@ -657,6 +657,43 @@ async fn snapshots_only_contain_known_zones_and_allowlisted_actions() {
     assert!(players.iter().any(|p| p.action.is_some()));
 }
 
+#[tokio::test(start_paused = true)]
+async fn chant_and_early_end_are_relayed_in_order_and_snapshot_keeps_the_end() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    a.enter_hall().await;
+    b.enter_hall().await;
+    sleep(TICK).await;
+    a.drain();
+    b.drain();
+    // 誦經後提前起身：同場景的人依序收到 chant、chant_end（與一般動作相同的允許清單與確認）
+    a.action("r1", "chant", true).await;
+    a.action("r2", "chant_end", true).await;
+    sleep(TICK).await;
+    assert_eq!(
+        acks(&a.drain()),
+        [ack("r1", true, None), ack("r2", true, None)]
+    );
+    let ids: Vec<String> = b
+        .drain()
+        .into_iter()
+        .filter_map(|m| match m {
+            ServerMessage::Action { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["chant", "chant_end"]);
+    // 之後才進房的人在快照裡看到的是起身，不會以為他還在誦經
+    let (out, mut rx) = mpsc::channel(64);
+    join(&room, "觀察", out).await.unwrap();
+    let ServerMessage::Welcome { players, .. } = rx.try_recv().unwrap() else {
+        panic!()
+    };
+    let me = players.iter().find(|p| p.id == a.who.id).unwrap();
+    assert_eq!(me.action.as_ref().unwrap().id, "chant_end");
+}
+
 // ---- 伺服器端停止看門狗與斷線保留 ----
 
 #[tokio::test(start_paused = true)]

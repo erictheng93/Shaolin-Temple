@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveCollisions, stepMover, type MoveConfig } from './movement'
 import { HALL } from './layout'
 import { findPath } from './pathfind'
+import { BELL_STATIONS } from './bell'
 import {
   CENSERS,
   CUSHION_RADIUS,
@@ -93,10 +94,11 @@ describe('zones', () => {
     expect(exit.z - door.maxZ).toBeGreaterThanOrEqual(1)
   })
 
-  describe('參拜點（蒲團、香爐前站位）', () => {
+  describe('參拜點（蒲團、香爐前站位、鐘亭前站位）', () => {
     const spots = [
       ...HALL_CUSHIONS.map((p, i) => ({ zone: 'hall' as const, name: `蒲團 ${i}`, p })),
       ...CENSERS.flatMap((c) => c.spots.map((p, i) => ({ zone: c.zone, name: `${c.id} 站位 ${i}`, p }))),
+      ...BELL_STATIONS.map((p, i) => ({ zone: 'courtyard' as const, name: `鐘亭站位 ${i}`, p })),
     ]
 
     it('蒲團 24 個：左右各 3 欄 × 4 排，避開中軸走道，全部面向神龕', () => {

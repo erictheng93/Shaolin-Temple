@@ -55,6 +55,12 @@ export function pickCushion(ctx: SpotContext): Pose | string {
   return pickFreeSpot(HALL_CUSHIONS, ctx, 'cushion') ?? '蒲團都有人了，請稍候再試'
 }
 
+/** 誦經：與跪拜相同，走到殿內最近的空蒲團（同樣的偏移，選法一致）。 */
+export function pickChantCushion(ctx: SpotContext): Pose | string {
+  if (ctx.zone !== 'hall') return '誦經要在殿內的蒲團上進行，請先進殿'
+  return pickFreeSpot(HALL_CUSHIONS, ctx, 'cushion') ?? '蒲團都有人了，請稍候再試'
+}
+
 /** 上香：依香爐由近到遠，找第一個還有空站位的香爐。 */
 export function pickCenserSpot(ctx: SpotContext): Pose | string {
   const censers = CENSERS.filter((c) => c.zone === ctx.zone).sort((a, b) => dist(ctx, a) - dist(ctx, b))

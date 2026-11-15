@@ -1,8 +1,11 @@
 import type { AvatarRig } from '../render/AvatarFactory'
 import { FACE_CALM, FACE_SMILE, PIVOT_HEIGHT, PROP_NONE } from '../render/AvatarFactory'
 
-/** 動畫片段：p 為 0..1 的進度，直接設定 rig 的姿勢。 */
-export type ClipFn = (rig: AvatarRig, p: number) => void
+/**
+ * 動畫片段：p 為 0..1 的進度，直接設定 rig 的姿勢。now 是目前時間（performance.now 毫秒），
+ * 需要對齊共同節拍的片段（例如誦經的木魚）用它換算拍點；一般片段只看 p。
+ */
+export type ClipFn = (rig: AvatarRig, p: number, now: number) => void
 
 export interface AnimState {
   clip: string | null
@@ -72,6 +75,7 @@ export class AnimationSystem {
     rig.head.rotation.set(0, 0, 0)
     rig.face = FACE_CALM
     rig.prop = PROP_NONE
+    rig.propAngle = 0
 
     if (state.moving) {
       state.walkPhase += dt * 9
@@ -87,7 +91,7 @@ export class AnimationSystem {
       if (p >= 1 || state.moving) {
         state.clip = null
       } else if (p >= 0) {
-        this.clips.get(state.clip)?.(rig, p)
+        this.clips.get(state.clip)?.(rig, p, now)
       }
     }
   }

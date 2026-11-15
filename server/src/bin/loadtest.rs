@@ -36,7 +36,7 @@ const MAX_Z: f64 = 17.0;
 const SPEED: f64 = 2.5;
 const SEND_HZ: f64 = 10.0;
 const PING_EVERY: Duration = Duration::from_secs(20);
-const ACTIONS: [&str; 4] = ["bow", "prostrate", "incense", "bell"];
+const ACTIONS: [&str; 6] = ["bow", "prostrate", "chant", "chant_end", "incense", "bell"];
 
 struct Args {
     url: String,

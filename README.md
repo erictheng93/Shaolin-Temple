@@ -6,10 +6,10 @@
 
 ## 目前狀態
 
-- `web/`：前端可運作。包含程序化寺院場景、角色移動、參拜動作（合十、殿內蒲團跪拜、香爐上香、敲鐘）與冷卻、多人同步客戶端、設定與效能資訊；聲音全部在執行時合成（鐘聲、木魚、頌缽、風聲、鳥叫、遠處鐘聲），沒有背景音樂。
+- `web/`：前端可運作。包含程序化寺院場景、角色移動、參拜動作（合十、殿內蒲團跪拜、殿內誦經敲木魚、香爐上香、鐘亭敲鐘）與冷卻、多人同步客戶端、設定與效能資訊；聲音全部在執行時合成（鐘聲、木魚、頌缽、風聲、鳥叫、遠處鐘聲），沒有背景音樂。
 - `server/`：後端使用 Rust 與 Axum，進度與驗收標準見 [docs/BACKEND_TASKS.md](docs/BACKEND_TASKS.md)。
 - 前端開發時也可以用 `web/scripts/mock-server.mjs` 測試多人功能。它實作與正式伺服器相同的協定，不需要安裝 Rust。
-- 玩法：目前正在實作殿內的「跪拜」與「上香」（蒲團陣列、每尊神像前一個香爐），細節以 [docs/TECH_STACK.md](docs/TECH_STACK.md) 為準。
+- 玩法：參拜——合十、跪拜與誦經（殿內蒲團）、上香（香爐）、敲鐘（庭院鐘亭，自動走到站位拉撞木撞鐘）。細節以 [docs/TECH_STACK.md](docs/TECH_STACK.md) 的「參拜」各節為準。
 
 ## 環境需求
 
@@ -142,7 +142,7 @@ repo 內的文字檔一律是 LF。Windows 的 git 可能開了 `core.autocrlf`�
 
 1. 在 `web/src/game/gameplay/modules/` 新增模組，實作 `GameplayModule`（見 `gameplay/types.ts`）。
 2. 在 `install(api)` 中用 `api.actions.register()` 註冊動作。動作列、冷卻、動畫、音效與伺服器確認會自動接上。
-3. 需要新動作姿勢時用 `api.animations.registerClip()`；新音效用 `api.audio.loadSfx()`；HUD 數值用 `api.setStat()`。
+3. 需要新動作姿勢時用 `api.animations.registerClip()`；新音效用 `api.audio.defineSfx()`（合成）或 `loadSfx()`（音檔）；HUD 數值用 `api.setStat()`。要先走到定點的動作用 `approach`，可提前結束的長動作用 `endAction`（見 `modules/chant.ts`）。新的動作 id 要加進伺服器、mock 伺服器與 loadtest 的允許清單。
 4. 玩法模組登記在 `modules/index.ts`。`install` 回傳的函式須清除該模組的全部註冊。
 5. 需要新的伺服器訊息時，擴充 `net/protocol.ts` 的型別與 `decode()` 驗證，並在同一個 PR 修改 mock 伺服器與後端。
 

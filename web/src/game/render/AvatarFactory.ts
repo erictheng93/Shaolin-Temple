@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { MALLET_HEAD_Z, WOODFISH_FORWARD, WOODFISH_STRIKE_Y, createChantPropsGeometry, patchChantPropsMaterial } from './chantProps'
 import { createIncenseStickGeometry } from './IncenseSystem'
 import { ResourceTracker } from './ResourceTracker'
 
@@ -13,6 +14,8 @@ export interface AvatarRig {
   face: number
   /** 手上拿的東西（PROP_* 常數）。與 face 相同，每幀重設為 PROP_NONE，動作片段可以改。 */
   prop: number
+  /** 手上道具的抬起角度（弧度，0 為放下；誦經時是木魚槌抬離木魚的角度）。每幀重設為 0。 */
+  propAngle: number
 }
 
 /** 平常的臉：豆豆眼。 */
@@ -24,6 +27,15 @@ export const FACE_SMILE = 1
 export const PROP_NONE = 0
 /** 合十的雙手間拿著一支香（上香時）。 */
 export const PROP_INCENSE = 1
+/** 誦經：身前地上一個木魚，合十的手握著木魚槌（槌頭指向木魚，依 propAngle 抬起）。 */
+export const PROP_CHANT = 2
+/** 握槌的位置：合十的手（剛體座標，與手上的香相同的高度）。 */
+const MALLET_GRIP = new THREE.Vector3(0, 0.53, 0.21)
+/** 槌頭敲到木魚時的位置（角色根節點座標）：木魚頂端加槌頭半徑。 */
+const MALLET_TARGET = new THREE.Vector3(0, WOODFISH_STRIKE_Y, WOODFISH_FORWARD)
+const WOODFISH_POSE = new THREE.Matrix4().makeTranslation(0, 0, WOODFISH_FORWARD)
+const AXIS_X = new THREE.Vector3(1, 0, 0)
+const AXIS_Z = new THREE.Vector3(0, 0, 1)
 /**
  * 手上的香相對腳底的姿勢（隨頭與手一起做剛體運動）：從合十的手（y 0.535、z 0.19）往上、
  * 向前傾 0.5 弧度，避免穿過臉（臉的正面在 z 約 0.235）；長 0.42、半徑 0.007。
@@ -194,7 +206,7 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
 
 /**
  * 角色工廠與批次繪製擁有者。
- * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）、膚色部分（頭與手）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個；有人手上拿著香時另加 1 個）。
+ * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）、膚色部分（頭與手）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
  * 臉（五官圖集）近遠都畫，各自貼在該 tier 的頭部曲面上，不投影。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
  * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
@@ -217,6 +229,13 @@ export class AvatarFactory {
   private shadows: THREE.InstancedMesh
   /** 手上的香：有人拿著時才多 1 個 draw call。 */
   private props: THREE.InstancedMesh
+  /** 誦經的木魚與槌：每人兩個實例（instPart 0 木魚、1 槌），有人誦經時才多 1 個 draw call。 */
+  private chantProps: THREE.InstancedMesh
+  private chantPart: THREE.InstancedBufferAttribute
+  private grip = new THREE.Vector3()
+  private malletDir = new THREE.Vector3()
+  private malletAxis = new THREE.Vector3()
+  private malletQuat = new THREE.Quaternion()
   private propPose = new THREE.Matrix4()
   private records = new Set<AvatarRecord>()
   private robeColors = ROBE_COLORS.map((c) => new THREE.Color(c))
@@ -298,7 +317,21 @@ export class AvatarFactory {
     this.shadows.renderOrder = -1
     this.props = make(t.track(createIncenseStickGeometry()), t.trackMaterial(new THREE.MeshBasicMaterial({ vertexColors: true })))
     this.props.visible = false
-
+    const chantMat = t.trackMaterial(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55 }))
+    patchChantPropsMaterial(chantMat)
+    const chantGeo = t.track(createChantPropsGeometry())
+    this.chantPart = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY * 2), 1)
+    this.chantPart.setUsage(THREE.DynamicDrawUsage)
+    chantGeo.setAttribute('instPart', this.chantPart)
+    this.chantProps = new THREE.InstancedMesh(chantGeo, chantMat, AVATAR_CAPACITY * 2)
+    this.chantProps.name = 'chant-props'
+    this.chantProps.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.chantProps.count = 0
+    this.chantProps.frustumCulled = false
+    // 自訂 vertex shader 只裝在一般材質上，陰影的深度材質不知道要縮掉另一部分，所以不投影（木魚很小，只差腳邊一點影子）
+    this.chantProps.castShadow = false
+    this.chantProps.visible = false
+    parent.add(this.chantProps)
 
     // 動態載入 GLTFLoader（與 statues.ts 共用同一個延後載入的區塊）
     void import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
@@ -345,7 +378,7 @@ export class AvatarFactory {
       root.add(label)
     }
 
-    const rig: AvatarRig = { root, pivot, head, face: FACE_CALM, prop: PROP_NONE }
+    const rig: AvatarRig = { root, pivot, head, face: FACE_CALM, prop: PROP_NONE, propAngle: 0 }
     const record: AvatarRecord = {
       rig,
       shadow,
@@ -373,6 +406,7 @@ export class AvatarFactory {
   sync(x: number, z: number, nearRadius: number): void {
     let i = 0
     let props = 0
+    let chant = 0
     for (const tier of this.tiers) tier.count = 0
     for (const r of this.records) {
       const { root, pivot } = r.rig
@@ -394,6 +428,7 @@ export class AvatarFactory {
       tier.faceIndex.setX(tier.count, r.rig.face)
       tier.count++
       if (r.rig.prop === PROP_INCENSE) this.props.setMatrixAt(props++, this.propPose.multiplyMatrices(this.rigidPose, HELD_INCENSE))
+      if (r.rig.prop === PROP_CHANT) chant = this.placeChantProps(chant, root.matrixWorld, r.rig.propAngle)
       this.shadows.setMatrixAt(i, r.shadow.matrixWorld)
       i++
     }
@@ -413,10 +448,34 @@ export class AvatarFactory {
     this.props.count = props
     this.props.visible = props > 0
     this.props.instanceMatrix.needsUpdate = true
+    this.chantProps.count = chant
+    this.chantProps.visible = chant > 0
+    this.chantProps.instanceMatrix.needsUpdate = true
+    this.chantPart.needsUpdate = true
+  }
+
+  /**
+   * 木魚放在角色腳底前方的地上（不隨身體傾斜）；槌從合十的手（剛體姿勢，this.rigidPose）指向木魚頂端，
+   * 再繞角色的左右軸抬起 angle。手到木魚的距離隨姿勢略有不同，槌沿長軸稍微伸縮（0.85～1.25 倍），放下時剛好碰到木魚。
+   */
+  private placeChantProps(i: number, root: THREE.Matrix4, angle: number): number {
+    this.chantProps.setMatrixAt(i, this.propPose.multiplyMatrices(root, WOODFISH_POSE))
+    this.chantPart.setX(i, 0)
+    this.grip.copy(MALLET_GRIP).applyMatrix4(this.rigidPose)
+    this.malletDir.copy(MALLET_TARGET).applyMatrix4(root).sub(this.grip)
+    const reach = this.malletDir.length()
+    this.malletDir.divideScalar(reach || 1)
+    this.malletAxis.copy(AXIS_X).transformDirection(root)
+    this.malletDir.applyAxisAngle(this.malletAxis, -angle)
+    this.malletQuat.setFromUnitVectors(AXIS_Z, this.malletDir)
+    const stretch = Math.min(1.25, Math.max(0.85, reach / MALLET_HEAD_Z))
+    this.chantProps.setMatrixAt(i + 1, this.propPose.compose(this.grip, this.malletQuat, this.poseScale.set(1, 1, stretch)))
+    this.chantPart.setX(i + 1, 1)
+    return i + 2
   }
 
   dispose(): void {
-    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin, tier.face]), this.shadows, this.props]) {
+    for (const m of [...this.tiers.flatMap((tier) => [tier.body, tier.skin, tier.face]), this.shadows, this.props, this.chantProps]) {
       m.removeFromParent()
       m.dispose()
     }

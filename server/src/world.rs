@@ -213,8 +213,10 @@ pub fn zone(id: &str) -> Option<&'static Zone> {
     ZONES.iter().copied().find(|z| z.id == id)
 }
 
-/// 動作允許清單（參拜玩法：合十、跪拜、上香、敲鐘）。快照與廣播中的動作 id 只會來自這份清單。
-pub const ACTIONS: [&str; 4] = ["bow", "prostrate", "incense", "bell"];
+/// 動作允許清單（參拜玩法：合十、跪拜、誦經、上香、敲鐘），`chant_end` 是提前結束誦經（起身），
+/// 由客戶端在誦經中點地面或按其他動作時送出，轉送給同場景的人讓他們看到的也停止。
+/// 快照與廣播中的動作 id 只會來自這份清單。
+pub const ACTIONS: [&str; 6] = ["bow", "prostrate", "chant", "chant_end", "incense", "bell"];
 
 /// 回傳清單中的同名動作；不在清單內為 `None`。
 pub fn action(id: &str) -> Option<&'static str> {
