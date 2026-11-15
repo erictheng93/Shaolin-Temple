@@ -99,6 +99,22 @@ describe('Players 插值與看門狗', () => {
     expect(r.x).toBeCloseTo(1, 9)
   })
 
+  it('鎖定移動的動作期間，最後一筆位置晚到時只滑到定點、不播走路（不會取消動作動畫）', () => {
+    const p = makePlayers()
+    p.upsert(snap('b', 1), 0)
+    p.setRemoteTargetByN(1, 0.2, 0, 0, true, 1000)
+    const r = p.remotes.get('b')!
+    r.lockedUntil = 9000 // 動作訊息先到
+    p.setRemoteTargetByN(1, 0.4, 0, 0, false, 1100) // 下一個 tick 才收到停下的位置
+    p.update(1150, 0.05, 0)
+    expect(r.anim.moving).toBe(false)
+    p.update(3000, 0.05, 0)
+    expect(r.x).toBeCloseTo(0.4, 9)
+    p.setRemoteTargetByN(1, 2, 0, 0, true, 9500) // 動作結束後再走就恢復
+    p.update(9550, 0.05, 0)
+    expect(r.anim.moving).toBe(true)
+  })
+
   it('移動中超過 1 秒沒有位置更新，視為停止', () => {
     const p = makePlayers()
     p.upsert(snap('b', 1), 0)

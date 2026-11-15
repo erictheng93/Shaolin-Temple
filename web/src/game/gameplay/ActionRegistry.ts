@@ -1,3 +1,6 @@
+import type { SpotContext } from '../world/worship'
+import type { Pose, ZoneId } from '../world/zones'
+
 /**
  * 玩家可執行的動作定義。玩法定案後，新動作只需註冊一筆定義，UI 動作列、動畫、音效、網路確認都會自動接上。
  */
@@ -19,6 +22,16 @@ export interface GameActionDef {
   sound?: string
   /** 伺服器確認後的本地效果（例如更新計數）。 */
   onConfirmed?: () => void
+  /**
+   * 依場景判斷能不能用：可用回傳 null，不可用回傳給玩家看的原因（按鈕變暗，按下時提示原因）。
+   * 只依場景判斷，因為 UI 是低頻摘要，不隨位置每幀更新。
+   */
+  unavailableReason?: (zone: ZoneId) => string | null
+  /**
+   * 需要先走到定點再執行：回傳站位與面向，角色會自動走過去、轉向後才開始動作（冷卻、動畫、送出都從抵達時算起）；
+   * 回傳字串表示現在找不到可用的點（提示玩家原因）。
+   */
+  approach?: (ctx: SpotContext) => Pose | string
 }
 
 export class ActionRegistry {

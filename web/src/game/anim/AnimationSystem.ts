@@ -1,5 +1,5 @@
 import type { AvatarRig } from '../render/AvatarFactory'
-import { FACE_CALM, FACE_SMILE, PIVOT_HEIGHT } from '../render/AvatarFactory'
+import { FACE_CALM, FACE_SMILE, PIVOT_HEIGHT, PROP_NONE } from '../render/AvatarFactory'
 
 /** 動畫片段：p 為 0..1 的進度，直接設定 rig 的姿勢。 */
 export type ClipFn = (rig: AvatarRig, p: number) => void
@@ -20,9 +20,9 @@ export const createAnimState = (): AnimState => ({
   walkPhase: 0,
 })
 
-const smooth = (x: number) => x * x * (3 - 2 * x)
+export const smooth = (x: number) => x * x * (3 - 2 * x)
 /** 0→1→0 的平滑包絡，前段 rise、後段 fall 的比例。 */
-const envelope = (p: number, rise = 0.3, fall = 0.35): number =>
+export const envelope = (p: number, rise = 0.3, fall = 0.35): number =>
   p < rise ? smooth(p / rise) : p > 1 - fall ? smooth((1 - p) / fall) : 1
 
 /**
@@ -71,6 +71,7 @@ export class AnimationSystem {
     rig.pivot.position.y = PIVOT_HEIGHT
     rig.head.rotation.set(0, 0, 0)
     rig.face = FACE_CALM
+    rig.prop = PROP_NONE
 
     if (state.moving) {
       state.walkPhase += dt * 9

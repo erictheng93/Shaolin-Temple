@@ -614,7 +614,7 @@ async fn actions_are_acked_idempotently_and_only_known_ones_broadcast() {
     assert_eq!(acks(&a.drain()), [ack("r2", false, Some("unknown_action"))]);
     // 只快取最近 64 個：r1 被擠出後重送會重新執行並再廣播一次，最新的仍在快取內
     for i in 0..64 {
-        a.action(&format!("f{i}"), "bowl", true).await;
+        a.action(&format!("f{i}"), "incense", true).await;
     }
     sleep(TICK).await;
     a.drain();
@@ -622,7 +622,7 @@ async fn actions_are_acked_idempotently_and_only_known_ones_broadcast() {
     a.action("r1", "bow", true).await;
     sleep(TICK).await;
     assert_eq!(count(&b.drain(), "action"), 1);
-    a.action("f63", "bowl", true).await;
+    a.action("f63", "incense", true).await;
     sleep(TICK).await;
     assert!(b.drain().is_empty());
 }

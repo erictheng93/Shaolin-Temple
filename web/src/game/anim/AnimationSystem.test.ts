@@ -4,7 +4,7 @@ import type { AvatarRig } from '../render/AvatarFactory'
 
 const makeRig = () => {
   const rotation = { x: 0, y: 0, z: 0, set(x: number, y: number, z: number) { Object.assign(this, { x, y, z }) } }
-  return { pivot: { rotation, position: { y: 0 } }, head: { rotation: { ...rotation } }, face: 0 } as unknown as AvatarRig
+  return { pivot: { rotation, position: { y: 0 } }, head: { rotation: { ...rotation } }, face: 0, prop: 0 } as unknown as AvatarRig
 }
 
 describe('nod 片段', () => {

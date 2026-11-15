@@ -1,11 +1,12 @@
 import * as THREE from 'three'
-import { HALL_ALTAR, HALL_CUSHIONS, HALL_PILLARS, HALL_ROOM, HALL_STATUES, HALL_TABLE } from '../world/zones'
+import { CUSHION_RADIUS, HALL_AISLE_HALF_WIDTH, HALL_ALTAR, HALL_CENSERS, HALL_CUSHIONS, HALL_PILLARS, HALL_ROOM, HALL_STATUES, HALL_TABLE } from '../world/zones'
 import type { ResourceTracker } from './ResourceTracker'
 import { mergeStatic } from './mergeStatic'
 import { buildStatue, createStatueKit, type StatueId } from './statues'
 
 /**
- * 殿內場景（少林寺）：紅柱、藻井、彩繪樑、光明燈牆、宮燈、三座神龕與神像、供桌與拜墊。
+ * 殿內場景（少林寺）：紅柱、藻井、彩繪樑、光明燈牆、宮燈、三座神龕與神像、供桌與三個香爐、蒲團陣列。
+ * 香爐裡的香與香煙是動態物件，由 GameCore 擁有的 IncenseSystem 繪製，不在這裡。
  * 殿門在 +z，神龕在 -z；玩家進殿後面向 -z。
  */
 
@@ -165,7 +166,7 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
   floor.name = 'hall-floor'
   root.add(floor)
   // 中央紅色走道毯
-  add(box, m.cloth, [0, 0.01, 2.6], [2.2, 0.02, 11.4])
+  add(box, m.cloth, [0, 0.01, 2.6], [HALL_AISLE_HALF_WIDTH * 2, 0.02, 11.4])
 
   // ---------- 牆：下段深紅木作、上段米色 ----------
   const dado = 1.3
@@ -287,12 +288,10 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
   for (const sx of [-1, 1]) add(box, m.altar, [sx * (tableW / 2 - 0.08), 0.45, tableZ], [0.12, 0.9, tableD - 0.05])
 
   const top = 1.0
-  // 香爐與香
+  // 香爐：每尊神像正前方一個（位置來自 HALL_CENSERS）。香與煙由 IncenseSystem 繪製。
   const censerProfile = [[0, 0], [0.12, 0], [0.1, 0.06], [0.24, 0.12], [0.27, 0.3], [0.24, 0.32], [0.2, 0.22], [0, 0.22]] as const
-  const censer = new THREE.Mesh(geo(new THREE.LatheGeometry(censerProfile.map(([r, y]) => new THREE.Vector2(r, y)), 16)), m.bronze)
-  censer.position.set(0, top, tableZ)
-  root.add(censer)
-  instanced(cyl, m.candle, [-0.06, 0, 0.06].map((dx) => ({ pos: [dx, top + 0.48, tableZ] as [number, number, number], scale: [0.008, 0.36, 0.008] as [number, number, number] })))
+  const censerGeo = geo(new THREE.LatheGeometry(censerProfile.map(([r, y]) => new THREE.Vector2(r, y)), 16))
+  for (const c of HALL_CENSERS) add(censerGeo, m.bronze, [c.x, top, c.z], [1, 1, 1])
 
   // 燭台與紅燭
   const candles = [-3.6, -1.6, 1.6, 3.6].map((x) => ({ x, z: tableZ }))
@@ -325,25 +324,11 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
     })))
   }
 
-  // 香煙
-  const smokeTex = tracker.track(
-    canvasTexture(64, 64, (ctx) => {
-      const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
-      g.addColorStop(0, 'rgba(255,255,255,0.9)')
-      g.addColorStop(1, 'rgba(255,255,255,0)')
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, 64, 64)
-    }),
-  )
-  const smoke = Array.from({ length: 4 }, (_, i) => {
-    const material = tracker.track(new THREE.SpriteMaterial({ map: smokeTex, color: '#e6e2dc', transparent: true, depthWrite: false, opacity: 0 }))
-    const sprite = new THREE.Sprite(material)
-    root.add(sprite)
-    return { sprite, material, phase: i / 4 }
-  })
-
-  // ---------- 拜墊 ----------
-  instanced(cyl, m.cushion, HALL_CUSHIONS.map((c) => ({ pos: [c.x, 0.08, c.z], scale: [0.36, 0.16, 0.36] })))
+  // ---------- 蒲團陣列 ----------
+  // 圓鼓的蒲團：側面外凸、頂面微隆（半徑 1、高 1，依 CUSHION_RADIUS 縮放）
+  const cushionProfile = [[0, 0], [0.9, 0], [1, 0.35], [0.94, 0.8], [0.6, 1], [0, 1.04]] as const
+  const cushionGeo = geo(new THREE.LatheGeometry(cushionProfile.map(([r, y]) => new THREE.Vector2(r, y)), 14))
+  instanced(cushionGeo, m.cushion, HALL_CUSHIONS.map((c) => ({ pos: [c.x, 0, c.z], scale: [CUSHION_RADIUS, 0.15, CUSHION_RADIUS] })))
 
   // 靜態物件依材質合併以減少 draw call。神像各自合併、不跨插槽，才能單獨換成寫實模型；
   // 地板（點擊射線目標）不合併。
@@ -360,13 +345,6 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
         f.scale.set(0.16 * k, 0.24 * k, 1)
       })
       m.lantern.emissiveIntensity = 0.5 + Math.sin(t * 1.7) * 0.04
-      for (const s of smoke) {
-        const p = (t * 0.1 + s.phase) % 1
-        s.sprite.position.set(Math.sin(t * 0.5 + s.phase * 6) * 0.15 * p, top + 0.7 + p * 2.2, tableZ)
-        const size = 0.25 + p * 0.9
-        s.sprite.scale.set(size, size, 1)
-        s.material.opacity = Math.sin(p * Math.PI) * 0.3
-      }
     },
   }
 }
