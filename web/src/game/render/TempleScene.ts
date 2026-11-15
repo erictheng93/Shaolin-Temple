@@ -3,6 +3,8 @@ import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { QualityPreset } from '../core/settings'
 import { BELL_PAVILION, CENSER, HALL, LANTERNS, TREES } from '../world/layout'
+import { BAKED_FINGERPRINT } from './courtyardBake.generated'
+import { collectBakeSetup, lightmapUrl, patchBakedSun, prepareLightmapUvs, type CourtyardBakeSetup } from './courtyardBake'
 import { mergeStatic } from './mergeStatic'
 import type { ResourceTracker } from './ResourceTracker'
 
@@ -38,7 +40,7 @@ const PALETTE = {
 }
 
 /** 材質與其貼圖的實際尺寸（沒有貼圖時 tile 無意義）。 */
-interface Surface {
+export interface Surface {
   material: THREE.MeshStandardMaterial
   tile: number
 }
@@ -63,6 +65,7 @@ function texBox(w: number, h: number, d: number, tile: number): THREE.BufferGeom
  * 坡面下緩上陡，四角依 lift 起翹成飛簷。UV 以公尺為單位，v 沿坡面向上。
  */
 function hipRoof(w: number, d: number, h: number, rw: number, rd: number, lift: number, tile: number): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry()
   const pos: number[] = []
   const uv: number[] = []
   const idx: number[] = []
@@ -70,6 +73,8 @@ function hipRoof(w: number, d: number, h: number, rw: number, rd: number, lift: 
   const M = 8
   const face = (ax: number, az: number, bx: number, bz: number, cx: number, cz: number, dx: number, dz: number) => {
     const base = pos.length / 3
+    // 每個坡面一個 group：四個坡面的貼圖 UV 互相重疊，烘焙貼圖的 uv1 需要分開排（單一材質繪製時 group 不影響 draw call）
+    g.addGroup(idx.length, M * N * 6, 0)
     const eave = Math.hypot(bx - ax, bz - az)
     const top = Math.hypot(dx - cx, dz - cz)
     const slope = Math.hypot((ax + bx - cx - dx) / 2, (az + bz - cz - dz) / 2, h)
@@ -103,7 +108,6 @@ function hipRoof(w: number, d: number, h: number, rw: number, rd: number, lift: 
   face(hw, hd, hw, -hd, tw, td, tw, -td)
   face(hw, -hd, -hw, -hd, tw, -td, -tw, -td)
   face(-hw, -hd, -hw, hd, -tw, -td, -tw, td)
-  const g = new THREE.BufferGeometry()
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2))
   g.setIndex(idx)
@@ -166,113 +170,61 @@ function plaqueTexture(text: string): THREE.CanvasTexture {
   return tex
 }
 
-export interface TempleScene {
+/** 庭院用到的表面材質；`buildCourtyard()` 只依這張表建構幾何，不管材質如何建立（執行時是寫實材質，烘焙匯出時是素色材質）。 */
+export type SurfaceKey =
+  | 'grass' | 'paving' | 'path' | 'stone' | 'plaster' | 'roof' | 'bark' | 'canopy'
+  | 'lacquer' | 'woodDark' | 'gold' | 'bronze' | 'cloth' | 'mountain' | 'lantern' | 'plaque'
+export type CourtyardSurfaces = Record<SurfaceKey, Surface>
+
+type TexDef = { id: string; tile: number; fallback: string }
+export type SurfaceSpec =
+  | { tex: TexDef; tint?: string; params?: THREE.MeshStandardMaterialParameters }
+  | { color: string; params?: THREE.MeshStandardMaterialParameters }
+
+/** 匾額另外處理（貼圖是執行時畫的字），不在這張表。 */
+export const SURFACE_SPECS: Record<Exclude<SurfaceKey, 'plaque'>, SurfaceSpec> = {
+  grass: { tex: TEX.grass, tint: '#a8d27a' },
+  paving: { tex: TEX.paving },
+  path: { tex: TEX.stone, tint: '#d8d2c6' },
+  stone: { tex: TEX.stone },
+  plaster: { tex: TEX.plaster, tint: '#e2a08c' },
+  roof: { tex: TEX.roof, tint: '#c8ccd6', params: { side: THREE.DoubleSide } },
+  bark: { tex: TEX.bark },
+  canopy: { tex: TEX.grass, tint: '#ffffff', params: { roughness: 1 } },
+  lacquer: { color: PALETTE.lacquer, params: { roughness: 0.38 } },
+  woodDark: { color: PALETTE.woodDark, params: { roughness: 0.6 } },
+  gold: { color: PALETTE.gold, params: { metalness: 1, roughness: 0.3 } },
+  bronze: { color: PALETTE.bronze, params: { metalness: 0.9, roughness: 0.48 } },
+  cloth: { color: '#ffffff', params: { roughness: 1 } },
+  mountain: { color: '#ffffff', params: { roughness: 1, flatShading: true } },
+  lantern: { color: '#fff3d8', params: { emissive: PALETTE.lantern, emissiveIntensity: 0.9 } },
+}
+
+/** 鋪在地面上、以平面投影使用地面烘焙貼圖的材質。 */
+const GROUND_SURFACES: readonly SurfaceKey[] = ['grass', 'paving', 'path']
+
+export interface Courtyard {
   root: THREE.Group
-  /** 可點擊行走的地面，供射線檢測使用。 */
-  walkSurface: THREE.Object3D
-  /** 環境動畫（燈籠、香煙、樹冠、落葉、晾衣、鐘擺）。t 為秒。 */
-  update(t: number, dt: number): void
-  /** 觸發鐘的擺動。 */
-  swingBell(): void
-  /** 是否有需要持續重繪的短暫動態（例如鐘擺尚未停止）。 */
-  hasTransientMotion(): boolean
+  ground: THREE.Mesh
+  bellPivot: THREE.Group
+  canopyMesh: THREE.InstancedMesh
+  canopyItems: ReadonlyArray<{ pos: V3; scale: V3; rotY: number }>
+  leaves: THREE.InstancedMesh
+  robeMesh: THREE.InstancedMesh
+  robeItems: ReadonlyArray<{ pos: V3 }>
+  /** 烘焙：接收烘焙貼圖的物件與材質、只擋光的動態物件（以靜止姿態烘焙），與幾何指紋。 */
+  bake: CourtyardBakeSetup
 }
 
 /**
- * 建立庭院。貼圖解析度與細節貼圖依建立當下的畫質決定（之後切換畫質於下次載入生效）。
- * onChange 在貼圖載入完成時呼叫，讓依需求繪製的迴圈重繪。
+ * 以材質表建構庭院幾何（不載入貼圖、不使用 DOM，烘焙匯出腳本在 Node 也呼叫這個函式）。
+ * 靜態物件依材質合併並寫入烘焙貼圖用的 uv1。
  */
-export function buildTempleScene(
-  renderer: THREE.WebGLRenderer,
-  tracker: ResourceTracker,
-  preset: QualityPreset,
-  onChange: () => void,
-): TempleScene {
+export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker): Courtyard {
   const root = new THREE.Group()
   root.name = 'temple'
-
   const geo = <T extends THREE.BufferGeometry>(g: T) => tracker.track(g)
   const std = (params: THREE.MeshStandardMaterialParameters) => tracker.trackMaterial(new THREE.MeshStandardMaterial(params))
-  const flat = (color: string, params: THREE.MeshStandardMaterialParameters = {}): Surface => ({
-    material: std({ color, roughness: 0.85, ...params }),
-    tile: 1,
-  })
-
-  // KTX2（BasisLZ）：手機轉成 ASTC／ETC2、桌面轉成 BC，GPU 記憶體約為未壓縮的 1/4～1/8，
-  // 也省掉主執行緒解 JPEG 與產生 mipmap。轉碼 worker 在全部貼圖載入後釋放。
-  const loader = tracker.track(new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}basis/`).detectSupport(renderer))
-  let pending = 0
-  const settle = () => {
-    if (--pending === 0) loader.dispose()
-  }
-  const res = preset.textureSize === 1024 ? '1k' : '512'
-  const anisotropy = preset.textureSize === 1024 ? 8 : 2
-  /** 同一張貼圖只載入與上傳一次，多個材質共用（建立材質都在任何貼圖載入完成之前）。 */
-  const textures = new Map<string, Array<(t: THREE.Texture) => void>>()
-  /** 寫實材質。貼圖載入前先用 fallback 底色，載入後才套上，避免畫面先變黑；載入失敗就維持底色。 */
-  const pbr = (def: { id: string; tile: number; fallback: string }, tint = '#ffffff', params: THREE.MeshStandardMaterialParameters = {}): Surface => {
-    const material = std({ color: def.fallback, roughness: 0.9, ...params })
-    const load = (kind: string, apply: (t: THREE.Texture) => void) => {
-      const url = `${import.meta.env.BASE_URL}textures/${def.id}_${kind}_${res}.ktx2`
-      let waiting = textures.get(url)
-      if (!waiting) {
-        const list: Array<(t: THREE.Texture) => void> = []
-        textures.set(url, (waiting = list))
-        pending++
-        loader.load(
-          url,
-          (tex) => {
-            settle()
-            tracker.track(tex)
-            tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-            tex.anisotropy = anisotropy
-            // 色彩空間由 KTX2 檔頭決定（底色為 sRGB，法線與粗糙度為線性）。
-            list.forEach((f) => f(tex))
-            onChange()
-          },
-          undefined,
-          (err) => {
-            settle()
-            console.warn('貼圖載入失敗', url, err)
-          },
-        )
-      }
-      waiting.push((t) => {
-        apply(t)
-        material.needsUpdate = true
-      })
-    }
-    load('diff', (t) => {
-      material.map = t
-      material.color.set(tint)
-    })
-    load('nor', (t) => (material.normalMap = t))
-    if (preset.detailMaps >= 2) {
-      load('rough', (t) => {
-        material.roughnessMap = t
-        material.roughness = 1
-      })
-    }
-    return { material, tile: def.tile }
-  }
-
-  const m = {
-    grass: pbr(TEX.grass, '#a8d27a'),
-    paving: pbr(TEX.paving),
-    path: pbr(TEX.stone, '#d8d2c6'),
-    stone: pbr(TEX.stone),
-    plaster: pbr(TEX.plaster, '#e2a08c'),
-    roof: pbr(TEX.roof, '#c8ccd6', { side: THREE.DoubleSide }),
-    bark: pbr(TEX.bark),
-    canopy: pbr(TEX.grass, '#ffffff', { roughness: 1 }),
-    lacquer: flat(PALETTE.lacquer, { roughness: 0.38 }),
-    woodDark: flat(PALETTE.woodDark, { roughness: 0.6 }),
-    gold: flat(PALETTE.gold, { metalness: 1, roughness: 0.3 }),
-    bronze: flat(PALETTE.bronze, { metalness: 0.9, roughness: 0.48 }),
-    cloth: flat('#ffffff', { roughness: 1 }),
-    mountain: flat('#ffffff', { roughness: 1, flatShading: true }),
-    lantern: flat('#fff3d8', { emissive: PALETTE.lantern, emissiveIntensity: 0.9 }),
-  }
 
   const pyramid = geo(new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4).translate(0, 0.5, 0))
   const cylinder = geo(new THREE.CylinderGeometry(0.5, 0.5, 1, 20))
@@ -292,10 +244,15 @@ export function buildTempleScene(
     mesh.scale.set(...scale)
     return place(mesh, pos)
   }
+  /** 多個靜態的共用幾何：各自一個 Mesh，之後依材質合併（每個都需要自己的烘焙貼圖區域，不能用 InstancedMesh）。 */
+  const many = (g: THREE.BufferGeometry, s: Surface, items: ReadonlyArray<{ pos: V3; scale: V3 }>) => {
+    for (const it of items) add(g, s, it.pos, it.scale)
+  }
   const roof = (pos: V3, w: number, d: number, h: number, rw: number, rd: number, lift: number) =>
     place(new THREE.Mesh(geo(hipRoof(w, d, h, rw, rd, lift, m.roof.tile)), m.roof.material), pos)
 
   const tmp = new THREE.Object3D()
+  /** 會動的物件（樹冠、晾衣）與遠山：InstancedMesh，不接收烘焙貼圖。 */
   const instanced = (
     g: THREE.BufferGeometry,
     material: THREE.Material,
@@ -342,9 +299,7 @@ export function buildTempleScene(
   // 匾額：深色木框加上寫有殿名的貼圖
   // 前排柱子在 x=±1.4（半徑 0.21），匾額寬度需小於 2.38 才不被遮住。
   box(m.woodDark, [0, base + 2.72, hallCz + 3.74], [2.36, 0.5, 0.06])
-  const plaque = new THREE.Mesh(geo(new THREE.PlaneGeometry(2.24, 0.38)), std({ map: tracker.track(plaqueTexture(TEMPLE_NAME)), roughness: 0.7 }))
-  plaque.position.set(0, base + 2.72, hallCz + 3.78)
-  root.add(plaque)
+  place(new THREE.Mesh(geo(new THREE.PlaneGeometry(2.24, 0.38)), m.plaque.material), [0, base + 2.72, hallCz + 3.78])
 
   const pillarH = 3.2
   const pillars: Array<{ pos: V3; scale: V3 }> = []
@@ -364,7 +319,7 @@ export function buildTempleScene(
   for (const [dx, dz] of [[-1.6, -1.6], [1.6, -1.6], [-1.6, 1.6], [1.6, 1.6]] as const) {
     pillars.push({ pos: [bx + dx, pavBase + pavH / 2, bz + dz], scale: [0.3, pavH, 0.3] })
   }
-  instanced(cylinder, m.lacquer.material, pillars)
+  many(cylinder, m.lacquer, pillars)
 
   const beamY = base + pillarH
   box(m.woodDark, [hallCx, beamY + 0.2, hallCz], [14, 0.4, 9.6])
@@ -373,6 +328,7 @@ export function buildTempleScene(
   roof([hallCx, beamY + 3.05, hallCz], 9.8, 6, 1.7, 5.2, 0, 0.6)
   box(m.roof, [hallCx, beamY + 4.8, hallCz], [5.4, 0.22, 0.3])
   const finialGeo = geo(new THREE.OctahedronGeometry(0.28, 1))
+  finialGeo.userData.lightmap = 'uniform' // 屋脊上的小飾物，整個用同一個烘焙值
   add(finialGeo, m.gold, [hallCx - 2.7, beamY + 5.05, hallCz], [1, 1.6, 1])
   add(finialGeo, m.gold, [hallCx + 2.7, beamY + 5.05, hallCz], [1, 1.6, 1])
 
@@ -387,6 +343,7 @@ export function buildTempleScene(
   const bellProfile = [
     [0, -1.25], [0.62, -1.25], [0.58, -1.05], [0.48, -0.6], [0.44, -0.2], [0.4, -0.05], [0, 0],
   ].map(([x, y]) => new THREE.Vector2(x, y))
+  // 鐘擺動時烘焙值跟著鐘走（以靜止姿態烘焙，擺幅小）
   const bell = new THREE.Mesh(geo(new THREE.LatheGeometry(bellProfile, 32)), m.bronze.material)
   bell.position.y = -0.15
   bellPivot.add(bell)
@@ -396,25 +353,12 @@ export function buildTempleScene(
   const censerProfile = [
     [0, 0], [0.35, 0], [0.3, 0.25], [0.7, 0.45], [0.78, 0.85], [0.72, 0.9], [0.6, 0.62], [0, 0.6],
   ].map(([x, y]) => new THREE.Vector2(x, y))
-  const censerMesh = new THREE.Mesh(geo(new THREE.LatheGeometry(censerProfile, 32)), m.bronze.material)
-  censerMesh.position.set(CENSER.x, 0.3, CENSER.z)
-  root.add(censerMesh)
-  instanced(
+  place(new THREE.Mesh(geo(new THREE.LatheGeometry(censerProfile, 32)), m.bronze.material), [CENSER.x, 0.3, CENSER.z])
+  many(
     cylinder,
-    m.lacquer.material,
+    m.lacquer,
     [-0.12, 0, 0.12].map((dx, i) => ({ pos: [CENSER.x + dx, 1.45, CENSER.z + (i - 1) * 0.04] as V3, scale: [0.03, 0.9, 0.03] as V3 })),
   )
-
-  const smokeTex = tracker.track(softCircleTexture('rgba(255,255,255,0.9)', 'rgba(255,255,255,0)'))
-  const smoke: Array<{ sprite: THREE.Sprite; material: THREE.SpriteMaterial; phase: number }> = []
-  for (let i = 0; i < 5; i++) {
-    const material = tracker.track(
-      new THREE.SpriteMaterial({ map: smokeTex, color: '#eef0f2', transparent: true, depthWrite: false, opacity: 0 }),
-    )
-    const sprite = new THREE.Sprite(material)
-    root.add(sprite)
-    smoke.push({ sprite, material, phase: i / 5 })
-  }
 
   // 石燈籠
   for (const l of LANTERNS) {
@@ -443,10 +387,10 @@ export function buildTempleScene(
     add(pyramid, m.roof, [side * WALL.gate, 2.4, WALL.front], [1.3, 0.5, 1.3])
   }
 
-  // 樹
-  instanced(
+  // 樹：樹幹靜態；樹冠隨風輕晃，以靜止姿態把影子烘進地面
+  many(
     cylinder,
-    m.bark.material,
+    m.bark,
     TREES.map((t) => ({ pos: [t.x, 1.1 * t.scale, t.z] as V3, scale: [0.35 * t.scale, 2.2 * t.scale, 0.35 * t.scale] as V3 })),
   )
   const canopyItems = TREES.flatMap((t, i) => [
@@ -455,7 +399,7 @@ export function buildTempleScene(
   ])
   const canopyMesh = instanced(geo(canopyGeometry()), m.canopy.material, canopyItems)
 
-  // 落葉：一個 InstancedMesh，位置是時間的純函式（不保存狀態）。
+  // 落葉：一個 InstancedMesh，位置是時間的純函式（不保存狀態）。不參與烘焙。
   const LEAF_COUNT = 28
   const leaves = new THREE.InstancedMesh(
     geo(new THREE.PlaneGeometry(0.2, 0.11)),
@@ -468,9 +412,9 @@ export function buildTempleScene(
 
   // 晾在竹竿上的僧袍（在可走範圍外，不需要碰撞）
   const LINE = { x: -20.6, z0: -1, z1: 3.4 }
-  instanced(
+  many(
     cylinder,
-    m.bark.material,
+    m.bark,
     [LINE.z0, LINE.z1].map((z) => ({ pos: [LINE.x, 1, z] as V3, scale: [0.09, 2, 0.09] as V3 })),
   )
   box(m.woodDark, [LINE.x, 1.85, (LINE.z0 + LINE.z1) / 2], [0.05, 0.05, LINE.z1 - LINE.z0 + 0.4])
@@ -483,7 +427,7 @@ export function buildTempleScene(
   ].map((r) => ({ pos: [LINE.x, 1.83, r.z] as V3, scale: [1, 1, 1] as V3, color: r.color }))
   const robeMesh = instanced(robeGeo, m.cloth.material, robeItems)
 
-  // 遠山（融入霧中）
+  // 遠山（融入霧中）：不投影、不受影、不參與烘焙
   const mountainMesh = instanced(
     geo(new THREE.ConeGeometry(1, 1, 7, 1)),
     m.mountain.material,
@@ -501,13 +445,176 @@ export function buildTempleScene(
     })),
   )
 
-  // 靜態方塊依材質合併，減少 draw call（陰影開啟時每個 draw call 會多畫一次）。
+  // 烘焙貼圖的 uv1，接著靜態方塊依材質合併，減少 draw call。
+  const groundMaterials = new Set<THREE.Material>(GROUND_SURFACES.map((k) => m[k].material))
+  const atlas = prepareLightmapUvs(root, groundMaterials, tracker)
   mergeStatic(root, tracker, (o) => o === ground || o === bellPivot)
   root.traverse((o) => {
-    if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
+    if (o instanceof THREE.Mesh) o.receiveShadow = true
   })
-  for (const o of [ground, mountainMesh, leaves]) o.castShadow = false
   mountainMesh.receiveShadow = false
+  const bake = collectBakeSetup(root, groundMaterials, atlas, [canopyMesh, robeMesh], [ground, mountainMesh, leaves])
+
+  return { root, ground, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, bake }
+}
+
+/** 以素色材質建構庭院（不載入貼圖），供烘焙匯出腳本與測試使用。 */
+export function buildPlainCourtyard(tracker: ResourceTracker): Courtyard {
+  const surfaces = Object.fromEntries(
+    Object.entries(SURFACE_SPECS).map(([key, spec]) => [
+      key,
+      {
+        material: tracker.trackMaterial(new THREE.MeshStandardMaterial({ color: 'tex' in spec ? spec.tex.fallback : spec.color, ...spec.params })),
+        tile: 'tex' in spec ? spec.tex.tile : 1,
+      },
+    ]),
+  ) as Record<keyof typeof SURFACE_SPECS, Surface>
+  const plaque: Surface = { material: tracker.trackMaterial(new THREE.MeshStandardMaterial()), tile: 1 }
+  return buildCourtyard({ ...surfaces, plaque }, tracker)
+}
+
+export interface TempleScene {
+  root: THREE.Group
+  /** 可點擊行走的地面，供射線檢測使用。 */
+  walkSurface: THREE.Object3D
+  /** 環境動畫（燈籠、香煙、樹冠、落葉、晾衣、鐘擺）。t 為秒。 */
+  update(t: number, dt: number): void
+  /** 觸發鐘的擺動。 */
+  swingBell(): void
+  /** 是否有需要持續重繪的短暫動態（例如鐘擺尚未停止）。 */
+  hasTransientMotion(): boolean
+}
+
+/**
+ * 建立庭院。貼圖解析度與細節貼圖依建立當下的畫質決定（之後切換畫質於下次載入生效）。
+ * onChange 在貼圖載入完成時呼叫，讓依需求繪製的迴圈重繪。
+ *
+ * 靜態物件的陰影與環境光遮蔽來自事先烘焙的貼圖（`courtyardBake.ts`）；烘焙貼圖套上之後不再進即時陰影貼圖。
+ * 烘焙貼圖載入前、載入失敗或與目前幾何不符時，靜態物件照舊投射即時陰影（只有開啟陰影貼圖的畫質看得到）。
+ */
+export function buildTempleScene(
+  renderer: THREE.WebGLRenderer,
+  tracker: ResourceTracker,
+  preset: QualityPreset,
+  onChange: () => void,
+): TempleScene {
+  const std = (params: THREE.MeshStandardMaterialParameters) => tracker.trackMaterial(new THREE.MeshStandardMaterial(params))
+  const flat = (color: string, params: THREE.MeshStandardMaterialParameters = {}): Surface => ({
+    material: std({ color, roughness: 0.85, ...params }),
+    tile: 1,
+  })
+
+  // KTX2（BasisLZ）：手機轉成 ASTC／ETC2、桌面轉成 BC，GPU 記憶體約為未壓縮的 1/4～1/8，
+  // 也省掉主執行緒解 JPEG 與產生 mipmap。轉碼 worker 在全部貼圖載入後釋放。
+  const loader = tracker.track(new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}basis/`).detectSupport(renderer))
+  let pending = 0
+  const settle = () => {
+    if (--pending === 0) loader.dispose()
+  }
+  const res = preset.textureSize === 1024 ? '1k' : '512'
+  const anisotropy = preset.textureSize === 1024 ? 8 : 2
+  /** 同一張貼圖只載入與上傳一次，多個材質共用（建立材質都在任何貼圖載入完成之前）。 */
+  const textures = new Map<string, Array<(t: THREE.Texture) => void>>()
+  const loadShared = (url: string, setup: (t: THREE.Texture) => void, onFail: () => void = () => {}) => {
+    let waiting = textures.get(url)
+    if (!waiting) {
+      const list: Array<(t: THREE.Texture) => void> = []
+      textures.set(url, (waiting = list))
+      pending++
+      loader.load(
+        url,
+        (tex) => {
+          settle()
+          tracker.track(tex)
+          setup(tex)
+          list.forEach((f) => f(tex))
+          onChange()
+        },
+        undefined,
+        (err) => {
+          settle()
+          console.warn('貼圖載入失敗', url, err)
+          onFail()
+        },
+      )
+    }
+    return waiting
+  }
+  /** 寫實材質。貼圖載入前先用 fallback 底色，載入後才套上，避免畫面先變黑；載入失敗就維持底色。 */
+  const pbr = (def: TexDef, tint = '#ffffff', params: THREE.MeshStandardMaterialParameters = {}): Surface => {
+    const material = std({ color: def.fallback, roughness: 0.9, ...params })
+    const load = (kind: string, apply: (t: THREE.Texture) => void) => {
+      const waiting = loadShared(`${import.meta.env.BASE_URL}textures/${def.id}_${kind}_${res}.ktx2`, (tex) => {
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+        tex.anisotropy = anisotropy
+        // 色彩空間由 KTX2 檔頭決定（底色為 sRGB，法線與粗糙度為線性）。
+      })
+      waiting.push((t) => {
+        apply(t)
+        material.needsUpdate = true
+      })
+    }
+    load('diff', (t) => {
+      material.map = t
+      material.color.set(tint)
+    })
+    load('nor', (t) => (material.normalMap = t))
+    if (preset.detailMaps >= 2) {
+      load('rough', (t) => {
+        material.roughnessMap = t
+        material.roughness = 1
+      })
+    }
+    return { material, tile: def.tile }
+  }
+
+  const specs = SURFACE_SPECS
+  const m = Object.fromEntries(
+    Object.entries(specs).map(([key, spec]) => [key, 'tex' in spec ? pbr(spec.tex, spec.tint, spec.params) : flat(spec.color, spec.params)]),
+  ) as Record<keyof typeof specs, Surface>
+  const plaque: Surface = { material: std({ map: tracker.track(plaqueTexture(TEMPLE_NAME)), roughness: 0.7 }), tile: 1 }
+  const court = buildCourtyard({ ...m, plaque }, tracker)
+  const { root, ground, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, bake } = court
+
+  // 烘焙貼圖：兩張（圖集、地面）都套上之後，靜態物件才停止投射即時陰影。
+  for (const o of bake.casters) o.castShadow = true
+  for (const mat of [...bake.atlasMaterials, ...bake.groundMaterials]) mat.onBeforeCompile = patchBakedSun
+  // 開發模式才比對指紋：不符時退回即時陰影並警告（提醒重新烘焙）。正式版不計算指紋、直接載入——
+  // 一致性由 courtyardBake.test.ts 在 CI 保證，而不同 JS 引擎的浮點末位差異可能讓指紋不同，
+  // 那時退回反而讓手機（標準畫質沒有陰影貼圖）整個庭院沒有影子。
+  const stale = import.meta.env.DEV && bake.fingerprint() !== BAKED_FINGERPRINT
+  if (stale) {
+    console.warn('庭院烘焙貼圖與目前幾何不符，改用即時陰影。請執行 npm run bake:lightmaps', BAKED_FINGERPRINT)
+  } else {
+    let applied = 0
+    const lightmap = (kind: 'atlas' | 'ground', materials: ReadonlySet<THREE.Material>) => {
+      loadShared(lightmapUrl(kind, preset.textureSize), (tex) => {
+        tex.channel = 1 // 取 uv1
+      }).push((t) => {
+        for (const mat of materials) {
+          ;(mat as THREE.MeshStandardMaterial).aoMap = t
+          mat.needsUpdate = true
+        }
+        if (++applied === 2) for (const o of bake.casters) o.castShadow = false
+      })
+    }
+    lightmap('atlas', bake.atlasMaterials)
+    lightmap('ground', bake.groundMaterials)
+  }
+
+  const smokeTex = tracker.track(softCircleTexture('rgba(255,255,255,0.9)', 'rgba(255,255,255,0)'))
+  const smoke: Array<{ sprite: THREE.Sprite; material: THREE.SpriteMaterial; phase: number }> = []
+  for (let i = 0; i < 5; i++) {
+    const material = tracker.track(
+      new THREE.SpriteMaterial({ map: smokeTex, color: '#eef0f2', transparent: true, depthWrite: false, opacity: 0 }),
+    )
+    const sprite = new THREE.Sprite(material)
+    root.add(sprite)
+    smoke.push({ sprite, material, phase: i / 5 })
+  }
+
+  const tmp = new THREE.Object3D()
+  const LEAF_COUNT = leaves.count
 
   // 鐘擺：阻尼簡諧運動
   let bellAngle = 0

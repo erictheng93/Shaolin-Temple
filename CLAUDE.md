@@ -23,6 +23,7 @@ npm run build                        # 型別檢查 + 建置到 web/dist
 npm run mock -- 20                   # mock 伺服器 ws://localhost:8080/ws，20 個機器人
 npm run build:textures               # assets/textures/*.jpg → public/textures/*.ktx2（需 KTX-Software 的 ktx）
 npm run build:avatar                 # 以程式產生 public/models/monk.glb 與 monk-lod.glb（不依賴外部模型檔）
+npm run bake:lightmaps               # 庭院靜態光照烘焙：匯出幾何 → Blender（Cycles）→ public/lightmaps/*.ktx2（需 Blender 與 ktx）
 ```
 
 - 環境變數見 `web/.env.example`：`VITE_WS_URL`（未設定＝離線模式）。本機寫在 `web/.env.local`。
@@ -41,6 +42,7 @@ npm run build:avatar                 # 以程式產生 public/models/monk.glb �
 - **渲染排程**：前景時一律以畫質的幀率上限繪製（標準 30、高畫質 60 FPS），庭院有持續的環境動畫，所以不會停止迴圈；15 秒沒有操作也沒有移動時降到 20 FPS，一有操作立即恢復。另外由 `core/AdaptiveQuality.ts` 依實際幀間隔動態調整（網頁讀不到溫度）：變慢約 2 秒就降一級（降低繪製解析度、縮小完整模型與投影的範圍），順暢約 30 秒才升回；等級表是 `ADAPTIVE_LEVELS`。背景分頁停止迴圈、暫停 AudioContext、停止送位置。改動任何會讓畫面變化的狀態，記得呼叫 `wake()`。
 - **角色繪製**：角色是 Q 版小沙彌公仔（`public/models/monk.glb`，沒有骨架）。身體（袍與鞋）與膚色部分（頭與手）與臉各分近、遠兩批，加上影子，以 InstancedMesh 批次繪製（固定 7 個 draw call）：離本機玩家 `nearRadius` 內用完整模型並投影，之外用 `monk-lod.glb` 且不投影；動畫是公仔式的：整尊繞腳底傾斜；蹲坐時壓扁、走路時彈跳只作用在身體（袍與鞋），頭、耳朵、手與臉用不縮放的剛體矩陣只隨肩膀（`SHOULDER_HEIGHT`）升降，不會變形（`AvatarFactory.sync()`）；`nod` 是整尊小幅前傾點頭，`rig.head` 的旋轉仍不會顯示。整尊由 `scripts/build-avatar.mjs` 以光滑的橢球與旋轉體產生（頭、耳朵、鐘形的袍、寬袖、合十的手、鞋尖），造型要改就改腳本裡的數字再重新產生。臉是貼合頭部曲面的一層（近、遠都畫，各取自該 tier 自己的膚色幾何，不投影），五官畫在執行時產生的圖集上，每格一種表情（`FACE_CALM` 豆豆眼、`FACE_SMILE` 瞇瞇笑眼）；動畫片段以 `rig.face` 指定表情，`AnimationSystem.apply()` 每幀重設為平常的臉。容量 `AVATAR_CAPACITY`（160）須大於最高畫質的可見人數；名牌只顯示最近 12 人。
 - **庭院視覺**：`render/TempleScene.ts` 以程序化幾何＋ Poly Haven CC0 貼圖的 `MeshStandardMaterial` 建構（貼圖為 KTX2，在 `web/public/textures/`，原檔在 `web/assets/textures/`；UV 以公尺為單位）；`SceneRenderer` 負責程序化天空、天空環境貼圖、戶外色調映射與主光陰影。陰影、貼圖解析度與細節貼圖依 `core/settings.ts` 的畫質預設在載入時決定。細節與量測見 docs/TECH_STACK.md「庭院視覺」。
+- **靜態光照烘焙**：庭院靜態物件的影子與 AO 是 Blender 烘焙的貼圖（RGB = AO 走 `aoMap`，A = 太陽可見度由 `patchBakedSun` 乘在平行光上），不進即時陰影貼圖；標準畫質沒有陰影貼圖，高畫質的陰影貼圖只給近處角色。uv1 由 `render/lightmapUv.ts` 在執行時產生（與烘焙匯出同一份程式）；幾何指紋不符時 `courtyardBake.test.ts` 失敗，開發模式另會退回即時陰影並警告（正式版不計算指紋、直接載入，貼圖網址帶 `?v=<指紋>`）：**改了庭院幾何、太陽方向（`OUTDOOR_SUN_POSITION`）或 `BAKE_SETTINGS` 要重跑 `npm run bake:lightmaps`**。會動的物件（樹冠、晾衣）用 InstancedMesh 且不可與接收烘焙的物件共用材質；新增的靜態物件用一般 Mesh。角色走進烘焙影子不會變暗（已知限制）。細節見 docs/TECH_STACK.md「靜態光照烘焙」。
 - **場地與場景**：`world/zones.ts` 定義庭院與殿內兩個場景（可走範圍、障礙物、出生點、出入口、鏡頭範圍），庭院的細節在 `world/layout.ts`。場景建構、碰撞、尋路（`world/pathfind.ts`）都讀這份資料，改場地要一致；`zones.test.ts` 檢查落點不會卡進障礙物或來回瞬移。殿內場景在 `render/HallScene.ts`，第一次進殿才建立；靜態物件以 `render/mergeStatic.ts` 依材質合併。
 - **神像**：`render/statues.ts` 為程序化造型，每尊一個插槽，可用 `loadStatueModel()` 換成寫實 glTF。方位依傳統以神明為主體：觀音在主佛左手邊（+x，龍邊），關聖帝君在右手邊（-x，虎邊）。
 

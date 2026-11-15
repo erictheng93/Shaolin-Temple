@@ -1,3 +1,7 @@
 node_modules
 dist
 *.local
+# 烘焙匯出的中間檔（npm run bake:lightmaps）
+.bake/
+# 神像模型的下載原檔（體積大，不提交；處理後的 glb 才進 repo）
+.statues-src/

@@ -111,7 +111,7 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 | 路徑 | 職責 |
 | --- | --- |
 | `src/game/GameCore.ts` | 擁有所有子系統；渲染排程、生命週期、網路訊息分派、UI 橋接 |
-| `src/game/render/` | `SceneRenderer`（renderer、鏡頭、畫質、context loss）、`TempleScene`（庭院：程序化幾何＋寫實材質）、`AvatarFactory`、`ResourceTracker`（GPU 資源擁有權） |
+| `src/game/render/` | `SceneRenderer`（renderer、鏡頭、畫質、context loss）、`TempleScene`（庭院：程序化幾何＋寫實材質）、`courtyardBake`／`lightmapUv`（庭院靜態光照烘焙）、`AvatarFactory`、`ResourceTracker`（GPU 資源擁有權） |
 | `src/game/anim/` | 程序化角色動畫與動作片段表 |
 | `src/game/audio/` | `AudioManager`：風聲、鳥叫、遠處鐘聲與短音效（鐘、木魚、頌缽）即時合成、靜音／背景時暫停運算 |
 | `src/game/net/` | `protocol`（協定草案與驗證）、`NetworkClient`（重連、心跳、節流、確認重送）、`OutboundQueue`、`backoff` |
@@ -141,14 +141,14 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 ### 已知限制與後續
 
 - 角色是 Q 版小沙彌公仔：`web/scripts/build-avatar.mjs`（`npm run build:avatar`）以程式產生整尊模型（不依賴外部模型檔）：光滑的橢球與旋轉體組成頭、耳朵、鐘形的袍、寬袖、合十的手與鞋尖，沒有稜角；輸出 `web/public/models/monk.glb`（約 4,400 面、103 KB）與遠處用的 `monk-lod.glb`（約 1,600 面、41 KB），各含 body 與 skin 兩個節點（袍色來自 instanceColor，袖口與鞋子以頂點色壓暗）。臉不在模型上，由 `AvatarFactory` 把五官畫在圖集、貼合在頭的正面。沒有 UV 與骨架，動畫是整尊傾斜、壓扁與彈跳；之後若用 Blender 展 UV、烘焙法線，輸出同樣兩個節點即可取代。模型載入前或載入失敗時以圓柱與球代替。
-- 角色以 InstancedMesh 批次繪製，不論人數都是 7 個 draw call：身體、膚色部分與臉（五官圖集，各取自該 tier 的頭部幾何，不投影）各分近、遠兩批，加上影子。離本機玩家 `nearRadius` 內用完整模型（約 4.4 千面）並投射即時陰影；之外用低面數模型（`monk-lod.glb`，約 1.6 千面、41 KB）且不投影，只留腳下的假影子。桌面 Chromium、mock 伺服器 15 人、高畫質：等級 0 時 56～58 draw call、約 15.8 萬三角形（含陰影 pass）；等級 3 時約 5.6～8.7 萬三角形、繪製解析度由 1280×720 降到 768×432。手機未實測。名牌為個別 sprite，只顯示最近 12 人。批次容量 160（`AVATAR_CAPACITY`），需大於最高畫質的可見人數。
+- 角色以 InstancedMesh 批次繪製，不論人數都是 7 個 draw call：身體、膚色部分與臉（五官圖集，各取自該 tier 的頭部幾何，不投影）各分近、遠兩批，加上影子。離本機玩家 `nearRadius` 內用完整模型（約 4.4 千面）並投射即時陰影（只有高畫質有陰影貼圖）；之外用低面數模型（`monk-lod.glb`，約 1.6 千面、41 KB）且不投影，只留腳下的假影子。桌面 Chromium、mock 伺服器 15 人、高畫質：等級 0 時 56～58 draw call、約 15.8 萬三角形（含陰影 pass）；等級 3 時約 5.6～8.7 萬三角形、繪製解析度由 1280×720 降到 768×432。手機未實測。名牌為個別 sprite，只顯示最近 12 人。批次容量 160（`AVATAR_CAPACITY`），需大於最高畫質的可見人數。
 - 可見人數上限（標準 60／高畫質 120）仍需依手機實測調整；人數多時主要成本轉為三角形數與透明的影子重疊。
 - 移動碰撞只把角色推出障礙物，不做尋路。
 - 音效為合成音色，正式錄音可透過 `AudioManager.loadSfx()` 替換。
 - 環境音（風聲、鳥叫、遠鐘）見下方「環境音」。
 - 協定為 JSON 草案，欄位以 Rust 後端定案為準。
 - 尚未做手機實機的發熱、耗電與 20～30 分鐘幀時間測試。
-- 上方「已量測」表格的庭院數字是改為寫實材質之前量的，draw call 與三角形數以「庭院視覺」一節為準；FPS 尚未重新量測。
+- 上方「已量測」表格的庭院數字是改為寫實材質之前量的，draw call 與三角形數以「庭院視覺」一節為準（含靜態光照烘焙後的數字）；FPS 尚未重新量測。
 
 ### 庭院視覺（寫實材質）
 
@@ -156,18 +156,40 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 
 - **材質**：`MeshStandardMaterial`＋ Poly Haven 的 CC0 貼圖（鋪石、石牆、紅灰泥、屋瓦、草地、樹皮），原檔放在 `web/assets/textures/<id>_<diff|nor|rough>_<512|1k>.jpg`，以 `npm run build:textures`（需 Khronos KTX-Software 的 `ktx`，PATH 或環境變數 `KTX`）編碼成 `web/public/textures/` 的同名 `.ktx2`（ETC1S/BasisLZ，含 mipmap）。執行時由 `KTX2Loader` 依裝置轉成 ASTC／ETC2（手機）或 BC（桌面），GPU 記憶體約為未壓縮的 1/4～1/8，也省掉主執行緒解 JPEG 與產生 mipmap；轉碼器是 three 附的 `basis_transcoder`，複製在 `web/public/basis/`，升級 three 時要重新複製（`basis.test.ts` 會檢查）。UV 以公尺為單位（`texBox`、`hipRoof`），紋理密度不隨物件大小改變。貼圖載入前顯示底色，載入後才套用；相同網址只上傳一次。
 - **光照**：程序化天空（three 的 `Sky`，大氣散射）烘成 PMREM 環境貼圖提供環境光與反射，不需要 HDR 檔；低角度暖色主光；ACES 色調映射只用於戶外，殿內維持原本未經色調映射的畫面。WebGL context 恢復時重新烘環境貼圖。
-- **陰影**：一盞平行光的陰影貼圖涵蓋整個庭院，兩種畫質都開啟。
+- **陰影**：靜態物件的陰影與環境光遮蔽事先在 Blender 烘焙（見下方「靜態光照烘焙」），執行時靜態物件不進陰影貼圖。即時陰影貼圖只留給角色：標準畫質（手機預設）完全不建陰影貼圖，角色只有腳下的假影子；高畫質保留 2048 的陰影貼圖，只有近處角色投影，地面與靜態物件接收。
 - **屋頂與圍牆**：`hipRoof()` 產生下緩上陡、四角起翹的曲面屋頂（主殿重簷、鐘亭攢尖）；庭院外圍有石基紅牆瓦頂的圍牆與山門缺口，距可走範圍約 3 公尺，不需要碰撞。
 - **未採用後製**：試過 GTAO 環境光遮蔽與泛光，透明的香煙 sprite 在遮蔽 pass 產生黑塊、天空泛光讓畫面發白，已移除。
 
-| 畫質 | 陰影貼圖 | 貼圖 | 細節貼圖 | 貼圖下載量 |
-| --- | --- | --- | --- | --- |
-| 標準（手機預設） | 1024 | 512 | 底色＋法線 | KTX2 約 0.88 MB（JPG 為 0.61 MB）＋轉碼器 gzip 約 0.26 MB |
-| 高畫質（電腦預設） | 2048 | 1k | 底色＋法線＋粗糙度 | KTX2 約 3.6 MB（JPG 為 12.7 MB）＋轉碼器 |
+| 畫質 | 即時陰影貼圖 | 貼圖 | 細節貼圖 | 烘焙貼圖 | 貼圖下載量 |
+| --- | --- | --- | --- | --- | --- |
+| 標準（手機預設） | 無（角色只有假影子） | 512 | 底色＋法線 | 512（圖集＋地面） | KTX2 約 0.88 MB（JPG 為 0.61 MB）＋烘焙 116 KB＋轉碼器 gzip 約 0.26 MB |
+| 高畫質（電腦預設） | 2048（只有近處角色投影） | 1k | 底色＋法線＋粗糙度 | 1k（圖集＋地面） | KTX2 約 3.6 MB（JPG 為 12.7 MB）＋烘焙 350 KB＋轉碼器 |
 
 以上各項於載入時決定，遊戲中切換畫質要重新載入才生效。
 
 量測（桌面 Chromium、Playwright，單人、離線、靜止，非手機實測）：高畫質 1280×720 為 46 draw call、約 2.65 萬三角形、每幀 CPU 約 1.5 ms。標準畫質尚未量測。寫實材質、陰影與靜止時不降幀在手機 GPU 上的實際幀率與發熱尚未量測。
+
+#### 靜態光照烘焙（2026-11-15）
+
+- **內容**：每張烘焙貼圖是線性的 LDR 遮罩（不是 HDR lightmap）：RGB = 環境光遮蔽（三通道相同），A = 太陽可見度（靜態物件互相投下的影子）。ETC1S 的 RGB 與 A 是兩個獨立壓縮的 slice，影子硬邊不會干擾 AO（若放在 R／G，同一個 4×4 區塊內各通道只能一起變化）。AO 走 three 內建的 `aoMap`（只壓暗半球光與天空環境光、反射）；太陽可見度由 `courtyardBake.ts` 的 `patchBakedSun`（`onBeforeCompile`）乘在平行光的直接光上，法線貼圖與太陽高光照常計算。沒有 `aoMap` 時沒有 `USE_AOMAP`，等同未修改；只裝在庭院接收烘焙的材質，殿內不受影響。
+- **兩張貼圖**：地面（草地、鋪石、步道）以世界座標 xz 平面投影到 x、z ∈ [-30, 30]（範圍外取邊緣值，所以範圍要涵蓋圍牆影子）；其餘靜態物件排進圖集。Blender 裡地面類物件以一塊 y = 0.06 的平面代表（高於鋪石與步道頂面），共用同一層結果。
+- **第二組 UV（uv1）在執行時產生**：`render/lightmapUv.ts` 依幾何的 groups 切 chart（方塊每面、圓柱側面與上下蓋、屋頂每坡；`hipRoof` 為此加了 group），chart 內沿用原本以公尺為單位的貼圖 UV，以實際尺寸換算成一致的密度（朝下的面 1/4），再以 shelf packing 排進 1024 的圖集（chart 四周 6 texel，Blender 以 margin 延伸填滿）。執行時與烘焙匯出走同一份程式，不下載 UV 資料。靜態的共用幾何（柱、樹幹、香、竹竿）因此由 InstancedMesh 改為一般 Mesh 再依材質合併（每個需要自己的烘焙區域；draw call 不增加）。`mergeStatic` 保留 uv1。
+- **一致性**：匯出時算出幾何指紋（接收者的世界座標與 uv1、擋光物件的靜止姿態、太陽方向與烘焙設定，量化後雜湊），烘焙完成後寫進 `courtyardBake.generated.ts`。`courtyardBake.test.ts` 在 CI 比對目前程式算出的指紋，不符就失敗：改了庭院幾何、太陽方向或烘焙設定就要重新烘焙。執行時只在開發模式（`import.meta.env.DEV`）重算並比對，不符時退回即時陰影並在 console 警告；正式版不計算指紋（`fingerprint()` 為延遲計算，正式建置中沒有呼叫端），直接載入烘焙貼圖。理由：正式版若因 JS 引擎浮點差異誤判而退回，標準畫質（沒有陰影貼圖）的手機會整個庭院沒有影子。
+- **快取**：`public/` 下的檔案 Vite 不加雜湊，烘焙貼圖網址帶 `?v=<指紋>`，重新烘焙後網址改變，瀏覽器與 CDN 不會拿舊貼圖配新幾何。
+- **動態物件**：樹冠（隨風輕晃）、晾衣以靜止姿態當擋光物件烘進地面，本身不接收烘焙；鐘以靜止姿態烘焙並接收，擺動時烘焙值跟著鐘走（擺幅小）；燈籠只有自發光閃爍，照常烘焙；落葉、香煙、遠山不參與。
+- **退回**：烘焙貼圖載入前、載入失敗或（開發模式）指紋不符時，靜態物件照舊投射即時陰影（高畫質看得到；標準畫質沒有陰影貼圖，畫面沒有影子但其餘正常）。兩張都套上後才關閉靜態物件的投影。WebGL context 恢復後由 three 重新上傳（已以 `WEBGL_lose_context` 驗證）。
+- **載入成本**（正式建置、桌面 Chromium（headless，V8）、5 次，非手機）：產生 uv1（`prepareLightmapUvs`）中位數 12.6 ms（12.2～15.3）；依材質合併（`mergeStatic`，烘焙前就有，現在多帶 uv1）3.8 ms（3.6～6.6）；整理烘焙資料 0.1 ms（0～0.2）；指紋計算（只在開發模式執行）4.1 ms（3.6～5.7）。烘焙貼圖的轉碼在 worker，未計入。手機尚未量測，預期數倍於此。
+- **流程**：`npm run bake:lightmaps`（`scripts/bake-lightmaps.mjs`）以 Vite 在 Node 執行 `buildPlainCourtyard()`、匯出到 `web/.bake/`（不提交）→ `blender -b --factory-startup -P scripts/bake-lightmaps.py`（Blender 5.3、Cycles CPU，桌面約 30 秒；Blender 由 PATH 或環境變數 `BLENDER` 指定）→ 寫入指紋 → `build-textures.mjs lightmaps` 編碼成 `public/lightmaps/courtyard_{atlas,ground}_{512,1k}.ktx2`（PNG 原檔在 `assets/lightmaps/`，第一列是 uv1 的 v = 0）。也可 `--export-only` 後在已開啟的 Blender（例如經 MCP）設定 `BAKE_ARGS` 執行同一支 Python，再 `--finish`。不產生 .blend 檔。
+- **烘焙設定**（`BAKE_SETTINGS`）：太陽方向取自 `OUTDOOR_SUN_POSITION`（與 `SceneRenderer` 的戶外主光共用）、視直徑 1°；AO 距離 2.5 公尺、128 samples；太陽可見度＝兩次只含直接光的 DIFFUSE 相除（有影子 ÷ 全部不投影），32 samples。Cycles 的 SHADOW 烘焙在全影處不是 0，新 world 預設的 0.05 灰色環境光也會算進直接光，兩者都已排除。
+- **解析度**：圖集 texel 約 8.6 公分（1k）／17 公分（512）；地面約 5.9 公分（1k）／11.7 公分（512）。檔案大小：圖集 1k 192 KB、512 70 KB；地面 1k 158 KB、512 46 KB。
+- **已知限制**：uv1 在執行時產生，圖集排版依浮點比較（chart 大小以 ceil 取整、依高度排序）。不同 JS 引擎（例如 iOS 的 JavaScriptCore）的 Math.sin／cos／pow 末位若不同，極少數情況可能讓某個 chart 的大小或排序改變，使圖集排版與烘焙時不同、該處影子錯位；正式版不檢查指紋，不會發現。尚未在 iOS 實機驗證（桌面 Chromium 算出的指紋與 Node 相同）。若發生，可改為把 uv1 排版結果（chart 位置）隨貼圖一起發佈。角色走進烘焙的影子裡不會變暗（標準畫質角色只有腳下假影子；高畫質角色仍投影到地面）。太陽方向固定，不能做時間變化。標準畫質的 512 貼圖在牆面、屋頂上的影子邊緣較模糊；預算內（約 300 KB）可改用 1k 的地面貼圖（標準畫質合計約 227 KB），尚未採用。
+
+| 量測（桌面 Chromium＋swiftshader，單人、離線、入場視角，`renderer.info`） | 標準畫質 | 高畫質 |
+| --- | --- | --- |
+| 烘焙前（全部靜態物件進陰影貼圖） | 46～47 draw、約 3.5 萬三角形 | 46～47 draw、約 3.5 萬三角形 |
+| 烘焙後 | 26～27 draw、約 1.8 萬三角形 | 28～29 draw、約 2.2 萬三角形 |
+
+swiftshader 的幀時間沒有參考價值，手機 GPU 的幀率、發熱與耗電尚未量測。
 
 ### 殿內場景（少林寺）
 

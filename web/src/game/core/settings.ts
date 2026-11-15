@@ -9,7 +9,9 @@ export interface QualityPreset {
   /** 前景時的目標幀率（場景有持續的環境動畫，靜止時也以此幀率繪製）。 */
   activeFps: number
   antialias: boolean
-  /** 主光陰影貼圖邊長。於下次載入生效。 */
+  /**
+   * 主光即時陰影貼圖邊長；0 表示不建陰影貼圖。靜態物件的影子是烘焙的，陰影貼圖只給近處角色投影。於下次載入生效。
+   */
   shadowMapSize: number
   /** 場景貼圖解析度。於下次載入生效。 */
   textureSize: 512 | 1024
@@ -18,7 +20,7 @@ export interface QualityPreset {
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
-  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, antialias: false, shadowMapSize: 1024, textureSize: 512, detailMaps: 1 },
+  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1 },
   high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2 },
 }
 
