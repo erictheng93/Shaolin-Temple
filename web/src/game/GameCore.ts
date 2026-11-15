@@ -146,7 +146,7 @@ export class GameCore {
     })
     this.renderer.onResize = () => this.wake()
 
-    this.temple = buildTempleScene(this.tracker, preset, () => this.wake())
+    this.temple = buildTempleScene(this.renderer.renderer, this.tracker, preset, () => this.wake())
     this.renderer.scene.add(this.temple.root)
 
     const markerGeo = this.tracker.track(new THREE.RingGeometry(0.28, 0.4, 24))

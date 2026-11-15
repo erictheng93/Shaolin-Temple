@@ -1,0 +1,2 @@
+# three 附的轉碼器副本，須與 node_modules 逐位元相同（basis.test.ts）
+web/public/basis/** -text
