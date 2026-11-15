@@ -9,6 +9,23 @@ const emit = defineEmits<{ close: [] }>()
 const dialog = ref<HTMLElement | null>(null)
 const qualityLabels: Record<QualityLevel, string> = { medium: '標準', high: '高畫質' }
 
+/** 需要署名的素材（CC BY 4.0）；來源與授權的完整紀錄在 docs/ASSETS.md。 */
+const credits = [
+  {
+    use: '觀世音菩薩像',
+    title: '中国白瓷菩萨像 Chinese bodhisattva statue',
+    author: 'efyilin',
+    url: 'https://sketchfab.com/3d-models/chinese-bodhisattva-statue-3aa3accdebb0454a9eee5fd4fced0d19',
+  },
+  {
+    use: '媽祖像',
+    title: '9.拜殿神像 媽祖',
+    author: 'cadyunlin2021',
+    url: 'https://sketchfab.com/3d-models/9-2d5c1af855934957928e4e09bdde72e6',
+  },
+] as const
+const CC_BY = 'https://creativecommons.org/licenses/by/4.0/deed.zh-hant'
+
 const volumeFields = [
   { key: 'masterVolume', label: '總音量' },
   { key: 'musicVolume', label: '環境與音樂' },
@@ -67,11 +84,67 @@ const s = props.settings
           <span>顯示效能資訊</span>
         </label>
       </fieldset>
+
+      <fieldset class="credits">
+        <legend>素材來源</legend>
+        <ul>
+          <li v-for="c in credits" :key="c.url">
+            <span class="use">{{ c.use }}</span>
+            <a :href="c.url" target="_blank" rel="noopener noreferrer">{{ c.title }}</a>
+            <span class="meta">
+              作者 {{ c.author }} ·
+              <a :href="CC_BY" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>
+              · 已減面並重新烘焙貼圖
+            </span>
+          </li>
+        </ul>
+        <p class="note">
+          致謝：釋迦牟尼佛像取自
+          <a href="https://sketchfab.com/3d-models/197385-seated-buddha-d86bda08fa92458397596d2a42b30f46" target="_blank" rel="noopener noreferrer">Cleveland Museum of Art「1973.85 Seated Buddha」</a>（CC0）；場景貼圖取自
+          <a href="https://polyhaven.com/" target="_blank" rel="noopener noreferrer">Poly Haven</a>（CC0）。
+        </p>
+      </fieldset>
     </section>
   </div>
 </template>
 
 <style scoped>
+.credits ul {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.credits li {
+  display: grid;
+  gap: 2px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.credits .use {
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+.credits .meta {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+}
+
+.credits a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.credits li > a {
+  color: var(--accent);
+}
+
 .backdrop {
   position: absolute;
   inset: 0;

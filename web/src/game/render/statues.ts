@@ -1,19 +1,26 @@
 import * as THREE from 'three'
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import type { ResourceTracker } from './ResourceTracker'
 
 /**
- * 殿內三尊神像的風格化造型（程序化低多邊形）。
+ * 殿內三尊神像。正式造型是寫實模型（loadStatueModel()，素材來源見 docs/ASSETS.md），
+ * 模型下載完成前（或載入失敗時）顯示這裡的程序化造型：佛與觀音是風格化的低多邊形造型，
+ * 媽祖沒有程序化造型，以紅布覆蓋的神座佔位（buildVeiledPlaceholder），不會被誤認為其他神明。
  *
  * 每尊為一個 Group：原點在台座底面中心、面向 +z（面向參拜者）、單位公尺。
- * 寫實模型的替換方式見 loadStatueModel()：同樣的原點、朝向與高度，換掉 Group 內容即可。
- *
  * 方向：神像面向 +z，神像自身的左手在 +x、右手在 -x。
  */
 
-export type StatueId = 'buddha' | 'guanyin' | 'guangong'
+export type StatueId = 'buddha' | 'guanyin' | 'mazu'
 
-/** 每尊的參考總高（公尺，含台座），寫實模型縮放時以此對齊。 */
-export const STATUE_HEIGHT: Record<StatueId, number> = { buddha: 3.3, guanyin: 2.9, guangong: 3.2 }
+/** 寫實模型的層級：std 給標準畫質（手機），hi 給高畫質。 */
+export type StatueTier = 'std' | 'hi'
+
+/**
+ * 每尊寫實模型的總高（公尺，含台座與背光；媽祖含椅子與底座），模型依此等比縮放。
+ * 程序化的替代造型沿用原本的比例，不受此值影響。
+ */
+export const STATUE_HEIGHT: Record<StatueId, number> = { buddha: 3.8, guanyin: 2.7, mazu: 2.8 }
 
 type V3 = [number, number, number]
 
@@ -28,8 +35,6 @@ interface Kit {
     petal: THREE.BufferGeometry
     /** 細弧線（眉、眼、唇）：半圓管，y 取負值時開口朝上。 */
     brow: THREE.BufferGeometry
-    /** 鬍鬚：尖端朝下、頂端在原點的細長圓錐。 */
-    beard: THREE.BufferGeometry
   }
 }
 
@@ -51,17 +56,11 @@ export function createStatueKit(tracker: ResourceTracker): Kit {
       lotus: phong('#d6a64e', 60, '#ffe7b0'),
       white: phong('#f1ede4', 25, '#444'),
       skin: phong('#efd6bc', 20, '#332a20'),
-      redFace: phong('#a3302a', 25, '#402020'),
-      // 深色鱗甲（帶金屬感）與紅腰巾
-      armor: phong('#2e2c30', 45, '#6a6470'),
-      sash: phong('#a3231b', 15, '#331010'),
-      beard: lambert('#151515'),
-      green: phong('#2f5b44', 25, '#203028'),
-      lacquer: phong('#5a1f17', 50, '#664'),
-      steel: phong('#c7ccd2', 90, '#ffffff'),
       porcelain: phong('#e9f1f2', 80, '#ffffff'),
       willow: lambert('#6f9a52'),
-      dark: lambert('#2a2420'),
+      // 佔位用：覆蓋神像的紅布與深色漆木神座
+      veil: phong('#9e2219', 8, '#2a1010'),
+      lacquer: phong('#3a1a12', 40, '#443322'),
     },
     geo: {
       sphere: tracker.track(new THREE.SphereGeometry(1, 16, 12)),
@@ -70,7 +69,6 @@ export function createStatueKit(tracker: ResourceTracker): Kit {
       cyl: tracker.track(new THREE.CylinderGeometry(1, 1, 1, 16)),
       petal: tracker.track(petalGeometry()),
       brow: tracker.track(new THREE.TorusGeometry(1, 0.28, 5, 14, Math.PI)),
-      beard: tracker.track(new THREE.ConeGeometry(0.045, 1, 6).rotateX(Math.PI).translate(0, -0.5, 0)),
     },
   }
 }
@@ -280,156 +278,135 @@ export function buildGuanyin(kit: Kit): THREE.Group {
   return g
 }
 
-/** 在 a、b 兩點之間放一段圓柱（四肢、刀桿），兩端加圓球當關節。 */
-function limb(parent: THREE.Object3D, kit: Kit, a: V3, b: V3, r: number, m: THREE.Material, joints = true): void {
-  const va = new THREE.Vector3(...a)
-  const vb = new THREE.Vector3(...b)
-  const dir = vb.clone().sub(va)
-  const mesh = new THREE.Mesh(kit.geo.cyl, m)
-  mesh.position.copy(va).add(vb).multiplyScalar(0.5)
-  mesh.scale.set(r, dir.length(), r)
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize())
-  parent.add(mesh)
-  if (joints) for (const p of [a, b]) part(parent, kit.geo.sphere, m, p, [r, r, r])
-}
-
 /**
- * 關聖帝君：站姿持青龍偃月刀。紅臉、臥蠶眉、丹鳳眼、五綹長髯；綠色幞頭與紅纓，深色鱗甲配金飾，
- * 綠袍、紅腰帶、背後綠披風。右手（-x）於腰間斜握大刀，刀刃斜指前下方，刀桿斜向左肩後方；左手按腰帶。
+ * 媽祖模型下載完成前（或載入失敗時）的佔位：深色漆木神座上，以紅布覆蓋的坐像輪廓。
+ * 寺廟裡神像開光前或暫時請離時也以紅布覆蓋，不帶任何神明的特徵（臉、冠、持物），不會被誤認為其他神明。
  */
-export function buildGuangong(kit: Kit): THREE.Group {
+export function buildVeiledPlaceholder(kit: Kit): THREE.Group {
   const g = new THREE.Group()
-  g.name = 'statue:guangong'
+  g.name = 'statue:veiled'
   const { geo, mat } = kit
-  const armor = mat.armor!
-  const base = 0.25
-
-  // 台座
-  part(g, geo.box, mat.goldDeep!, [0, base / 2, 0.1], [1.25, base, 1.05])
-  part(g, geo.box, mat.gold!, [0, base - 0.01, 0.1], [1.3, 0.03, 1.1])
-
-  // 雙腿：戰靴、護脛（略為張開的站姿）
-  for (const side of [-1, 1]) {
-    const x = side * 0.17
-    part(g, geo.box, mat.dark!, [x * 1.15, base + 0.07, 0.08], [0.2, 0.14, 0.34])
-    limb(g, kit, [x * 1.1, base + 0.12, 0.02], [x, base + 0.7, 0], 0.09, mat.dark!)
-    part(g, geo.box, mat.gold!, [x * 1.1, base + 0.36, 0.085], [0.14, 0.32, 0.04])
-  }
-  // 甲裙：腰部往下張開
-  const skirt = lathe(kit, [[0, 1.0], [0.31, 1.0], [0.36, 0.76], [0.43, 0.52], [0.44, 0.5], [0, 0.5]], 18)
-  part(g, skirt, armor, [0, base, 0], [1, 1, 0.78])
-  // 前襬綠袍與紅腰巾垂帶
-  part(g, geo.box, mat.green!, [0, base + 0.7, 0.3], [0.3, 0.55, 0.04], [0.08, 0, 0])
-  part(g, geo.box, mat.sash!, [0.12, base + 0.78, 0.33], [0.08, 0.5, 0.03], [0.05, 0, -0.1])
-
-  // 身軀：鱗甲
-  const waistY = base + 1.0
-  const torso = lathe(kit, [[0, 0], [0.31, 0], [0.36, 0.25], [0.41, 0.55], [0.43, 0.72], [0.3, 0.83], [0.14, 0.88], [0, 0.88]], 20)
-  part(g, torso, armor, [0, waistY, 0], [1, 1, 0.72])
-  // 金色腰帶、紅腰巾、護心鏡、胸前金飾
-  part(g, geo.cyl, mat.gold!, [0, waistY + 0.04, 0], [0.33, 0.09, 0.25])
-  part(g, geo.cyl, mat.sash!, [0, waistY - 0.06, 0], [0.34, 0.08, 0.26])
-  part(g, geo.cyl, mat.gold!, [0, waistY + 0.48, 0.29], [0.12, 0.03, 0.12], [Math.PI / 2 - 0.15, 0, 0])
-  part(g, geo.box, mat.gold!, [0, waistY + 0.66, 0.24], [0.5, 0.06, 0.05])
-  // 綠袍外衣（肩到胸）與披風
-  part(g, geo.box, mat.green!, [0, waistY + 0.5, -0.22], [0.76, 0.75, 0.06])
-  part(g, geo.box, mat.green!, [0.02, waistY - 0.25, -0.33], [0.82, 1.35, 0.04], [-0.12, 0, 0])
-  part(g, geo.box, mat.green!, [0.42, waistY - 0.2, -0.12], [0.06, 1.2, 0.45], [0, 0, 0.12])
-
-  // 肩甲
-  const shoulderY = waistY + 0.75
-  for (const side of [-1, 1]) {
-    part(g, geo.sphere, mat.gold!, [side * 0.42, shoulderY, 0], [0.19, 0.13, 0.21])
-    part(g, geo.sphere, armor, [side * 0.46, shoulderY - 0.12, 0], [0.17, 0.12, 0.18])
-  }
-
-  // 青龍偃月刀：刀刃與刀桿接合處 p0 在右前下方，刀桿斜向左肩後方 p1
-  const p0: V3 = [-0.6, 0.9, 0.55]
-  const p1: V3 = [0.4, 3.05, -0.4]
-  const handT = (waistY + 0.08 - p0[1]) / (p1[1] - p0[1])
-  const hand: V3 = [p0[0] + (p1[0] - p0[0]) * handT, waistY + 0.08, p0[2] + (p1[2] - p0[2]) * handT]
-  // 右臂（-x）握刀、左臂（+x）按腰帶
-  limb(g, kit, [-0.42, shoulderY - 0.05, 0], [-0.58, waistY + 0.32, 0.12], 0.09, mat.green!)
-  limb(g, kit, [-0.58, waistY + 0.32, 0.12], hand, 0.075, armor)
-  part(g, geo.sphere, mat.redFace!, hand, [0.075, 0.075, 0.075])
-  limb(g, kit, [0.42, shoulderY - 0.05, 0], [0.56, waistY + 0.35, 0.02], 0.09, mat.green!)
-  limb(g, kit, [0.56, waistY + 0.35, 0.02], [0.34, waistY + 0.06, 0.22], 0.075, armor)
-  part(g, geo.sphere, mat.redFace!, [0.31, waistY + 0.06, 0.25], [0.07, 0.07, 0.07])
-
-  const glaive = new THREE.Group()
-  const dir = new THREE.Vector3(p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2])
-  const length = dir.length()
-  glaive.position.set(...p0)
-  glaive.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize())
-  glaive.rotateY(-0.9) // 讓刀面朝向參拜者
-  g.add(glaive)
-  part(glaive, geo.cyl, mat.lacquer!, [0, length / 2, 0], [0.026, length, 0.026])
-  part(glaive, geo.cyl, mat.gold!, [0, length + 0.05, 0], [0.03, 0.1, 0.03])
-  // 刀刃：沿刀桿延長線向下的彎月形
-  const blade = new THREE.Shape()
-  // 寬彎月刀身，刀背有一個小尖齒
-  blade.moveTo(-0.04, 0.02)
-  blade.quadraticCurveTo(0.46, -0.02, 0.36, -0.8)
-  blade.quadraticCurveTo(0.2, -0.46, -0.06, -0.4)
-  blade.lineTo(-0.13, -0.3)
-  blade.lineTo(-0.06, -0.24)
-  blade.lineTo(-0.04, 0.02)
-  const bladeGeo = kit.tracker.track(new THREE.ExtrudeGeometry(blade, { depth: 0.016, bevelEnabled: false, curveSegments: 12 }))
-  part(glaive, bladeGeo, mat.steel!, [0, 0, -0.008], [1, 1, 1])
-  // 龍口吞口與紅纓
-  part(glaive, geo.sphere, mat.gold!, [0, 0.03, 0], [0.065, 0.1, 0.06])
-  part(glaive, geo.sphere, mat.sash!, [-0.06, 0.14, 0], [0.045, 0.11, 0.045])
-
-  // 頸、頭（紅臉）
-  part(g, geo.cyl, mat.redFace!, [0, shoulderY + 0.06, 0], [0.09, 0.12, 0.09])
-  const headY = shoulderY + 0.3
-  part(g, geo.hiSphere, mat.redFace!, [0, headY, 0.01], [0.2, 0.24, 0.21])
-  // 臥蠶眉、丹鳳眼、鼻
-  for (const side of [-1, 1]) {
-    part(g, geo.box, mat.beard!, [side * 0.075, headY + 0.07, 0.19], [0.1, 0.028, 0.025], [0, side * 0.3, side * -0.28])
-    part(g, geo.box, mat.beard!, [side * 0.075, headY + 0.025, 0.195], [0.075, 0.011, 0.012], [0, side * 0.3, side * -0.32])
-  }
-  part(g, geo.sphere, mat.redFace!, [0, headY - 0.03, 0.215], [0.033, 0.06, 0.04])
-  // 五綹長髯：自下巴往前下方垂在胸甲外（胸甲前緣約 z=0.31，旋轉 x 為負值才會往前）
-  for (const [dx, len, tilt] of [[0, 0.8, 0], [-0.07, 0.66, -0.1], [0.07, 0.66, 0.1], [-0.13, 0.44, -0.18], [0.13, 0.44, 0.18]] as const) {
-    part(g, kit.geo.beard, mat.beard!, [dx, headY - 0.13, 0.2], [1.25, len, 1.25], [-0.32, 0, tilt])
-  }
-  // 綠色幞頭、金箍、後翅與紅纓
-  part(g, geo.sphere, mat.green!, [0, headY + 0.12, -0.01], [0.215, 0.17, 0.22])
-  part(g, geo.cyl, mat.gold!, [0, headY + 0.1, 0], [0.218, 0.055, 0.226])
-  part(g, geo.box, mat.green!, [0, headY + 0.2, -0.13], [0.3, 0.2, 0.1])
-  part(g, geo.cyl, mat.gold!, [0, headY + 0.27, 0.09], [0.012, 0.08, 0.012])
-  part(g, geo.sphere, mat.sash!, [0, headY + 0.33, 0.1], [0.05, 0.06, 0.05])
+  part(g, geo.box, mat.lacquer!, [0, 0.15, 0], [1.2, 0.3, 1.0])
+  part(g, geo.box, mat.gold!, [0, 0.31, 0], [1.24, 0.03, 1.04])
+  // 布從頭頂垂下，下襬略為外擴、蓋到座面
+  const cloth = lathe(kit, [[0, 1.95], [0.1, 1.93], [0.2, 1.84], [0.28, 1.66], [0.32, 1.45], [0.42, 1.25], [0.5, 0.9], [0.54, 0.45], [0.58, 0.02], [0, 0.02]], 24)
+  part(g, cloth, mat.veil!, [0, 0.3, 0], [1, 1, 0.82])
   return g
 }
 
 const BUILDERS: Record<StatueId, (kit: Kit) => THREE.Group> = {
   buddha: buildBuddha,
   guanyin: buildGuanyin,
-  guangong: buildGuangong,
+  mazu: buildVeiledPlaceholder,
 }
 
+/** 寫實模型下載完成前（或載入失敗時）顯示的程序化造型。 */
 export function buildStatue(kit: Kit, id: StatueId): THREE.Group {
   return BUILDERS[id](kit)
 }
 
+// ---------- 寫實模型 ----------
+
 /**
- * 以寫實 glTF 模型替換神像（預留給正式素材）。
- *
- * 模型規格：原點在底座底面中心、面向 +z、Y 軸朝上；載入後依 STATUE_HEIGHT 等比縮放到相同高度。
- * 建議：每尊 3～5 萬面、KTX2 壓縮貼圖、烘焙光照；放在 R2 並設定 CORS。
- * GLTFLoader 以動態 import 載入，未使用時不增加主程式大小。
- * 回傳新模型的擁有權交給呼叫端，替換掉的程序化模型由原 tracker 釋放。
+ * 成品檔案的版本：重新處理模型（npm run build:statues）後要改這個值。public/ 下的檔案 Vite 不加雜湊，
+ * 網址帶版本才不會讓瀏覽器或 CDN 拿舊貼圖配新幾何（每次處理的 UV 都不同）。
  */
-export async function loadStatueModel(slot: THREE.Group, id: StatueId, url: string): Promise<THREE.Object3D> {
-  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-  const gltf = await new GLTFLoader().loadAsync(url)
+const STATUE_ASSET_VERSION = '1'
+
+/** 成品網址：幾何（Draco glb，不含材質）與底色、法線兩張 KTX2 貼圖，由 scripts/process-statues.mjs 產生。 */
+export function statueUrls(id: StatueId, tier: StatueTier): { model: string; diff: string; nor: string } {
+  const base = `${import.meta.env.BASE_URL}statues/${id}_${tier}`
+  const v = `?v=${STATUE_ASSET_VERSION}`
+  return { model: `${base}.glb${v}`, diff: `${base}_diff.ktx2${v}`, nor: `${base}_nor.ktx2${v}` }
+}
+
+/**
+ * 殿內暗而暖、不用環境貼圖與色調映射；掃描貼圖帶著各自的博物館打光與材質明暗，以底色倍率（不改貼圖）
+ * 讓三尊在殿內的亮度協調。Phong 比 Standard 便宜，與殿內其他材質一致。
+ */
+const STATUE_LOOK: Record<StatueId, { tint: number; specular: string; shininess: number }> = {
+  // 深色漆木帶殘金：提亮，免得在暗殿裡死黑；高光偏暖，帶出殘金
+  buddha: { tint: 1.25, specular: '#3a3020', shininess: 30 },
+  // 白瓷：本身很亮，略降免得在米色牆前發白；高光較集中
+  guanyin: { tint: 0.92, specular: '#3a3a3a', shininess: 60 },
+  // 上漆木雕、黑面：略提亮，漆面有些光澤
+  mazu: { tint: 1.05, specular: '#2a2620', shininess: 40 },
+}
+
+export interface StatueLoaders {
+  gltf: import('three/examples/jsm/loaders/GLTFLoader.js').GLTFLoader
+  ktx2: KTX2Loader
+  dispose(): void
+}
+
+/**
+ * 建立載入寫實模型用的 loader。GLTFLoader 與 DRACOLoader 動態載入，未進殿時不增加主程式大小（KTX2Loader 庭院已在用）。
+ * Draco 解碼器與 Basis 轉碼器是 three 附的副本（public/draco/、public/basis/），用完由 dispose() 釋放 worker。
+ */
+export async function createStatueLoaders(renderer: THREE.WebGLRenderer): Promise<StatueLoaders> {
+  const [{ GLTFLoader }, { DRACOLoader }] = await Promise.all([
+    import('three/examples/jsm/loaders/GLTFLoader.js'),
+    import('three/examples/jsm/loaders/DRACOLoader.js'),
+  ])
+  const draco = new DRACOLoader().setDecoderPath(`${import.meta.env.BASE_URL}draco/`)
+  const ktx2 = new KTX2Loader().setTranscoderPath(`${import.meta.env.BASE_URL}basis/`).detectSupport(renderer)
+  const gltf = new GLTFLoader().setDRACOLoader(draco)
+  return {
+    gltf,
+    ktx2,
+    dispose() {
+      draco.dispose()
+      ktx2.dispose()
+    },
+  }
+}
+
+/**
+ * 下載一尊寫實模型（幾何與兩張貼圖全部到齊才替換，不會先出現沒有貼圖的模型），換掉插槽裡的程序化造型。
+ *
+ * 模型規格：原點在底面中心、面向 +z、Y 軸朝上；依 STATUE_HEIGHT 等比縮放、底部對齊插槽原點。
+ * 新的 geometry／material／texture 登記在 tracker；被換掉的程序化造型仍由原 tracker 釋放。
+ * 失敗時丟出錯誤、插槽維持原樣。
+ */
+export async function loadStatueModel(
+  slot: THREE.Group,
+  id: StatueId,
+  tier: StatueTier,
+  loaders: StatueLoaders,
+  tracker: ResourceTracker,
+): Promise<THREE.Object3D> {
+  const urls = statueUrls(id, tier)
+  const [gltf, diff, nor] = await Promise.all([
+    loaders.gltf.loadAsync(urls.model),
+    loaders.ktx2.loadAsync(urls.diff),
+    loaders.ktx2.loadAsync(urls.nor),
+  ])
+  // 色彩空間由 KTX2 檔頭決定（底色 sRGB、法線線性）；方向與 glTF 的 UV 一致（flipY = false）。
+  const anisotropy = tier === 'hi' ? 4 : 1
+  for (const t of [diff, nor]) t.anisotropy = anisotropy
+  const look = STATUE_LOOK[id]
+  const material = tracker.trackMaterial(
+    new THREE.MeshPhongMaterial({ map: diff, normalMap: nor, specular: look.specular, shininess: look.shininess }),
+  )
+  material.color.setScalar(look.tint)
   const model = gltf.scene
+  model.name = `statue:${id}:${tier}`
+  model.traverse((o) => {
+    if (o instanceof THREE.Mesh) {
+      tracker.track(o.geometry)
+      o.material = material
+      o.matrixAutoUpdate = false
+      o.updateMatrix()
+    }
+  })
   const box = new THREE.Box3().setFromObject(model)
   const height = box.max.y - box.min.y
   if (height > 0) model.scale.setScalar(STATUE_HEIGHT[id] / height)
   model.position.y = -box.min.y * model.scale.y
+  model.updateMatrix()
+  model.matrixAutoUpdate = false
   slot.clear()
   slot.add(model)
   return model
 }
+

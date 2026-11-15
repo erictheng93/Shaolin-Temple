@@ -343,6 +343,7 @@ export class GameCore {
     this.net.dispose()
     void this.audio.dispose()
     this.players.dispose()
+    this.hall?.dispose()
     this.tracker.dispose()
     this.renderer.dispose()
     this.events.clear()
@@ -550,7 +551,7 @@ export class GameCore {
   /** 立即切換到指定場景與位置（無過場）。 */
   private applyZone(zone: ZoneId, pose: Pose): void {
     if (zone === 'hall' && !this.hall) {
-      this.hall = buildHallScene(this.tracker)
+      this.hall = buildHallScene(this.renderer.renderer, this.tracker, QUALITY_PRESETS[this.quality], () => this.wake())
       this.renderer.scene.add(this.hall.root)
     }
     if (zone !== this.zone) {
