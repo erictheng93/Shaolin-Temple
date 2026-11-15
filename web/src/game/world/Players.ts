@@ -3,6 +3,7 @@ import { AnimationSystem, createAnimState, type AnimState } from '../anim/Animat
 import { AvatarFactory, colorIndexFor, type Avatar } from '../render/AvatarFactory'
 import type { PlayerSnapshot } from '../net/protocol'
 import { SPAWN } from './layout'
+import { REMOTE_MOVE_TIMEOUT_MS, REMOTE_SNAP_DISTANCE, sampleBetween, stepDuration, type Sample } from './interp'
 import type { MoverState } from './movement'
 
 export interface RemotePlayer {
@@ -13,10 +14,14 @@ export interface RemotePlayer {
   x: number
   z: number
   heading: number
-  tx: number
-  tz: number
-  theading: number
+  /** 房內短編號，moves／sync 以此指稱。 */
+  n: number
+  /** 插值的兩個端點：收到新位置當下的顯示位置，與預計走到新位置的時間點。 */
+  from: Sample
+  to: Sample
   serverMoving: boolean
+  /** 最近一次收到此玩家位置的時間（毫秒），給停止看門狗用。 */
+  lastMoveAt: number
   zone: string
 }
 
@@ -31,14 +36,8 @@ export interface LocalPlayer {
 const LABEL_LIMIT = 12
 const CULL_INTERVAL_S = 0.5
 
-function lerpAngle(a: number, b: number, k: number): number {
-  let d = b - a
-  d = Math.atan2(Math.sin(d), Math.cos(d))
-  return a + d * k
-}
-
 /**
- * 管理所有玩家的角色物件與動畫。遠端玩家以指數平滑追上伺服器位置，
+ * 管理所有玩家的角色物件與動畫。遠端玩家收到新位置時，從目前顯示的位置等速走過去，花的時間等於位置更新的間隔，
  * 並只顯示距離最近的 maxVisible 人，限制繪製量。
  */
 export class Players {
@@ -46,6 +45,8 @@ export class Players {
   readonly remotes = new Map<string, RemotePlayer>()
   private factory: AvatarFactory
   private cullTimer = 0
+  /** 離本機玩家這個距離內的角色用完整模型並投影，其餘用低面數模型（由動態畫質調整）。 */
+  nearRadius = 14
   /** 本機玩家所在場景；只顯示同場景的遠端玩家。 */
   localZone = 'courtyard'
 
@@ -70,13 +71,19 @@ export class Players {
     return this.remotes.size + 1
   }
 
-  upsert(p: PlayerSnapshot): RemotePlayer {
+  /** 房內短編號 → 遠端玩家（不含自己）。 */
+  private readonly byN = new Map<number, RemotePlayer>()
+
+  upsert(p: PlayerSnapshot, now = performance.now()): RemotePlayer {
     const existing = this.remotes.get(p.id)
     if (existing) {
-      existing.tx = p.x
-      existing.tz = p.z
-      existing.theading = p.heading
+      if (existing.n !== p.n) {
+        this.byN.delete(existing.n)
+        existing.n = p.n
+        this.byN.set(p.n, existing)
+      }
       existing.zone = p.zone ?? 'courtyard'
+      this.snapTo(existing, p.x, p.z, p.heading, now)
       return existing
     }
     const avatar = this.factory.create({ name: p.name, colorIndex: colorIndexFor(p.id), local: false })
@@ -89,13 +96,15 @@ export class Players {
       x: p.x,
       z: p.z,
       heading: p.heading,
-      tx: p.x,
-      tz: p.z,
-      theading: p.heading,
+      n: p.n,
+      from: { x: p.x, z: p.z, heading: p.heading, t: now },
+      to: { x: p.x, z: p.z, heading: p.heading, t: now },
       serverMoving: false,
+      lastMoveAt: now,
       zone: p.zone ?? 'courtyard',
     }
     this.remotes.set(p.id, r)
+    this.byN.set(p.n, r)
     this.cullTimer = CULL_INTERVAL_S // 下一幀重新計算可見性
     return r
   }
@@ -105,30 +114,69 @@ export class Players {
     if (!r) return
     r.avatar.dispose()
     this.remotes.delete(id)
+    if (this.byN.get(r.n) === r) this.byN.delete(r.n)
   }
 
   clearRemotes(): void {
     for (const r of this.remotes.values()) r.avatar.dispose()
     this.remotes.clear()
+    this.byN.clear()
   }
 
-  setRemoteTarget(id: string, x: number, z: number, heading: number, moving: boolean): void {
-    const r = this.remotes.get(id)
+  /** 以短編號套用 moves 的一筆（增量，插值）；對照不到的編號（含自己）忽略。 */
+  setRemoteTargetByN(n: number, x: number, z: number, heading: number, moving: boolean, now: number): void {
+    const r = this.byN.get(n)
+    if (r) this.pushSample(r, x, z, heading, moving, now)
+  }
+
+  /** 以短編號套用 sync 的一筆：直接套用位置、面向與移動狀態，不插值。 */
+  syncRemoteByN(n: number, x: number, z: number, heading: number, moving: boolean, now: number): void {
+    const r = this.byN.get(n)
     if (!r) return
-    r.tx = x
-    r.tz = z
-    r.theading = heading
+    this.snapTo(r, x, z, heading, now)
     r.serverMoving = moving
   }
 
+  /** 以字串 id 套用單筆位置（舊的 move 訊息）。 */
+  setRemoteTarget(id: string, x: number, z: number, heading: number, moving: boolean, now: number): void {
+    const r = this.remotes.get(id)
+    if (r) this.pushSample(r, x, z, heading, moving, now)
+  }
+
+  private pushSample(r: RemotePlayer, x: number, z: number, heading: number, moving: boolean, now: number): void {
+    r.serverMoving = moving
+    if (Math.hypot(x - r.x, z - r.z) > REMOTE_SNAP_DISTANCE) {
+      this.snapTo(r, x, z, heading, now)
+      return
+    }
+    // 從目前顯示的位置出發，位置永遠連續；等速移動且更新間隔穩定時，剛好在下一筆到達時走到，速度恆定。
+    this.place(r, now)
+    r.from = { x: r.x, z: r.z, heading: r.heading, t: now }
+    r.to = { x, z, heading, t: now + stepDuration(now - r.lastMoveAt) }
+    r.lastMoveAt = now
+  }
+
+  /** 把顯示位置更新到 now。 */
+  private place(r: RemotePlayer, now: number): void {
+    sampleBetween(r.from, r.to, now, r)
+  }
+
+  /** 不插值，直接放到指定位置（兩筆樣本相同）。 */
+  private snapTo(r: RemotePlayer, x: number, z: number, heading: number, now: number): void {
+    r.x = x
+    r.z = z
+    r.heading = heading
+    r.from = { x, z, heading, t: now }
+    r.to = r.from
+    r.lastMoveAt = now
+  }
+
   /** 遠端玩家切換場景：直接移到新位置，不做插值。 */
-  setRemoteZone(id: string, zone: string, x: number, z: number, heading: number): void {
+  setRemoteZone(id: string, zone: string, x: number, z: number, heading: number, now: number): void {
     const r = this.remotes.get(id)
     if (!r) return
     r.zone = zone
-    r.x = r.tx = x
-    r.z = r.tz = z
-    r.heading = r.theading = heading
+    this.snapTo(r, x, z, heading, now)
     r.serverMoving = false
     this.cullTimer = CULL_INTERVAL_S
   }
@@ -148,26 +196,18 @@ export class Players {
   /** 每幀更新。回傳是否仍有動態需要重繪。 */
   update(now: number, dt: number, t: number): boolean {
     let active = false
-    const k = 1 - Math.exp(-dt * 10)
     for (const r of this.remotes.values()) {
-      const dx = r.tx - r.x
-      const dz = r.tz - r.z
-      const far = dx * dx + dz * dz
-      if (far > 25) {
-        // 差距過大（重連、瞬移）直接跳過去。
-        r.x = r.tx
-        r.z = r.tz
-      } else {
-        r.x += dx * k
-        r.z += dz * k
-      }
-      r.heading = lerpAngle(r.heading, r.theading, k)
-      r.anim.moving = r.serverMoving || far > 0.0004
+      // 看門狗：移動中卻太久沒收到位置（對方切到背景、封包遺失），視為已停止。
+      if (r.serverMoving && now - r.lastMoveAt > REMOTE_MOVE_TIMEOUT_MS) r.serverMoving = false
+      this.place(r, now)
+      // 還沒走到最新位置時也要播走路動畫（停止訊息到達後仍有最後一小段路）。
+      const arriving = now < r.to.t && (r.from.x !== r.to.x || r.from.z !== r.to.z)
+      r.anim.moving = r.serverMoving || arriving
       if (!r.avatar.root.visible) continue
       r.avatar.root.position.set(r.x, 0, r.z)
       r.avatar.root.rotation.y = r.heading
       this.anim.apply(r.avatar, r.anim, now, dt, t)
-      if (this.anim.isActive(r.anim, now) || Math.abs(r.theading - r.heading) > 0.01) active = true
+      if (this.anim.isActive(r.anim, now)) active = true
     }
 
     this.syncLocalTransform()
@@ -179,7 +219,7 @@ export class Players {
       this.cullTimer = 0
       this.cull()
     }
-    this.factory.sync()
+    this.factory.sync(this.local.mover.x, this.local.mover.z, this.nearRadius)
     return active
   }
 

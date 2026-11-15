@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runState, synthesizeBirdCall } from './AudioManager'
+import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall } from './AudioManager'
 
 // 只實作 synthesizeBirdCall 用到的 createBuffer，node 環境沒有 Web Audio。
 const fakeCtx = (sampleRate = 8000) =>
@@ -26,6 +26,16 @@ describe('synthesizeBirdCall', () => {
   })
 })
 
+
+describe('nextFarBellDelayMs', () => {
+  it('間隔落在遠鐘的最小與最大值之間', () => {
+    expect(nextFarBellDelayMs(() => 0)).toBe(FAR_BELL_MIN_MS)
+    expect(nextFarBellDelayMs(() => 0.999999)).toBeLessThanOrEqual(FAR_BELL_MAX_MS)
+    const mid = nextFarBellDelayMs(() => 0.5)
+    expect(mid).toBeGreaterThan(FAR_BELL_MIN_MS)
+    expect(mid).toBeLessThan(FAR_BELL_MAX_MS)
+  })
+})
 
 describe('runState', () => {
   const v = { master: 0.8, music: 0.6, sfx: 0.8, muted: false }
