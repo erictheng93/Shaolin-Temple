@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
-import { MAX_MESSAGE_BYTES, decode } from './protocol'
+import { FRAME_MOVES, FRAME_SYNC, MAX_COORD_CM, MOVE_ENTRY_BYTES, encodeBatch, quantizeCoord } from './moveFrame'
+import { MAX_MESSAGE_BYTES, decode, type MoveTuple } from './protocol'
 
 describe('decode', () => {
   it('接受合法訊息', () => {
@@ -15,33 +16,67 @@ describe('decode', () => {
     expect(decode(JSON.stringify({ t: 'move', id: 'a', x: 'x', z: 0, heading: 0, moving: true }))).toBeNull()
     expect(decode('{"t":"pong","ts":1e999,"serverTime":0}')).toBeNull()
     expect(decode(JSON.stringify({ t: 'error', code: 'x', message: 'y'.repeat(MAX_MESSAGE_BYTES) }))).toBeNull()
-    expect(decode(new ArrayBuffer(4))).toBeNull()
+    expect(decode(new Uint8Array(4))).toBeNull() // 只接受 ArrayBuffer（binaryType = 'arraybuffer'）
   })
 
-  it('批次位置：合法時接受，任一筆格式錯誤或超過上限就整則拒絕', () => {
-    const ok = { t: 'moves', m: [[0, 1.25, -3, 0.5, 1], [65535, 0, 0, 0, 0]] }
-    expect(decode(JSON.stringify(ok))).toEqual(ok)
-    expect(decode(JSON.stringify({ t: 'moves', m: [[1, 1, 2, 3, 2]] }))).toBeNull()
-    expect(decode(JSON.stringify({ t: 'moves', m: [[1, 1, 2, 3]] }))).toBeNull()
-    expect(decode(JSON.stringify({ t: 'moves', m: Array(201).fill([1, 0, 0, 0, 0]) }))).toBeNull()
+  it('批次位置：二進位幀解成與 v1 相同形狀的 tuple，JSON 的 moves／sync 不再接受', () => {
+    const ok = { t: 'moves', m: [[0, 1.25, -3, 0.5, 1], [127, 0, 0, 0, 0]] } as const
+    const frame = encodeBatch({ t: 'moves', m: ok.m.map((t) => [...t]) as MoveTuple[] })!
+    expect(frame.byteLength).toBe(1 + 2 * MOVE_ENTRY_BYTES)
+    const got = decode(frame.slice().buffer)
+    expect(got).toEqual({ t: 'moves', m: [[0, 1.25, -3, 20 * (Math.PI / 128), 1], [127, 0, 0, 0, 0]] })
+    // v1 的 JSON 批次位置：v2 只以二進位幀送出，收到 JSON 版代表伺服器版本不對，整則忽略
+    expect(decode(JSON.stringify(ok))).toBeNull()
+    expect(decode(JSON.stringify({ t: 'sync', m: [] }))).toBeNull()
   })
 
-  it('短編號必須是 0～65535 的整數，字串 id 不再被接受', () => {
-    for (const bad of ['a', -1, 65536, 1.5, null]) {
-      expect(decode(JSON.stringify({ t: 'moves', m: [[bad, 0, 0, 0, 0]] }))).toBeNull()
+  it('二進位幀：長度不合、未知幀型、筆數超過上限、座標超出 ±100 公尺都整則拒絕', () => {
+    const entry = (n: number, xCm: number, zCm: number): number[] => [n, xCm & 0xff, (xCm >> 8) & 0xff, zCm & 0xff, (zCm >> 8) & 0xff, 0]
+    const frame = (kind: number, ...entries: number[][]): ArrayBuffer => new Uint8Array([kind, ...entries.flat()]).buffer
+    expect(decode(frame(FRAME_SYNC))).toEqual({ t: 'sync', m: [] })
+    expect(decode(frame(FRAME_MOVES, entry(1, MAX_COORD_CM, -MAX_COORD_CM)))).toEqual({ t: 'moves', m: [[1, 100, -100, 0, 0]] })
+    expect(decode(new ArrayBuffer(0))).toBeNull()
+    expect(decode(frame(0x03, entry(1, 0, 0)))).toBeNull()
+    expect(decode(frame(0x00))).toBeNull()
+    expect(decode(frame(FRAME_MOVES, entry(1, 0, 0)).slice(0, 6))).toBeNull()
+    expect(decode(frame(FRAME_MOVES, entry(1, 0, 0), [0]))).toBeNull()
+    expect(decode(frame(FRAME_MOVES, entry(1, MAX_COORD_CM + 1, 0)))).toBeNull()
+    expect(decode(frame(FRAME_MOVES, entry(1, 0, -MAX_COORD_CM - 1)))).toBeNull()
+    expect(decode(frame(FRAME_SYNC, ...Array.from({ length: 200 }, () => entry(1, 0, 0))))).not.toBeNull()
+    expect(decode(frame(FRAME_SYNC, ...Array.from({ length: 201 }, () => entry(1, 0, 0))))).toBeNull()
+    expect(decode(new ArrayBuffer(MAX_MESSAGE_BYTES + 1))).toBeNull()
+  })
+
+  it('量化：座標精度 0.01 公尺（.5 遠離零），heading 一格 2π/256 且解回 (−π, π]', () => {
+    const round = (x: number, h: number) => decode(encodeBatch({ t: 'moves', m: [[0, x, -x, h, 0]] })!.slice().buffer)!
+    for (const x of [0, 0.01, -0.01, 1.23, -18.99, 19, -19, 7.4, 8.6]) {
+      const m = round(x, 0) as { m: MoveTuple[] }
+      expect(m.m[0]![1]).toBe(x)
+      expect(m.m[0]![2]).toBe(-x + 0)
+    }
+    expect(quantizeCoord(-0.125)).toBe(-13)
+    expect(quantizeCoord(0.125)).toBe(13)
+    for (const h of [0, 0.5, -0.5, 3, -3, Math.PI, -Math.PI, 6.0]) {
+      const got = (round(0, h) as { m: MoveTuple[] }).m[0]![3]
+      const wrapped = Math.atan2(Math.sin(h), Math.cos(h))
+      expect(Math.abs(Math.atan2(Math.sin(got - wrapped), Math.cos(got - wrapped)))).toBeLessThanOrEqual(Math.PI / 256 + 1e-12)
+      expect(got).toBeGreaterThan(-Math.PI)
+      expect(got).toBeLessThanOrEqual(Math.PI)
+    }
+  })
+
+  it('編碼端拒絕放不進幀的值', () => {
+    expect(encodeBatch({ t: 'moves', m: [[128, 0, 0, 0, 0]] })).toBeNull()
+    expect(encodeBatch({ t: 'moves', m: [[-1, 0, 0, 0, 0]] })).toBeNull()
+    expect(encodeBatch({ t: 'moves', m: Array.from({ length: 201 }, () => [0, 0, 0, 0, 0] as MoveTuple) })).toBeNull()
+  })
+
+  it('短編號必須是 0～127 的整數', () => {
+    for (const bad of ['a', -1, 128, 65535, 1.5, null]) {
       expect(decode(JSON.stringify({ t: 'join', player: { id: 'a', n: bad, name: 'n', x: 0, z: 0, heading: 0 } }))).toBeNull()
     }
+    expect(decode(JSON.stringify({ t: 'join', player: { id: 'a', n: 127, name: 'n', x: 0, z: 0, heading: 0 } }))).not.toBeNull()
     expect(decode(JSON.stringify({ t: 'join', player: { id: 'a', name: 'n', x: 0, z: 0, heading: 0 } }))).toBeNull()
-  })
-
-  it('sync：格式同 moves，筆數上限相同', () => {
-    const ok = { t: 'sync', m: [[3, 1, 2, 0.5, 1], [4, 0, 0, 0, 0]] }
-    expect(decode(JSON.stringify(ok))).toEqual(ok)
-    expect(decode(JSON.stringify({ t: 'sync', m: [['a', 1, 2, 3, 1]] }))).toBeNull()
-    expect(decode(JSON.stringify({ t: 'sync', m: [[1, 1, 2, 3, 2]] }))).toBeNull()
-    expect(decode(JSON.stringify({ t: 'sync', m: Array(200).fill([1, 0, 0, 0, 0]) }))).not.toBeNull()
-    expect(decode(JSON.stringify({ t: 'sync', m: Array(201).fill([1, 0, 0, 0, 0]) }))).toBeNull()
-    expect(decode(JSON.stringify({ t: 'sync' }))).toBeNull()
   })
 
   it('場景切換訊息與快照中的 zone 欄位', () => {

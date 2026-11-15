@@ -106,7 +106,7 @@ async fn counters_follow_connections_and_messages() {
             .headers_mut()
             .insert("origin", "http://localhost:5173".parse().unwrap());
         let (mut ws, _) = connect_async(request).await.unwrap();
-        let hello = format!(r#"{{"t":"hello","v":1,"name":"m{i}"}}"#);
+        let hello = format!(r#"{{"t":"hello","v":2,"name":"m{i}"}}"#);
         ws.send(Message::Text(hello.into())).await.unwrap();
         let welcome = timeout(Duration::from_secs(5), ws.next())
             .await
@@ -128,11 +128,14 @@ async fn counters_follow_connections_and_messages() {
             .unwrap()
             .unwrap()
             .unwrap();
-        if message.to_text().unwrap().contains(r#""t":"moves""#) {
+        // moves 是二進位幀，第一個 byte 是幀型 0x01。
+        if let Message::Binary(raw) = &message
+            && raw.first() == Some(&temple_server::protocol::FRAME_MOVES)
+        {
             break message;
         }
     };
-    let moves_len = moves.to_text().unwrap().len() as f64;
+    let moves_len = moves.into_data().len() as f64;
     sleep(Duration::from_millis(100)).await;
     let (_, body) = get(&server, None).await;
     assert_eq!(value(&body, "temple_connections"), 2.0);
