@@ -27,7 +27,7 @@
 | T5 | P0 | T3 | 廣播 tick、批次位置、每連線佇列上限與慢速接收者（已完成 2026-11-12） |
 | T6 | P0 | T3 | 斷線恢復（resumeToken）（已完成 2026-11-12） |
 | T7 | P0 | T5 | 指標、負載測試工具、流量報告（已完成 2026-11-12） |
-| T8 | P1 | T7 | 二進位編碼與座標量化（依 T7 量測決定） |
+| T8 | P1 | T7 | 二進位編碼與座標量化（已完成 2026-11-15） |
 | T9 | P1 | T7 | 部署到 Dokploy、正式環境壓測 |
 | T10 | P2 | 玩法定案 | PostgreSQL、身分、持久化計數 |
 
@@ -67,7 +67,7 @@
 - 檢查 `Origin` 是否在 `ALLOWED_ORIGINS`（本機開發允許 `http://localhost:5173`）。設定值讀取時正規化成瀏覽器 Origin 格式（小寫、去結尾斜線、省略預設埠），避免 `https://example.com/` 這類寫法讓所有連線被拒。
 - 字串欄位上限（UTF-8 bytes）：`reqId`／`resumeToken` 128、動作 `id`／`zone` 32、名稱原始字串 256；超過視為無效訊息。
 - 握手後 90 秒（`DEFAULT_IDLE_TIMEOUT`）沒有收到任何資料即以 1001 關閉。前端每 20 秒送心跳；取 90 秒是因為 Chrome 會把背景分頁計時器節流到約每分鐘一次。
-- 連線後 5 秒內必須收到 `hello`，否則關閉；`hello.v` 不等於 1 時回 `error`（code `unsupported_version`）後關閉。
+- 連線後 5 秒內必須收到 `hello`，否則關閉；`hello.v` 不等於 1 時回 `error`（code `unsupported_version`）後關閉。（T8 起協定版本為 2，見 T8。）
 - 名稱清理：去除前後空白與控制字元，長度 1～16 個字元（以 Unicode 字元計），空白時改為「訪客」。
 - 無法解析的訊息：忽略並計數，不關閉連線；同一連線 10 秒內超過 20 則無效訊息才關閉（close code 1008）。
 
@@ -107,7 +107,7 @@
 
 協定仍是版本 1 的草案，直接修改，不升版號。共用固定資料 `server/tests/protocol-v1.json` 已改為下列格式，前端（`protocol-fixtures.test.ts`）與後端（`tests/protocol.rs`）都以它為準。
 
-1. **房內短編號 `n`**：`PlayerSnapshot` 新增必填欄位 `n`（整數 0～65535）。玩家加入房間時由伺服器指派，同一房間內所有「目前在名單上」的玩家（含斷線保留期間的玩家）彼此不重複；玩家離開後編號可回收給之後加入的人。斷線恢復（T6）沿用原編號。
+1. **房內短編號 `n`**：`PlayerSnapshot` 新增必填欄位 `n`（整數 0～65535；T8 起縮為 0～127，見 T8）。玩家加入房間時由伺服器指派，同一房間內所有「目前在名單上」的玩家（含斷線保留期間的玩家）彼此不重複；玩家離開後編號可回收給之後加入的人。斷線恢復（T6）沿用原編號。
 2. **`moves` 改用短編號**：`MoveTuple` 為 `[n, x, z, heading, moving]`，第一個元素由字串 id 改為 `n`。`leave`、`zone`、`action`、`join` 仍用字串 id。客戶端以 `welcome`／`join` 建立 `n → 玩家` 的對照，`leave` 時移除；收到對照不到的 `n` 直接忽略。
 3. **新訊息 `sync`**：`{ t: "sync", m: MoveTuple[] }`，格式與 `moves` 相同，語意是「整批位置校正」：客戶端對其中的玩家直接套用位置、面向與移動狀態，不做插值。筆數上限同 `MAX_MOVES_PER_MESSAGE`。伺服器在兩種情況送出，內容都是「收件人目前所在場景的所有其他玩家」：
    - 收件人切換場景成功後：先對同房所有人廣播 `zone`，再對切換者送一則 `sync`。
@@ -232,6 +232,53 @@
 ## T8 二進位編碼與量化（P1）
 
 依 T7 結果決定是否需要。預期方向：`moves` 改為二進位幀（房內玩家以 u16 索引取代字串 ID、座標以 i16 公分、heading 以 u8），目標每筆 7 bytes 以內。需同步修改前端 `protocol.ts` 的 `decode()`，由 Claude 負責前端部分。
+
+### 協定版本 2：moves／sync 二進位幀（2026-11-15）
+
+只有伺服器送出的 `moves` 與 `sync` 改為 WebSocket 二進位幀；`welcome`、`join`、`leave`、`action`、`ack`、`zone`、`pong`、`error` 與所有上行訊息維持 JSON 文字。解碼後的形狀與 v1 相同（`{ t: 'moves' | 'sync', m: MoveTuple[] }`），前端的插值、`sync` 直接套用與短編號對照不變。實作：伺服器 `server/src/protocol.rs`（`encode_batch`／`decode_batch`，連線層由 `ServerMessage::to_frame()` 選文字或二進位）；前端 `web/src/game/net/moveFrame.ts`（mock 伺服器直接載入同一個檔案）。
+
+幀 = 1 byte 幀型 + N 筆 × 6 bytes，N = (長度 − 1) ÷ 6，0 ≤ N ≤ 200（`MAX_MOVES_PER_MESSAGE`，最大幀 1,201 bytes）。多位元組整數為 little-endian。
+
+| 位移 | 長度 | 型別 | 內容 |
+| --- | --- | --- | --- |
+| 0 | 1 | u8 | 幀型：`0x01` = `moves`、`0x02` = `sync`；其他值拒絕 |
+| 每筆 +0 | 1 | u8 | bit 7：moving（1 = 移動中）；bit 0～6：房內短編號 n（0～127） |
+| 每筆 +1 | 2 | i16 | x，公分：`round(x × 100)`，.5 遠離零；限 ±10,000（±100 公尺，`MAX_COORD_CM`） |
+| 每筆 +3 | 2 | i16 | z，公分，同上 |
+| 每筆 +5 | 1 | u8 | heading：`q = round(heading × 128 ÷ π) mod 256`；解碼 `(q ≤ 128 ? q : q − 256) × π ÷ 128`，範圍 (−π, π] |
+
+範圍與精度：
+
+- **座標**：兩個場景的邊界是庭院 x −19～19、z −19～18，殿內 x −7.4～7.4、z −5.2～8.6（`server/src/world.rs`），伺服器先夾進場景邊界再編碼，量化後最大 ±1,900 公分，i16 可放 ±32,767。解碼端把 ±100 公尺外的值視為壞資料（留 5 倍餘裕給之後的場景），編碼端也夾在這個範圍內。精度 0.01 公尺，與上行與 v1 的 `round2` 相同；伺服器 tuple 本來就先取到 0.01，所以座標是無損的。
+- **heading**：一格 2π/256 ≈ 0.0245 弧度（1.41°），最大誤差 0.7°。v1 是 0.01 弧度；角色朝向差 0.7° 在畫面上看不出來，本人校正（`correctLocal`）只用座標、不用 heading。
+- **短編號**：由 u16 縮成 7 位元。伺服器配發最小的未使用編號且房間上限 50（`MAX_ROOM_CAPACITY`，有編譯期檢查 ≤ 128），實際只會用到 0～49。mock 伺服器只有一個房間，機器人上限因此是 127。
+- **筆數**：從長度推算，不另存；長度不是 1 + 6N、超過 200 筆、座標超出範圍都整則拒絕（與 JSON「任一筆錯就整則丟棄」相同）。
+
+解碼的拒絕條件在前端（`moveFrame.ts` 的 `decodeBatch`）與 Rust（`decode_batch`，負載工具與測試使用）一致，並由共用固定資料 `server/tests/protocol-v2.json` 的 `binary.invalid` 驗證。`binary.valid` 的每筆有 `input`（伺服器編碼前的 tuple）、`hex`（幀）與 `decoded`（解碼結果）：Rust 測試（`tests/protocol.rs`）檢查 `encode(input) == hex`、`decode(hex) ≈ decoded`；前端測試（`protocol-fixtures.test.ts`）檢查 `decode(hex)` 與 `decoded` 完全相同、mock 用的編碼器輸出等於 `hex`。測試向量由獨立的第三份實作 `server/tests/protocol-v2-vectors.py`（Python，輸出 `binary` 這一段）產生，不是由任一邊的程式輸出回填；要增修向量時改這個腳本再貼回固定資料。
+
+**版本策略：升版到 2，不做握手協商。** 理由：
+
+- 前端與伺服器一起部署，舊前端只會出現在部署當下仍開著的分頁；`unsupported_version` → 不再重連 → 提示「遊戲已更新，請重新整理頁面」的流程已經存在並有測試，重新整理就拿到新前端。
+- 協商（hello 帶支援的編碼）要讓伺服器與 mock 永久維護 JSON 與二進位兩套 `moves` 路徑，測試加倍，換到的只是「部署時開著的分頁可以不重新整理」。
+- 兩個方向都不會靜默壞掉：舊前端（v1）連新伺服器，在 `hello` 就收到 `unsupported_version` 並以 1008 關閉（`tests/websocket.rs` 的 `unsupported_version_then_close` 驗證 v1 與 v3），不會收到它解不開的二進位幀；新前端（v2）連舊伺服器，同樣收到 `unsupported_version`、停止重連並提示。後者的提示文字說「遊戲已更新」不完全貼切（其實是伺服器較舊），但只在部署順序錯誤時發生，且不是靜默故障。mock 伺服器也檢查 `hello.v`。
+- 上行仍是文字：伺服器收到二進位訊息照舊以 1003 關閉。
+
+### T8 完成紀錄（2026-11-15）
+
+`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（62 個測試）通過；前端 `npm run typecheck`、`npm test`（103 個測試）、`npm run build` 通過。報告：[LOAD_TEST_2026-11-15_T8.md](LOAD_TEST_2026-11-15_T8.md)（6 個情境各 60 秒，改動前以 T8 前的 commit 在同一台機器重跑，附原始 JSON 輸出）。
+
+- 結果：`moves` 降為約 1/4（50% 情境每連線 5,438 → 1,354 bytes/s），每連線總接收量 10% 情境 1,521～1,542 → 558～567 bytes/s（−63%）、50% 情境 5,760～5,812 → 1,625～1,651 bytes/s（−72%）。**仍未達 150～460 bytes/s 預算**：10% 情境超出上限約 100 bytes/s（主因是仍為 JSON 的 `action` 廣播，約 275 bytes/s），50% 情境的 `moves` 本身就是上限的 2.9 倍。另估算線路上每則訊息還有約 64～76 bytes 的 WebSocket／TLS／TCP／IP 固定成本，每秒約 13 則就已超過 460（未量測）。後續建議見報告「其他手段」，優先順序：`action` 改用短編號或併入 tick 幀 → 降低更新頻率或只送附近玩家（會改變體感，需實機評估）。
+- 上行 `move`／`stop` 不改二進位：每位移動中的玩家約 515 bytes/s，是伺服器入站流量，不計入出站預算（數字與理由見報告）。
+- 負載工具：逐則解碼二進位幀（`invalid_frames`）、依訊息種類統計（`recv_by_kind`）、另算含 WebSocket 框架的 bytes（`recv_ws_bytes_per_conn_s`）；hello 帶 `PROTOCOL_VERSION`。`/metrics` 的 `temple_bytes_out_total` 改為酬載 bytes（JSON 或二進位）。
+- 多人驗證：正式後端（release，本機）＋ dev server，兩個各自獨立行程的無頭 Chrome（CDP，經 `window.__game` 驅動玩家 A、讀取玩家 B 看到的 A），16 項全部通過：連線與短編號對照；A 走動中 B 看到移動中；A 停下後 B 在 1 秒內看到停止（實測 1～87 ms），`moving: 0` 只收到一次；停下後 B 的 A 位置與 A 本機相差 0（座標無損），面向差 0.004～0.010 弧度；A 進殿後 B 收到 `zone`；A 在殿內走到 (3, 3) 後 B 進殿，B 收到含 A 的 `sync` 且位置等於 A 本機、直接套用（顯示位置 = 目標位置）；A 看到 B 進殿；A 在本機瞬移 10.36 公尺後走一步，伺服器拒絕並送只含 A 的 `sync`，A 回到伺服器上的位置，B 從沒看到 A 在瞬移後的位置；兩頁沒有例外。同一腳本對 mock 伺服器（不驗證位置，所以略過校正項）13 項全部通過。另以腳本確認 mock 對 `hello.v: 1` 回 `unsupported_version` 並以 1008 關閉。
+
+未做到：
+
+- 沒有在真實手機或弱網路下驗證，也沒有量測線路上（TLS／TCP）的實際 bytes；這些留給 T9。
+- CPU 比較不可靠：今天兩組數字都明顯高於 T7、方向不一致，判斷不出二進位編碼對 CPU 的影響（見報告）。沒有做 profile。
+- 新前端連舊伺服器時的提示文字是「遊戲已更新，請重新整理頁面」，嚴格說是伺服器較舊；提示文字在 `GameCore.ts`，不在本任務範圍，沒有改。
+- 無頭 Chrome 沒有使用者手勢，`enter()` 的音訊解鎖不會完成，驗證腳本直接呼叫連線部分；畫面上的角色朝向與走路動畫沒有以截圖人工確認，只比對了資料。
+- mock 伺服器直接載入 `src/game/net/moveFrame.ts`，需要 Node 22.18 以上（內建型別移除）；本機為 22.23。
 
 ## T9 部署與正式環境壓測（P1）
 
