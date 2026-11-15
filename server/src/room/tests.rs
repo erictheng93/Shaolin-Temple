@@ -86,6 +86,26 @@ impl Client {
     fn drain(&mut self) -> Vec<ServerMessage> {
         std::iter::from_fn(|| self.rx.try_recv().ok()).collect()
     }
+    /// 一直收（丟棄途中的其他訊息），直到收到短編號 `n` 位於 (x, z) 的 `moves`。
+    /// 以事件而非時間判斷「該位置已廣播」：測試的 sleep 常與房間 tick 落在同一個虛擬瞬間，
+    /// 誰先執行不固定，只 sleep 一個 tick 不保證那個 tick 已經送出。
+    /// 位置被伺服器拒絕時永遠等不到，1 秒（虛擬時間）後失敗。
+    async fn recv_move_of(&mut self, n: u16, x: f64, z: f64) {
+        let target = (n, round2(x), round2(z));
+        let wait = async {
+            loop {
+                match self.rx.recv().await.expect("room closed") {
+                    ServerMessage::Moves { m } if m.iter().any(|t| (t.0, t.1, t.2) == target) => {
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .unwrap_or_else(|_| panic!("no moves with {target:?}"));
+    }
     async fn position(&self, x: f64, z: f64, heading: f64, moving: bool) {
         let command = RoomCommand::Position {
             who: self.who.clone(),
@@ -369,6 +389,9 @@ async fn zone_change_broadcasts_zone_then_syncs_the_switcher() {
     // 離殿門太遠（伺服器依速度上限拒絕該位置）時，位置仍在庭院中央
     mover.position(0.0, -5.6, PI, false).await;
     mover.walk_to_door().await;
+    // 走到門口的最後一個位置是庭院內的正常更新，庭院的人會在某個 tick 收到；先等它送達再清空，
+    // 之後 mover 沒有未廣播的變動，切換場景前後 yard 不該再收到 moves。
+    yard.recv_move_of(mover.n, 0.0, -5.6).await;
     yard.drain();
     mover.drain();
     mover.zone("hall").await;
