@@ -9,7 +9,10 @@ import { WebSocketServer } from 'ws'
 
 const BOTS = Number(process.argv[2] ?? 6)
 const PORT = Number(process.argv[3] ?? 8080)
-const ACTIONS = ['bow', 'bowl', 'bell']
+// 動作允許清單，與 server/src/world.rs 的 ACTIONS 一致（前端玩法模組 src/game/gameplay/modules/worship.ts）
+const ACTIONS = ['bow', 'prostrate', 'incense', 'bell']
+// 機器人只做該場景能做的動作（跪拜限殿內、敲鐘限庭院）；不會走到蒲團或香爐前，上香不會在香爐插香
+const BOT_ACTIONS = { courtyard: ['bow', 'bell'], hall: ['bow', 'prostrate'] }
 const ZONES = ['courtyard', 'hall']
 // 機器人隨機走動的範圍（未避開障礙物，僅供測試）
 const ROAM = {
@@ -94,7 +97,7 @@ setInterval(() => {
       b.wait = 2 + Math.random() * 6
       queueMove(p, false)
       if (Math.random() < 0.6) {
-        broadcastZone(p.zone, { t: 'action', playerId: p.id, id: ACTIONS[Math.floor(Math.random() * ACTIONS.length)], startedAt: now() })
+        broadcastZone(p.zone, { t: 'action', playerId: p.id, id: BOT_ACTIONS[p.zone][Math.floor(Math.random() * BOT_ACTIONS[p.zone].length)], startedAt: now() })
       }
       continue
     }

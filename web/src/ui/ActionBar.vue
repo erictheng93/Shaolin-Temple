@@ -40,8 +40,11 @@ const progress = (a: UiAction) => (a.readyAt > now.value ? (a.readyAt - now.valu
       :key="a.id"
       type="button"
       class="action"
-      :disabled="progress(a) > 0"
-      :style="{ '--p': progress(a) }"
+      :class="{ unavailable: a.unavailable }"
+      :disabled="!a.unavailable && progress(a) > 0"
+      :aria-disabled="a.unavailable ? 'true' : undefined"
+      :title="a.unavailable"
+      :style="{ '--p': a.unavailable ? 0 : progress(a) }"
       @click="$emit('perform', a.id)"
     >
       <span class="ring" aria-hidden="true" />
@@ -96,6 +99,13 @@ const progress = (a: UiAction) => (a.readyAt > now.value ? (a.readyAt - now.valu
 .action:disabled {
   cursor: default;
   color: var(--ink-faint);
+}
+
+/* 目前場景不能用：變暗但仍可按，按下時由遊戲核心提示原因（手機沒有滑鼠提示） */
+.action.unavailable {
+  color: var(--ink-faint);
+  opacity: 0.55;
+  border-style: dashed;
 }
 
 /* 冷卻遮罩：--p 從 1 降到 0 */
