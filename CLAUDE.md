@@ -24,6 +24,7 @@ npm run mock -- 20                   # mock 伺服器 ws://localhost:8080/ws，2
 npm run build:textures               # assets/textures/*.jpg → public/textures/*.ktx2（需 KTX-Software 的 ktx）
 npm run build:avatar                 # 以程式產生 public/models/monk.glb 與 monk-lod.glb（不依賴外部模型檔）
 npm run bake:lightmaps               # 庭院靜態光照烘焙：匯出幾何 → Blender（Cycles）→ public/lightmaps/*.ktx2（需 Blender 與 ktx）
+npm run build:statues                # 殿內神像：.statues-src/ 的原檔 → Blender 減面＋烘焙 → public/statues/（需 Blender 與 ktx）
 ```
 
 - 環境變數見 `web/.env.example`：`VITE_WS_URL`（未設定＝離線模式）。本機寫在 `web/.env.local`。
@@ -44,7 +45,7 @@ npm run bake:lightmaps               # 庭院靜態光照烘焙：匯出幾何 �
 - **庭院視覺**：`render/TempleScene.ts` 以程序化幾何＋ Poly Haven CC0 貼圖的 `MeshStandardMaterial` 建構（貼圖為 KTX2，在 `web/public/textures/`，原檔在 `web/assets/textures/`；UV 以公尺為單位）；`SceneRenderer` 負責程序化天空、天空環境貼圖、戶外色調映射與主光陰影。陰影、貼圖解析度與細節貼圖依 `core/settings.ts` 的畫質預設在載入時決定。細節與量測見 docs/TECH_STACK.md「庭院視覺」。
 - **靜態光照烘焙**：庭院靜態物件的影子與 AO 是 Blender 烘焙的貼圖（RGB = AO 走 `aoMap`，A = 太陽可見度由 `patchBakedSun` 乘在平行光上），不進即時陰影貼圖；標準畫質沒有陰影貼圖，高畫質的陰影貼圖只給近處角色。uv1 由 `render/lightmapUv.ts` 在執行時產生（與烘焙匯出同一份程式）；幾何指紋不符時 `courtyardBake.test.ts` 失敗，開發模式另會退回即時陰影並警告（正式版不計算指紋、直接載入，貼圖網址帶 `?v=<指紋>`）：**改了庭院幾何、太陽方向（`OUTDOOR_SUN_POSITION`）或 `BAKE_SETTINGS` 要重跑 `npm run bake:lightmaps`**。會動的物件（樹冠、晾衣）用 InstancedMesh 且不可與接收烘焙的物件共用材質；新增的靜態物件用一般 Mesh。角色走進烘焙影子不會變暗（已知限制）。細節見 docs/TECH_STACK.md「靜態光照烘焙」。
 - **場地與場景**：`world/zones.ts` 定義庭院與殿內兩個場景（可走範圍、障礙物、出生點、出入口、鏡頭範圍），庭院的細節在 `world/layout.ts`。場景建構、碰撞、尋路（`world/pathfind.ts`）都讀這份資料，改場地要一致；`zones.test.ts` 檢查落點不會卡進障礙物或來回瞬移。殿內場景在 `render/HallScene.ts`，第一次進殿才建立；靜態物件以 `render/mergeStatic.ts` 依材質合併。蒲團陣列（`HALL_CUSHIONS`，24 個）與香爐（`CENSERS`：殿內三個由 `HALL_STATUES` 導出、加庭院大香爐，各有上香站位）定義在 `zones.ts`，挑選空位的邏輯在 `world/worship.ts`。
-- **神像**：`render/statues.ts` 為程序化造型，每尊一個插槽，可用 `loadStatueModel()` 換成寫實 glTF。方位依傳統以神明為主體：觀音在主佛左手邊（+x，龍邊），關聖帝君在右手邊（-x，虎邊）。
+- **神像**：三尊是第三方的寫實模型（來源、授權與署名見 docs/ASSETS.md，需署名的兩件列在設定面板的「素材來源」），由 `scripts/process-statues.py` 在 Blender 減面並重新烘焙底色與法線，成品在 `web/public/statues/`：每尊兩個層級（`std` 約 1.5 萬三角形＋1024 貼圖給標準畫質，`hi` 約 4 萬＋2048 給高畫質，依畫質預設的 `statueTier`），幾何是不含材質的 Draco glb（解碼器是 three 附的副本，在 `web/public/draco/`，`draco.test.ts` 檢查），貼圖是 KTX2。第一次進殿建立 `HallScene` 時才下載；到齊前與失敗時插槽顯示 `render/statues.ts` 的程序化造型（佛、觀音；媽祖沒有程序化造型，以紅布覆蓋的神座佔位）。高度在 `STATUE_HEIGHT`，殿內亮度以 `STATUE_LOOK` 的底色倍率調整。**重新處理模型後要改 `STATUE_ASSET_VERSION`**（網址帶版本）。神像是宗教聖像：處理時不可改變造型（臉色、持物、手印）。方位依傳統以神明為主體：觀音在主佛左手邊（+x，龍邊），媽祖在右手邊（-x，虎邊）；程式中的鍵是 `buddha`、`guanyin`、`mazu`，殿內香爐 id 由此導出（`hall:<鍵>`）。
 
 ### 網路協定
 

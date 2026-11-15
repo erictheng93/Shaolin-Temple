@@ -48,10 +48,10 @@ describe('zones', () => {
     }
   })
 
-  it('神像方位：以神明為主體，觀音在主佛左手邊（+x，龍邊），關聖帝君在右手邊（-x，虎邊）', () => {
+  it('神像方位：以神明為主體，觀音在主佛左手邊（+x，龍邊），媽祖在右手邊（-x，虎邊）', () => {
     expect(HALL_STATUES.buddha.x).toBe(0)
     expect(HALL_STATUES.guanyin.x).toBeGreaterThan(0)
-    expect(HALL_STATUES.guangong.x).toBeLessThan(0)
+    expect(HALL_STATUES.mazu.x).toBeLessThan(0)
   })
 
   it('點擊主殿建築會導向殿門，且殿門的走近點可抵達並觸發入口', () => {

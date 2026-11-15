@@ -59,12 +59,12 @@ export const HALL_ALTAR: Rect = { minX: -7.6, maxX: 7.6, minZ: -9, maxZ: -5.2 }
 export const HALL_TABLE: Rect = { minX: -4.6, maxX: 4.6, minZ: -4.8, maxZ: -4.0 }
 /**
  * 三尊神像的位置（神像面向 +z，也就是面向參拜者）。
- * 依傳統以神明為主體：主佛左手邊（龍邊，+x）為觀世音菩薩，右手邊（虎邊，-x）為關聖帝君。
+ * 依傳統以神明為主體：主佛左手邊（龍邊，+x）為觀世音菩薩，右手邊（虎邊，-x）為媽祖。
  */
 export const HALL_STATUES = {
   buddha: { x: 0, z: -7.3 },
   guanyin: { x: 4.3, z: -6.9 },
-  guangong: { x: -4.3, z: -6.9 },
+  mazu: { x: -4.3, z: -6.9 },
 } as const
 /** 神像插槽的鍵（依 HALL_STATUES 迭代，不寫死名稱）。 */
 export type HallStatueId = keyof typeof HALL_STATUES

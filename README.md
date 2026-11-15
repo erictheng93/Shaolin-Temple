@@ -20,7 +20,7 @@
 | Node.js、npm | 一律需要（改程式、跑測試、看畫面） | `^20.19.0` 或 `>=22.12.0`，CI 用 22 |
 | Rust（rustup） | 只有跑或修改後端時 | `server/rust-toolchain.toml` 固定為 1.95.0，rustup 會自動安裝，並帶 rustfmt 與 clippy |
 | KTX-Software（`ktx`） | 只有新增或替換貼圖時（`npm run build:textures`） | 場景貼圖用 v4.4.2 編碼，庭院烘焙貼圖用 v5.0.0-rc2 編碼；兩個版本都能執行現有腳本 |
-| Blender | 只有重新烘焙庭院光照（`npm run bake:lightmaps`）或處理模型時 | 烘焙所用的版本是 Blender 5.3.0 |
+| Blender | 只有重新烘焙庭院光照（`npm run bake:lightmaps`）或處理神像模型（`npm run build:statues`）時 | 烘焙所用的版本是 Blender 5.3.0；神像烘焙用 Cycles，有 NVIDIA 顯示卡時自動用 OptiX／CUDA |
 | Docker | 只有要在本機建後端映像時（CI 會建） | 不限 |
 
 ### 安裝 KTX-Software
@@ -64,9 +64,10 @@ npm run build        # 型別檢查 + 正式建置到 web/dist
 其他指令：
 
 ```bash
-npm run build:textures    # assets/textures 與 assets/lightmaps 轉成 public 下的 KTX2（需要 ktx）
+npm run build:textures    # assets/textures、assets/lightmaps 與 assets/statues 轉成 public 下的 KTX2（需要 ktx）
 npm run bake:lightmaps    # 重新烘焙庭院光照（需要 Blender 與 ktx）
 npm run build:avatar      # 以程式產生 public/models/monk.glb 與 monk-lod.glb
+npm run build:statues     # 殿內神像：原檔放在 web/.statues-src/<buddha|guanyin|mazu>/（不進 git，見 docs/ASSETS.md），Blender 減面與烘焙後輸出到 public/statues/（需要 Blender 與 ktx）
 ```
 
 不設定環境變數時，前端以離線模式運作（沒有多人）。環境變數見 `web/.env.example`。在遊戲設定中開啟「顯示效能資訊」，可查看 FPS、CPU 時間與 draw call。
@@ -133,7 +134,7 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 ## 換行符號與二進位檔
 
-repo 內的文字檔一律是 LF。Windows 的 git 可能開了 `core.autocrlf`，請確認提交的檔案沒有被轉成 CRLF。`.gitattributes` 裡標 `-text` 的檔案（`web/public/basis/` 的轉碼器、`web/assets/lightmaps/` 與 `web/public/lightmaps/` 的烘焙貼圖）必須逐位元保存，不可被任何工具轉換換行或重新編碼。轉碼器有測試（`basis.test.ts`）檢查它與 `node_modules` 內的 three 副本逐位元相同。
+repo 內的文字檔一律是 LF。Windows 的 git 可能開了 `core.autocrlf`，請確認提交的檔案沒有被轉成 CRLF。`.gitattributes` 裡標 `-text` 的檔案（`web/public/basis/` 的轉碼器、`web/public/draco/` 的解碼器、`web/assets/lightmaps/` 與 `web/public/lightmaps/` 的烘焙貼圖、`web/assets/statues/` 與 `web/public/statues/` 的神像成品）必須逐位元保存，不可被任何工具轉換換行或重新編碼。轉碼器與解碼器有測試（`basis.test.ts`、`draco.test.ts`）檢查它們與 `node_modules` 內的 three 副本逐位元相同。
 
 ## 加入玩法
 
