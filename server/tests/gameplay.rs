@@ -3,7 +3,11 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use temple_server::{ServerOptions, app_with_options, room::RoomConfig};
+use temple_server::{
+    ServerOptions, app_with_options,
+    protocol::{BatchKind, decode_batch},
+    room::RoomConfig,
+};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio_tungstenite::{
     connect_async,
@@ -46,15 +50,29 @@ async fn send(ws: &mut Ws, value: Value) {
         .await
         .unwrap();
 }
-/// 讀下一則 JSON 文字訊息；`wait` 內沒有訊息或連線已關閉則回 `None`。
+/// 讀下一則訊息；`wait` 內沒有訊息或連線已關閉則回 `None`。二進位的 moves／sync 幀
+/// 解碼後轉成與 v1 JSON 相同的形狀（`{"t":"moves","m":[[n,x,z,heading,moving],…]}`），測試沿用同一套斷言。
 async fn recv(ws: &mut Ws, wait: Duration) -> Option<Value> {
     loop {
         match timeout(wait, ws.next()).await {
             Ok(Some(Ok(Message::Text(raw)))) => return serde_json::from_str(&raw).ok(),
+            Ok(Some(Ok(Message::Binary(raw)))) => return Some(batch_json(&raw)),
             Ok(Some(Ok(Message::Close(_)))) | Ok(Some(Err(_))) | Ok(None) | Err(_) => return None,
             Ok(Some(Ok(_))) => continue,
         }
     }
+}
+fn batch_json(raw: &[u8]) -> Value {
+    let (kind, m) = decode_batch(raw).expect("valid binary frame");
+    let t = match kind {
+        BatchKind::Moves => "moves",
+        BatchKind::Sync => "sync",
+    };
+    let m: Vec<Value> = m
+        .into_iter()
+        .map(|(n, x, z, heading, moving)| json!([n, x, z, heading, u8::from(moving)]))
+        .collect();
+    json!({ "t": t, "m": m })
 }
 /// 讀到第一則 `t` 為 `kind` 的訊息（途中的 join 等訊息略過）。
 async fn recv_kind(ws: &mut Ws, kind: &str) -> Value {
@@ -85,7 +103,7 @@ where
     loop {
         match timeout(Duration::from_secs(7), ws.next()).await.unwrap() {
             Some(Ok(Message::Close(Some(frame)))) => return u16::from(frame.code),
-            Some(Ok(Message::Text(_))) => continue,
+            Some(Ok(Message::Text(_) | Message::Binary(_))) => continue,
             other => panic!("expected close frame, got {other:?}"),
         }
     }
@@ -102,7 +120,7 @@ struct Me {
     welcome: Value,
 }
 async fn hello(ws: &mut Ws, resume: Option<&str>) -> Me {
-    let mut message = json!({ "t": "hello", "v": 1, "name": "測試" });
+    let mut message = json!({ "t": "hello", "v": 2, "name": "測試" });
     if let Some(token) = resume {
         message["resumeToken"] = json!(token);
     }

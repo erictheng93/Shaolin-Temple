@@ -19,7 +19,7 @@ fn full_room_welcome_fits_message_limit() {
     let player = PlayerSnapshot {
         zone: Some(longest(&zone_ids)),
         id: format!("p-{:032x}", u128::MAX),
-        n: u16::MAX,
+        n: crate::protocol::MAX_SHORT_ID,
         name: "😀".repeat(16),
         x: n,
         z: n,
@@ -55,7 +55,7 @@ struct Client {
     room: RoomTx,
     who: Who,
     rx: Outbound,
-    n: u16,
+    n: u8,
     token: String,
     zone: String,
     x: f64,
@@ -90,7 +90,7 @@ impl Client {
     /// 以事件而非時間判斷「該位置已廣播」：測試的 sleep 常與房間 tick 落在同一個虛擬瞬間，
     /// 誰先執行不固定，只 sleep 一個 tick 不保證那個 tick 已經送出。
     /// 位置被伺服器拒絕時永遠等不到，1 秒（虛擬時間）後失敗。
-    async fn recv_move_of(&mut self, n: u16, x: f64, z: f64) {
+    async fn recv_move_of(&mut self, n: u8, x: f64, z: f64) {
         let target = (n, round2(x), round2(z));
         let wait = async {
             loop {

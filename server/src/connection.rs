@@ -1,6 +1,8 @@
 use crate::{
     metrics::Metrics,
-    protocol::{ClientMessage, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_name},
+    protocol::{
+        ClientMessage, Frame, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_name,
+    },
     rate_limit::{RateLimiter, Verdict},
 };
 use axum::{
@@ -64,12 +66,18 @@ async fn close(ws: &mut WebSocket, code: u16, reason: &'static str) {
     })
     .await;
 }
-async fn json(ws: &mut WebSocket, metrics: &Metrics, msg: ServerMessage) -> bool {
-    let Ok(raw) = serde_json::to_string(&msg) else {
+/// 送出一則伺服器訊息：`moves`／`sync` 為二進位幀，其餘為 JSON 文字。
+async fn deliver(ws: &mut WebSocket, metrics: &Metrics, msg: ServerMessage) -> bool {
+    let Some(frame) = msg.to_frame() else {
+        tracing::error!(?msg, "server message could not be encoded");
         return false;
     };
-    let bytes = raw.len();
-    let sent = send(ws, Message::Text(raw.into())).await;
+    let bytes = frame.len();
+    let message = match frame {
+        Frame::Text(raw) => Message::Text(raw.into()),
+        Frame::Binary(raw) => Message::Binary(raw.into()),
+    };
+    let sent = send(ws, message).await;
     if sent {
         metrics.message_out(&msg, bytes);
     }
@@ -148,7 +156,7 @@ async fn session_inner(
                 }
                 outbound = member.outbound.recv() => {
                     match outbound {
-                        Some(message) => { if !json(ws, &state.metrics, message).await { return; } }
+                        Some(message) => { if !deliver(ws, &state.metrics, message).await { return; } }
                         None => { close(ws, 1013, "room disconnected").await; return; }
                     }
                     continue;
@@ -193,12 +201,12 @@ async fn session_inner(
                 resume_token,
             }) if name.is_none() => {
                 if v != PROTOCOL_VERSION {
-                    json(
+                    deliver(
                         ws,
                         &state.metrics,
                         ServerMessage::Error {
                             code: "unsupported_version".into(),
-                            message: "Protocol version 1 required".into(),
+                            message: "Protocol version 2 required".into(),
                         },
                     )
                     .await;
@@ -253,7 +261,8 @@ async fn session_inner(
                             .duration_since(UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_millis() as f64;
-                        if !json(ws, &state.metrics, ServerMessage::Pong { ts, server_time }).await
+                        if !deliver(ws, &state.metrics, ServerMessage::Pong { ts, server_time })
+                            .await
                         {
                             return;
                         }

@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
-pub const PROTOCOL_VERSION: f64 = 1.0;
+/// 協定版本。2（T8）：`moves`／`sync` 改為二進位幀（見 [`encode_batch`]），其餘訊息仍是 JSON。
+/// `hello.v` 不同時回 `unsupported_version` 並關閉，前端據此提示重新整理。
+pub const PROTOCOL_VERSION: f64 = 2.0;
 /// 客戶端字串欄位上限（UTF-8 bytes）。超過時整則視為無效訊息。
 /// reqId 會被快取做去重（T4），沒有上限時每條連線最壞可佔約 1 MB。
 pub const MAX_REQ_ID_BYTES: usize = 128;
@@ -61,8 +63,8 @@ pub struct PlayerSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
     pub id: String,
-    /// 房內短編號（0～65535），`moves`／`sync` 以它代替字串 id。
-    pub n: u16,
+    /// 房內短編號（0～[`MAX_SHORT_ID`]），`moves`／`sync` 以它代替字串 id。
+    pub n: u8,
     pub name: String,
     pub x: f64,
     pub z: f64,
@@ -95,7 +97,7 @@ impl From<Moving> for u8 {
     }
 }
 /// `[n, x, z, heading, moving]`，`n` 為房內短編號。
-pub type MoveTuple = (u16, f64, f64, f64, Moving);
+pub type MoveTuple = (u8, f64, f64, f64, Moving);
 /// 單則 `moves`／`sync` 最多筆數，與前端 `MAX_MOVES_PER_MESSAGE` 相同。
 pub const MAX_MOVES_PER_MESSAGE: usize = 200;
 
@@ -122,10 +124,13 @@ pub enum ServerMessage {
         heading: f64,
         moving: bool,
     },
+    /// 批次位置。只以二進位幀送出（[`encode_batch`]）；`serde(skip)` 讓誤以 JSON 序列化時直接失敗。
+    #[serde(skip)]
     Moves {
         m: Vec<MoveTuple>,
     },
-    /// 整批位置校正：客戶端直接套用，不做插值。
+    /// 整批位置校正：客戶端直接套用，不做插值。同樣只以二進位幀送出。
+    #[serde(skip)]
     Sync {
         m: Vec<MoveTuple>,
     },
@@ -179,6 +184,171 @@ impl ClientMessage {
             Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } => true,
         }
     }
+}
+
+/// 寫到 WebSocket 的一則伺服器訊息。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Frame {
+    Text(String),
+    Binary(Vec<u8>),
+}
+impl Frame {
+    /// 酬載長度（bytes），不含 WebSocket 框架。
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Text(s) => s.len(),
+            Self::Binary(b) => b.len(),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+impl ServerMessage {
+    /// `moves`／`sync` 編成二進位幀，其餘編成 JSON 文字。無法編碼時回 `None`（不應發生）。
+    pub fn to_frame(&self) -> Option<Frame> {
+        match self {
+            Self::Moves { m } => encode_batch(BatchKind::Moves, m).map(Frame::Binary),
+            Self::Sync { m } => encode_batch(BatchKind::Sync, m).map(Frame::Binary),
+            other => serde_json::to_string(other).ok().map(Frame::Text),
+        }
+    }
+}
+
+// ---- moves／sync 二進位幀（協定版本 2）----
+//
+// 幀 = 1 byte 幀型 + N 筆 × 6 bytes，N = (長度 − 1) / 6，0 ≤ N ≤ MAX_MOVES_PER_MESSAGE。多位元組整數為 little-endian。
+//
+// | 位移 | 型別 | 內容 |
+// | --- | --- | --- |
+// | 0 | u8 | bit 7：moving（1 = 移動中）；bit 0～6：房內短編號 n（0～127） |
+// | 1 | i16 | x，公分（四捨五入，.5 遠離零），限 ±MAX_COORD_CM |
+// | 3 | i16 | z，公分，同上 |
+// | 5 | u8 | heading，q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128，範圍 (−π, π] |
+//
+// 前端實作在 web/src/game/net/moveFrame.ts；兩邊以 server/tests/protocol-v2.json 的 binary 測試向量驗證一致。
+
+/// 幀型：`moves`（增量）。
+pub const FRAME_MOVES: u8 = 0x01;
+/// 幀型：`sync`（整批校正）。
+pub const FRAME_SYNC: u8 = 0x02;
+/// 每筆位置的 bytes。
+pub const MOVE_ENTRY_BYTES: usize = 6;
+/// 房內短編號上限（7 位元）。房間人數上限必須不超過 `MAX_SHORT_ID + 1`。
+pub const MAX_SHORT_ID: u8 = 127;
+/// 座標上限（公分）。兩個場景都在 ±19 公尺內；超出視為壞資料，解碼端拒絕。
+pub const MAX_COORD_CM: i16 = 10_000;
+const MOVING_BIT: u8 = 0x80;
+/// 一則二進位幀的最大長度（200 筆時 1,201 bytes）。
+pub const MAX_BATCH_FRAME_BYTES: usize = 1 + MAX_MOVES_PER_MESSAGE * MOVE_ENTRY_BYTES;
+const _: () = assert!(MAX_BATCH_FRAME_BYTES <= MAX_MESSAGE_BYTES);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchKind {
+    Moves,
+    Sync,
+}
+
+/// 座標（公尺）→ 公分整數，夾在 ±MAX_COORD_CM。`f64::round` 的 .5 遠離零，與前端一致。
+pub fn quantize_coord(v: f64) -> i16 {
+    let cm = (v * 100.0).round();
+    cm.clamp(-f64::from(MAX_COORD_CM), f64::from(MAX_COORD_CM)) as i16
+}
+/// heading（弧度）→ 1 byte，一格 2π/256（約 1.41°）。
+pub fn quantize_heading(heading: f64) -> u8 {
+    let q = (heading * 128.0 / std::f64::consts::PI).round();
+    if !q.is_finite() {
+        return 0;
+    }
+    (q.rem_euclid(256.0)) as u8
+}
+pub fn dequantize_heading(q: u8) -> f64 {
+    let signed = if q <= 128 {
+        f64::from(q)
+    } else {
+        f64::from(q) - 256.0
+    };
+    signed * (std::f64::consts::PI / 128.0)
+}
+
+/// 編碼一則 `moves`／`sync` 幀。筆數超過上限或短編號超過 `MAX_SHORT_ID` 時回 `None`。
+pub fn encode_batch(kind: BatchKind, m: &[MoveTuple]) -> Option<Vec<u8>> {
+    if m.len() > MAX_MOVES_PER_MESSAGE {
+        return None;
+    }
+    let mut out = Vec::with_capacity(1 + m.len() * MOVE_ENTRY_BYTES);
+    out.push(match kind {
+        BatchKind::Moves => FRAME_MOVES,
+        BatchKind::Sync => FRAME_SYNC,
+    });
+    for &(n, x, z, heading, moving) in m {
+        if n > MAX_SHORT_ID {
+            return None;
+        }
+        out.push(
+            n | if moving == Moving::Moving {
+                MOVING_BIT
+            } else {
+                0
+            },
+        );
+        out.extend_from_slice(&quantize_coord(x).to_le_bytes());
+        out.extend_from_slice(&quantize_coord(z).to_le_bytes());
+        out.push(quantize_heading(heading));
+    }
+    Some(out)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchError {
+    Empty,
+    UnknownKind(u8),
+    Length(usize),
+    TooMany(usize),
+    CoordOutOfRange,
+}
+
+/// 解碼一則 `moves`／`sync` 幀（負載工具與測試用；伺服器本身只編碼）。
+pub fn decode_batch(bytes: &[u8]) -> Result<(BatchKind, Vec<MoveTuple>), BatchError> {
+    let (&kind, body) = bytes.split_first().ok_or(BatchError::Empty)?;
+    let kind = match kind {
+        FRAME_MOVES => BatchKind::Moves,
+        FRAME_SYNC => BatchKind::Sync,
+        other => return Err(BatchError::UnknownKind(other)),
+    };
+    if body.len() % MOVE_ENTRY_BYTES != 0 {
+        return Err(BatchError::Length(bytes.len()));
+    }
+    let count = body.len() / MOVE_ENTRY_BYTES;
+    if count > MAX_MOVES_PER_MESSAGE {
+        return Err(BatchError::TooMany(count));
+    }
+    let coord = |lo: u8, hi: u8| {
+        let cm = i16::from_le_bytes([lo, hi]);
+        if cm.unsigned_abs() > MAX_COORD_CM.unsigned_abs() {
+            Err(BatchError::CoordOutOfRange)
+        } else {
+            Ok(f64::from(cm) / 100.0)
+        }
+    };
+    let m = body
+        .chunks_exact(MOVE_ENTRY_BYTES)
+        .map(|e| {
+            let moving = if e[0] & MOVING_BIT != 0 {
+                Moving::Moving
+            } else {
+                Moving::Stopped
+            };
+            Ok((
+                e[0] & !MOVING_BIT,
+                coord(e[1], e[2])?,
+                coord(e[3], e[4])?,
+                dequantize_heading(e[5]),
+                moving,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((kind, m))
 }
 
 pub fn clean_name(name: &str) -> String {
@@ -236,7 +406,7 @@ mod tests {
                 .map(|n| format!(r#","resumeToken":"{}""#, "t".repeat(n)))
                 .unwrap_or_default();
             parse(format!(
-                r#"{{"t":"hello","v":1,"name":"{}"{token}}}"#,
+                r#"{{"t":"hello","v":2,"name":"{}"{token}}}"#,
                 "n".repeat(name)
             ))
         };

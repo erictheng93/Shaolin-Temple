@@ -1,6 +1,10 @@
 //! 負載測試工具：模擬多位玩家連線到伺服器，依前端行為送出 `hello`、10 Hz `move`、偶發 `action`
 //! 與 20 秒一次的 `ping`，量測每連線的接收／送出流量與 `moves` 的到達間隔。
 //!
+//! 協定版本 2：`moves`／`sync` 是二進位幀（每則都以 `decode_batch` 驗證，解不開的計入 `invalid_frames`），
+//! 其餘是 JSON 文字。bytes 計的是 WebSocket 酬載長度；`recv_ws_bytes_per_conn_s` 另外加上
+//! 伺服器到客戶端的 WebSocket 框架標頭（2～4 bytes／則），仍不含 TCP／IP 與 TLS。
+//!
 //! 用法：
 //!   loadtest [--url ws://127.0.0.1:8080/ws] [--origin http://localhost:5173]
 //!            [--connections 50] [--moving-ratio 0.5] [--seconds 60]
@@ -18,6 +22,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use temple_server::protocol::{BatchKind, PROTOCOL_VERSION, decode_batch};
 use tokio::{
     sync::watch,
     time::{MissedTickBehavior, interval, interval_at, sleep, timeout},
@@ -82,9 +87,44 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// 依訊息種類分開統計接收量，順序對應 `kind_of`。
+const KINDS: [&str; 11] = [
+    "moves", "sync", "action", "ack", "pong", "join", "leave", "zone", "welcome", "error", "other",
+];
+const OTHER: usize = KINDS.len() - 1;
+fn kind_of(message: &Message) -> usize {
+    match message {
+        Message::Binary(raw) => match decode_batch(raw) {
+            Ok((BatchKind::Moves, _)) => 0,
+            Ok((BatchKind::Sync, _)) => 1,
+            Err(_) => OTHER,
+        },
+        // serde 以內部標籤序列化，`t` 一定是第一個欄位：{"t":"action",…
+        Message::Text(raw) => raw
+            .strip_prefix(r#"{"t":""#)
+            .and_then(|rest| rest.split('"').next())
+            .and_then(|t| KINDS[2..OTHER].iter().position(|k| *k == t))
+            .map_or(OTHER, |i| i + 2),
+        _ => OTHER,
+    }
+}
+/// 伺服器送給客戶端的 WebSocket 幀標頭長度（不遮罩）。
+fn ws_header(len: usize) -> u64 {
+    match len {
+        0..126 => 2,
+        126..65536 => 4,
+        _ => 10,
+    }
+}
+
 #[derive(Default)]
 struct Stats {
     recv_bytes: AtomicU64,
+    recv_ws_bytes: AtomicU64,
+    by_kind_bytes: [AtomicU64; KINDS.len()],
+    by_kind_msgs: [AtomicU64; KINDS.len()],
+    /// 解不開的二進位幀（格式錯誤）。
+    invalid_frames: AtomicU64,
     recv_msgs: AtomicU64,
     moves_bytes: AtomicU64,
     moves_msgs: AtomicU64,
@@ -98,6 +138,9 @@ struct Stats {
 #[derive(Clone, Copy, Default)]
 struct Snapshot {
     recv_bytes: u64,
+    recv_ws_bytes: u64,
+    by_kind_bytes: [u64; KINDS.len()],
+    by_kind_msgs: [u64; KINDS.len()],
     recv_msgs: u64,
     moves_bytes: u64,
     moves_msgs: u64,
@@ -108,6 +151,9 @@ impl Stats {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             recv_bytes: self.recv_bytes.load(Relaxed),
+            recv_ws_bytes: self.recv_ws_bytes.load(Relaxed),
+            by_kind_bytes: std::array::from_fn(|i| self.by_kind_bytes[i].load(Relaxed)),
+            by_kind_msgs: std::array::from_fn(|i| self.by_kind_msgs[i].load(Relaxed)),
             recv_msgs: self.recv_msgs.load(Relaxed),
             moves_bytes: self.moves_bytes.load(Relaxed),
             moves_msgs: self.moves_msgs.load(Relaxed),
@@ -176,7 +222,8 @@ async fn player(
         Ok(Err(error)) => return Joined::Failed(format!("connect: {error}")),
         Err(_) => return Joined::Failed("connect: timeout".into()),
     };
-    let hello = json!({"t": "hello", "v": 1, "name": format!("bot{index}")}).to_string();
+    let hello =
+        json!({"t": "hello", "v": PROTOCOL_VERSION, "name": format!("bot{index}")}).to_string();
     if ws.send(Message::Text(hello.into())).await.is_err() {
         return Joined::Failed("hello: send".into());
     }
@@ -249,13 +296,21 @@ async fn player(
             }
             received = ws.next() => {
                 match received {
-                    Some(Ok(Message::Text(raw))) => {
-                        let is_moves = raw.starts_with(r#"{"t":"moves""#);
+                    Some(Ok(message @ (Message::Text(_) | Message::Binary(_)))) => {
+                        let len = message.len();
+                        let kind = kind_of(&message);
+                        let is_moves = kind == 0;
+                        if matches!(message, Message::Binary(_)) && kind == OTHER {
+                            stats.invalid_frames.fetch_add(1, Relaxed);
+                        }
                         if stats.measuring.load(Relaxed) {
-                            stats.recv_bytes.fetch_add(raw.len() as u64, Relaxed);
+                            stats.recv_bytes.fetch_add(len as u64, Relaxed);
+                            stats.recv_ws_bytes.fetch_add(len as u64 + ws_header(len), Relaxed);
+                            stats.by_kind_bytes[kind].fetch_add(len as u64, Relaxed);
+                            stats.by_kind_msgs[kind].fetch_add(1, Relaxed);
                             stats.recv_msgs.fetch_add(1, Relaxed);
                             if is_moves {
-                                stats.moves_bytes.fetch_add(raw.len() as u64, Relaxed);
+                                stats.moves_bytes.fetch_add(len as u64, Relaxed);
                                 stats.moves_msgs.fetch_add(1, Relaxed);
                                 let now = Instant::now();
                                 if let Some(previous) = last_moves {
@@ -360,6 +415,23 @@ async fn main() {
     let moves_msgs = diff(after.moves_msgs, before.moves_msgs);
     let sent_bytes = diff(after.sent_bytes, before.sent_bytes);
     let sent_msgs = diff(after.sent_msgs, before.sent_msgs);
+    let by_kind: serde_json::Map<String, Value> = KINDS
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| after.by_kind_msgs[*i] > before.by_kind_msgs[*i])
+        .map(|(i, kind)| {
+            let bytes = diff(after.by_kind_bytes[i], before.by_kind_bytes[i]);
+            let msgs = diff(after.by_kind_msgs[i], before.by_kind_msgs[i]);
+            (
+                (*kind).to_string(),
+                json!({
+                    "bytes_per_conn_s": round2(bytes / elapsed / per_conn),
+                    "msgs_per_conn_s": round2(msgs / elapsed / per_conn),
+                }),
+            )
+        })
+        .collect();
+    let recv_ws_bytes = diff(after.recv_ws_bytes, before.recv_ws_bytes);
     let result = json!({
         "url": args.url,
         "connections": args.connections,
@@ -371,6 +443,9 @@ async fn main() {
         "closed_by_server": stats.closed_by_server.load(Relaxed),
         "recv_bytes_per_conn_s": round2(recv_bytes / elapsed / per_conn),
         "recv_msgs_per_conn_s": round2(recv_msgs / elapsed / per_conn),
+        "recv_ws_bytes_per_conn_s": round2(recv_ws_bytes / elapsed / per_conn),
+        "recv_by_kind": by_kind,
+        "invalid_frames": stats.invalid_frames.load(Relaxed),
         "recv_moves_bytes_per_conn_s": round2(moves_bytes / elapsed / per_conn),
         "recv_moves_msgs_per_conn_s": round2(moves_msgs / elapsed / per_conn),
         "sent_bytes_per_conn_s": round2(sent_bytes / elapsed / per_conn),

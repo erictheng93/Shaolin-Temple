@@ -1,7 +1,8 @@
 use crate::metrics::Metrics;
 use crate::{
     protocol::{
-        MAX_MOVES_PER_MESSAGE, MoveTuple, Moving, PlayerAction, PlayerSnapshot, ServerMessage,
+        MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MoveTuple, Moving, PlayerAction, PlayerSnapshot,
+        ServerMessage,
     },
     world::{self, PORTAL_TOLERANCE, Zone},
 };
@@ -24,6 +25,8 @@ use tokio::{
 pub const MAX_ROOM_CAPACITY: usize = 50;
 // sync 以單則訊息帶整個場景的其他玩家，所以房間上限不能超過單則筆數上限。
 const _: () = assert!(MAX_ROOM_CAPACITY <= MAX_MOVES_PER_MESSAGE);
+// 短編號在二進位幀中只有 7 位元（0～127）。
+const _: () = assert!(MAX_ROOM_CAPACITY <= MAX_SHORT_ID as usize + 1);
 const ROOM_IDLE: Duration = Duration::from_secs(60);
 /// 位置驗證：每位玩家有一份「移動額度」（公尺），以 MOVE_SPEED × 1.5 的速度累積、移動時依距離扣除。
 /// 網路卡頓後訊息一次湧到時，卡頓期間累積的額度足以涵蓋實際走過的路；額度有上限，所以不能存起來瞬移。
@@ -108,7 +111,7 @@ struct Link {
 }
 struct Player {
     id: String,
-    n: u16,
+    n: u8,
     name: String,
     token: String,
     zone: &'static Zone,
@@ -291,7 +294,7 @@ fn tuple(p: &Player) -> MoveTuple {
 
 /// 本 tick 每位玩家的狀態；收件人依場景與是否變動從中篩選。
 struct TickState {
-    n: u16,
+    n: u8,
     zone: &'static str,
     tuple: MoveTuple,
     dirty: bool,
@@ -312,8 +315,8 @@ impl Room {
         format!("{:x}.{:032x}", self.no, rand::random::<u128>())
     }
     /// 最小的未使用編號（含斷線保留中的玩家）；離開的玩家編號因此會被之後加入的人回收。
-    fn free_number(&self) -> Option<u16> {
-        (0..=u16::MAX).find(|n| self.players.values().all(|p| p.n != *n))
+    fn free_number(&self) -> Option<u8> {
+        (0..=MAX_SHORT_ID).find(|n| self.players.values().all(|p| p.n != *n))
     }
     fn snapshot(p: &Player) -> PlayerSnapshot {
         PlayerSnapshot {
