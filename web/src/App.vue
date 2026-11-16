@@ -85,7 +85,7 @@ function toggleMute() {
 
 <template>
   <main class="stage">
-    <canvas ref="canvas" class="scene" aria-label="寺院場景，以方向鍵或虛擬搖桿移動，拖曳旋轉視角" tabindex="0" />
+    <canvas ref="canvas" class="scene" aria-label="寺院場景，以方向鍵、虛擬搖桿或滑鼠點擊地面移動，拖曳旋轉視角" tabindex="0" />
     <!-- 場景切換黑幕；淡出時間需與 GameCore 的 FADE_MS 一致 -->
     <div class="fade" :class="{ on: ui?.fading }" aria-hidden="true" />
 

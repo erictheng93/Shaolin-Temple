@@ -1,4 +1,6 @@
 export interface InputCallbacks {
+  /** 滑鼠或觸控筆點擊（非拖曳）畫面某處；手指點擊不觸發（觸控裝置用虛擬搖桿移動）。座標為相對 canvas 的 NDC（-1..1）。 */
+  onTap(ndcX: number, ndcY: number): void
   /** 拖曳旋轉鏡頭（像素位移）。 */
   onRotate(dx: number, dy: number): void
   /** 縮放（正值拉遠）。 */
@@ -7,7 +9,8 @@ export interface InputCallbacks {
   onActivity(): void
 }
 
-const DRAG_SLOP_PX = 8
+const TAP_SLOP_PX = 8
+const TAP_MAX_MS = 450
 const MOVE_KEYS: Record<string, [number, number]> = {
   KeyW: [0, -1], ArrowUp: [0, -1],
   KeyS: [0, 1], ArrowDown: [0, 1],
@@ -20,6 +23,7 @@ const MOVE_KEYS: Record<string, [number, number]> = {
  */
 export class InputController {
   private pointers = new Map<number, { x: number; y: number }>()
+  private downAt = 0
   private downPos = { x: 0, y: 0 }
   private dragging = false
   private pinchDist = 0
@@ -78,6 +82,7 @@ export class InputController {
     this.el.setPointerCapture(e.pointerId)
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     if (this.pointers.size === 1) {
+      this.downAt = performance.now()
       this.downPos = { x: e.clientX, y: e.clientY }
       this.dragging = false
     } else if (this.pointers.size === 2) {
@@ -100,14 +105,19 @@ export class InputController {
       this.pinchDist = d
       return
     }
-    if (!this.dragging && Math.hypot(e.clientX - this.downPos.x, e.clientY - this.downPos.y) > DRAG_SLOP_PX) {
+    if (!this.dragging && Math.hypot(e.clientX - this.downPos.x, e.clientY - this.downPos.y) > TAP_SLOP_PX) {
       this.dragging = true
     }
     if (this.dragging) this.cb.onRotate(dx, dy)
   }
 
   private onUp = (e: PointerEvent): void => {
+    const wasSingle = this.pointers.size === 1
     this.pointers.delete(e.pointerId)
+    if (wasSingle && e.pointerType !== 'touch' && !this.dragging && performance.now() - this.downAt < TAP_MAX_MS) {
+      const r = this.el.getBoundingClientRect()
+      this.cb.onTap(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1)
+    }
     if (this.pointers.size < 2) this.pinchDist = 0
   }
 
