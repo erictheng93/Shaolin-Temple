@@ -1,6 +1,7 @@
 use temple_server::protocol::{
-    ActionFrame, BatchKind, ClientMessage, MAX_MESSAGE_BYTES, MoveTuple, Moving, PROTOCOL_VERSION,
-    ServerMessage, decode_action, decode_batch, encode_action, encode_batch, unwrap_started_at,
+    ActionFrame, BatchKind, ClientMessage, MAX_MESSAGE_BYTES, MoveTuple, Moving, OUTFIT_COUNT,
+    PROTOCOL_VERSION, ServerMessage, decode_action, decode_batch, encode_action, encode_batch,
+    unwrap_started_at,
 };
 use temple_server::world;
 #[test]
@@ -36,6 +37,43 @@ fn normalize(value: serde_json::Value) -> serde_json::Value {
         other => other,
     }
 }
+/// 衣裝數量與前端 `OUTFIT_COUNT` 共用固定資料；範例裡的編號都在範圍內，且伺服器一律送出 outfit。
+#[test]
+fn outfit_fixtures_match_the_shared_count() {
+    let fixtures = fixtures();
+    assert_eq!(
+        fixtures["outfitCount"].as_u64(),
+        Some(u64::from(OUTFIT_COUNT))
+    );
+    let mut seen = 0;
+    for value in fixtures["server"].as_array().unwrap() {
+        let players: Vec<&serde_json::Value> = match value["t"].as_str().unwrap() {
+            "welcome" => value["players"].as_array().unwrap().iter().collect(),
+            "join" => vec![&value["player"]],
+            "outfit" => {
+                seen += 1;
+                assert!(value["outfit"].as_u64().unwrap() < u64::from(OUTFIT_COUNT));
+                vec![]
+            }
+            _ => vec![],
+        };
+        for p in players {
+            seen += 1;
+            assert!(p["outfit"].as_u64().unwrap() < u64::from(OUTFIT_COUNT));
+        }
+    }
+    assert!(seen >= 3);
+    for value in fixtures["client"].as_array().unwrap() {
+        let outfit = match value["t"].as_str().unwrap() {
+            "hello" | "outfit" => &value["outfit"],
+            _ => continue,
+        };
+        if !outfit.is_null() {
+            assert!(outfit.as_u64().unwrap() < u64::from(OUTFIT_COUNT));
+        }
+    }
+}
+
 #[test]
 fn malformed_client_fields_rejected() {
     for raw in [
@@ -45,6 +83,7 @@ fn malformed_client_fields_rejected() {
         r#"{"t":"unknown"}"#,
         r#"{"t":"chat"}"#,
         r#"{"t":"chat","text":5}"#,
+        r#"{"t":"outfit"}"#,
     ] {
         assert!(serde_json::from_str::<ClientMessage>(raw).is_err());
     }
