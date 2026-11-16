@@ -148,7 +148,7 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
        service: http://localhost:8080
      - service: http_status:404
    ```
-3. 每次開服兩個終端機：
+3. 每次開服：Windows 一個指令 `powershell -File deploy\serve-poc.ps1`（伺服器在 8081 加 Tunnel，Ctrl+C 一起結束；`temple.yml` 的 `service` 要是 `http://localhost:8081`）。其他系統或想分開跑時用兩個終端機：
    ```
    cd server && ALLOWED_ORIGINS=https://temple.wishly.tw cargo run --release --bin temple-server
    cloudflared tunnel --config ~/.cloudflared/temple.yml run

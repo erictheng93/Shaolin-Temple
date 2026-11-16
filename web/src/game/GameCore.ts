@@ -368,9 +368,11 @@ export class GameCore {
   }
 
   applySettings(settings: Settings): void {
+    // 等級相同但 auto ↔ 手動切換時，網路降級與否會變（例如 auto 的 high 因 3G 降到 512 貼圖，改選手動 high），也要更新預設。
+    const settingChanged = settings.quality !== this.settings.quality
     this.settings = settings
     const q = resolveQuality(settings.quality)
-    if (q !== this.quality) {
+    if (q !== this.quality || settingChanged) {
       this.quality = q
       this.preset = this.assetPreset()
       this.renderer.setQuality(this.preset)
