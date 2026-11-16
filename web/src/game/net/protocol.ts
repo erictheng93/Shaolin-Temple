@@ -110,10 +110,12 @@ export const CHAT_MAX_CHARS = 80
  * 結果為空字串代表應丟棄。
  */
 export function sanitizeChat(text: string): string {
-  // 先把各種空白（含 \t \n）壓成單一空格，再移除剩下的控制字元與雙向標記／覆寫／隔離（Bidi_Control：U+200E/F、202A–E、2066–9）。
+  // 與 server/src/protocol.rs 的 clean_chat 同一組字元：先移除零寬／雙向字元（否則會在兩個空白之間留下雙空格），
+  // 再把空白（含 \t \n）壓成單一空格，最後移除剩下的控制字元。
   const cleaned = text
+    .replace(/[​-‏‪-‮⁦-⁩﻿]/gu, '')
     .replace(/\s+/gu, ' ')
-    .replace(/[\p{Cc}\p{Bidi_Control}]/gu, '')
+    .replace(/\p{Cc}/gu, '')
     .trim()
   return Array.from(cleaned).slice(0, CHAT_MAX_CHARS).join('').trim()
 }
