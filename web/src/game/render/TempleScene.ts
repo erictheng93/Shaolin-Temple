@@ -5,6 +5,18 @@ import type { QualityPreset } from '../core/settings'
 import { BELL_PAVILION, CENSER, HALL, LANTERNS, TREES } from '../world/layout'
 import { BAKED_FINGERPRINT } from './courtyardBake.generated'
 import { collectBakeSetup, lightmapUrl, patchBakedSun, prepareLightmapUvs, type CourtyardBakeSetup } from './courtyardBake'
+import { buildInteriorBackdrop, hallToFacade, HALL_FACADE, INTERIOR_VIEW_VERSION } from './doorwayView'
+import {
+  doorFrameSlabs,
+  doorLeafParts,
+  facadeLeafPose,
+  HALL_DOOR,
+  HALL_DOOR_TOP,
+  latticeTexture,
+  LEAF_LATTICE_SIZE,
+  type DoorSlab,
+  type LeafParts,
+} from './hallDoorway'
 import { mergeStatic } from './mergeStatic'
 import type { ResourceTracker } from './ResourceTracker'
 
@@ -57,6 +69,22 @@ function texBox(w: number, h: number, d: number, tile: number): THREE.BufferGeom
     const [u, v] = dims[k >> 2]!
     uv.setXY(k, (uv.getX(k) * u) / tile, (uv.getY(k) * v) / tile)
   }
+  return g
+}
+
+/** 少了一面的 texBox（face 依 BoxGeometry 的面順序：+x、-x、+y、-y、+z、-z）。 */
+function texBoxWithout(w: number, h: number, d: number, tile: number, face: number): THREE.BufferGeometry {
+  const g = texBox(w, h, d, tile)
+  const index = g.index!
+  const groups = g.groups.slice()
+  const keep: number[] = []
+  g.clearGroups()
+  groups.forEach((gr, i) => {
+    if (i === face) return
+    g.addGroup(keep.length, gr.count, gr.materialIndex)
+    for (let k = gr.start; k < gr.start + gr.count; k++) keep.push(index.getX(k))
+  })
+  g.setIndex(keep)
   return g
 }
 
@@ -173,7 +201,7 @@ function plaqueTexture(text: string): THREE.CanvasTexture {
 /** 庭院用到的表面材質；`buildCourtyard()` 只依這張表建構幾何，不管材質如何建立（執行時是寫實材質，烘焙匯出時是素色材質）。 */
 export type SurfaceKey =
   | 'grass' | 'paving' | 'path' | 'stone' | 'plaster' | 'roof' | 'bark' | 'canopy'
-  | 'lacquer' | 'woodDark' | 'gold' | 'bronze' | 'cloth' | 'mountain' | 'lantern' | 'plaque'
+  | 'lacquer' | 'woodDark' | 'gold' | 'bronze' | 'cloth' | 'mountain' | 'lantern' | 'plaque' | 'lattice'
 export type CourtyardSurfaces = Record<SurfaceKey, Surface>
 
 type TexDef = { id: string; tile: number; fallback: string }
@@ -181,8 +209,8 @@ export type SurfaceSpec =
   | { tex: TexDef; tint?: string; params?: THREE.MeshStandardMaterialParameters }
   | { color: string; params?: THREE.MeshStandardMaterialParameters }
 
-/** 匾額另外處理（貼圖是執行時畫的字），不在這張表。 */
-export const SURFACE_SPECS: Record<Exclude<SurfaceKey, 'plaque'>, SurfaceSpec> = {
+/** 匾額與格心另外處理（貼圖是執行時以 canvas 畫的），不在這張表。 */
+export const SURFACE_SPECS: Record<Exclude<SurfaceKey, 'plaque' | 'lattice'>, SurfaceSpec> = {
   grass: { tex: TEX.grass, tint: '#a8d27a' },
   paving: { tex: TEX.paving },
   path: { tex: TEX.stone, tint: '#d8d2c6' },
@@ -212,6 +240,8 @@ export interface Courtyard {
   leaves: THREE.InstancedMesh
   robeMesh: THREE.InstancedMesh
   robeItems: ReadonlyArray<{ pos: V3 }>
+  /** 從殿門看進去的殿內景（代理房間）；沒有給材質（烘焙匯出、測試）時為 null。不參與烘焙。 */
+  interior: THREE.Mesh | null
   /** 烘焙：接收烘焙貼圖的物件與材質、只擋光的動態物件（以靜止姿態烘焙），與幾何指紋。 */
   bake: CourtyardBakeSetup
 }
@@ -220,7 +250,7 @@ export interface Courtyard {
  * 以材質表建構庭院幾何（不載入貼圖、不使用 DOM，烘焙匯出腳本在 Node 也呼叫這個函式）。
  * 靜態物件依材質合併並寫入烘焙貼圖用的 uv1。
  */
-export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker): Courtyard {
+export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker, interiorMaterial?: THREE.Material): Courtyard {
   const root = new THREE.Group()
   root.name = 'temple'
   const geo = <T extends THREE.BufferGeometry>(g: T) => tracker.track(g)
@@ -293,13 +323,7 @@ export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker): 
   const base = 0.8
   box(m.stone, [hallCx, base / 2, hallCz], [15, base, 10])
   ;[0.6, 0.4, 0.2].forEach((h, i) => box(m.stone, [0, h / 2, -7.7 + i * 0.6], [6, h, 0.6]))
-  box(m.plaster, [hallCx, base + 1.5, hallCz], [11.4, 3, 7.4])
-  box(m.woodDark, [0, base + 1.2, hallCz + 3.72], [3.2, 2.4, 0.06])
-  for (const x of [-2.7, 2.7]) box(m.woodDark, [x, base + 1.75, hallCz + 3.72], [1.8, 1.3, 0.06])
-  // 匾額：深色木框加上寫有殿名的貼圖
-  // 前排柱子在 x=±1.4（半徑 0.21），匾額寬度需小於 2.38 才不被遮住。
-  box(m.woodDark, [0, base + 2.72, hallCz + 3.74], [2.36, 0.5, 0.06])
-  place(new THREE.Mesh(geo(new THREE.PlaneGeometry(2.24, 0.38)), m.plaque.material), [0, base + 2.72, hallCz + 3.78])
+  buildHallFront(m, place, geo, base)
 
   const pillarH = 3.2
   const pillars: Array<{ pos: V3; scale: V3 }> = []
@@ -323,6 +347,11 @@ export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker): 
 
   const beamY = base + pillarH
   box(m.woodDark, [hallCx, beamY + 0.2, hallCz], [14, 0.4, 9.6])
+  // 匾額：深色木框加上寫有殿名的貼圖，掛在前簷樑（前緣 z=-8.2）正面、殿門正上方。
+  // 殿門連同橫披窗已頂到牆頂，原本貼在牆面上的位置讓給門；掛在樑上也在前排柱（x=±1.4）之前，不會被柱子遮住。
+  const beamFront = hallCz + 4.8
+  box(m.woodDark, [0, beamY + 0.2, beamFront + 0.03], [2.36, 0.5, 0.06])
+  place(new THREE.Mesh(geo(new THREE.PlaneGeometry(2.24, 0.38)), m.plaque.material), [0, beamY + 0.2, beamFront + 0.065])
   roof([hallCx, beamY + 0.4, hallCz], 17.5, 12.4, 2, 7.7, 3.8, 0.9)
   box(m.plaster, [hallCx, beamY + 2.6, hallCz], [7.5, 0.9, 3.6])
   roof([hallCx, beamY + 3.05, hallCz], 9.8, 6, 1.7, 5.2, 0, 0.6)
@@ -455,7 +484,100 @@ export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker): 
   mountainMesh.receiveShadow = false
   const bake = collectBakeSetup(root, groundMaterials, atlas, [canopyMesh, robeMesh], [ground, mountainMesh, leaves])
 
-  return { root, ground, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, bake }
+  // 殿內景：在烘焙整理之後才加入（自己發光的 MeshBasicMaterial，不接收烘焙、不投影、不進指紋）
+  let interior: THREE.Mesh | null = null
+  if (interiorMaterial) {
+    interior = new THREE.Mesh(geo(buildInteriorBackdrop()), interiorMaterial)
+    interior.name = 'hall-interior'
+    interior.matrixAutoUpdate = false
+    root.add(interior)
+  }
+
+  return { root, ground, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, interior, bake }
+}
+
+type Range = readonly [number, number]
+
+/**
+ * 主殿正面：殿身、留出門洞的牆片、開著的殿門（門框與向內推開的格扇門，與殿內共用 hallDoorway.ts 的造型）、
+ * 兩側的格扇窗。殿門是殿內殿門等比縮小（HALL_FACADE.scale）後放到主殿正面，門洞後面是殿內景（doorwayView.ts）。
+ * 全部是靜態 Mesh，依材質合併並接收烘焙。
+ */
+function buildHallFront(
+  m: CourtyardSurfaces,
+  place: (mesh: THREE.Object3D, pos: V3) => THREE.Object3D,
+  geo: <T extends THREE.BufferGeometry>(g: T) => T,
+  base: number,
+): void {
+  const k = HALL_FACADE.scale
+  const wallH = 3
+  const halfW = 11.4 / 2
+  const front = HALL_FACADE.z
+  const wallInner = hallToFacade(0, 0, HALL_DOOR.wallInnerZ)[2]
+  const back = -16.7
+  /** 依範圍放一個方塊。細條（第二短的邊不到 6 公分）整個用同一個烘焙值，省圖集空間。 */
+  const slab = (s: Surface, x: Range, y: Range, z: Range) => {
+    const size: V3 = [x[1] - x[0], y[1] - y[0], z[1] - z[0]]
+    const g = geo(texBox(...size, s.tile))
+    if ([...size].sort((a, b) => a - b)[1]! < 0.06) g.userData.lightmap = 'uniform'
+    place(new THREE.Mesh(g, s.material), [(x[0] + x[1]) / 2, (y[0] + y[1]) / 2, (z[0] + z[1]) / 2])
+  }
+
+  // 殿身少了正面；正面由門洞左右與上方三片牆組成（牆厚依殿內殿門牆縮小，0.19 公尺）
+  place(new THREE.Mesh(geo(texBoxWithout(halfW * 2, wallH, wallInner - back, m.plaster.tile, 4)), m.plaster.material), [0, base + wallH / 2, (back + wallInner) / 2])
+  const [doorX, doorTop] = hallToFacade(HALL_DOOR.halfWidth, HALL_DOOR_TOP, 0)
+  const wallZ = [wallInner, front] as const
+  slab(m.plaster, [-halfW, -doorX], [base, base + wallH], wallZ)
+  slab(m.plaster, [doorX, halfW], [base, base + wallH], wallZ)
+  slab(m.plaster, [-doorX, doorX], [doorTop, base + wallH], wallZ)
+
+  // 殿門：範圍以殿內座標給出，換算到主殿正面。庭院沒有深紅漆，門檻與裙板也用朱漆（不多一個材質）。
+  const doorSurface = { lacquer: m.lacquer, lacquerDark: m.lacquer, gold: m.gold }
+  const facadeSlab: DoorSlab = (mat, x, y, z) => {
+    const a = hallToFacade(x[0], y[0], z[0])
+    const b = hallToFacade(x[1], y[1], z[1])
+    const r = (i: number): Range => [Math.min(a[i]!, b[i]!), Math.max(a[i]!, b[i]!)]
+    slab(doorSurface[mat], r(0), r(1), r(2))
+  }
+  // 縮小後原本 9 根 2.5 公分的直櫺只剩 1.5 公分，遠看會閃，改為每格 5 根、縮小後約 3 公分
+  doorFrameSlabs(facadeSlab, { transomBars: 5, barWidth: 0.05 })
+  // 門扇：向殿內推開 90°，立在門洞兩側，從門外只斜斜露出一點裝飾面（見 facadeLeafPose）
+  const leafLattice = geo(new THREE.PlaneGeometry(LEAF_LATTICE_SIZE[0] * k, LEAF_LATTICE_SIZE[1] * k))
+  const leafParts: LeafParts = {
+    slab: facadeSlab,
+    lattice: (pose, u, y, t) => {
+      const x = pose.x(u, [t, t])
+      const z = pose.z(u, [t, t])
+      const c = hallToFacade((x[0] + x[1]) / 2, (y[0] + y[1]) / 2, (z[0] + z[1]) / 2)
+      const mesh = new THREE.Mesh(leafLattice, m.lattice.material)
+      // 裝飾面朝門洞中央
+      mesh.rotation.y = -Math.sign(c[0]) * (Math.PI / 2)
+      place(mesh, c)
+    },
+  }
+  for (const s of [-1, 1] as const) doorLeafParts(leafParts, facadeLeafPose(s))
+
+  // 兩側的格扇窗（檻窗）：外框、中間一根間柱分成兩扇，格心與殿內門扇同一張貼圖、同樣的大小比例
+  const [paneW, paneH] = [LEAF_LATTICE_SIZE[0] * k, LEAF_LATTICE_SIZE[1] * k]
+  const frame = 0.07
+  const mullion = 0.06
+  const winW = paneW * 2 + mullion + frame * 2
+  const winH = paneH + frame * 2
+  const winY = base + 1.75
+  const frameZ = [front - 0.035, front + 0.05] as const
+  const paneGeo = geo(new THREE.PlaneGeometry(paneW, paneH))
+  for (const cx of [-2.7, 2.7]) {
+    const x0 = cx - winW / 2
+    const x1 = cx + winW / 2
+    const y0 = winY - winH / 2
+    const y1 = winY + winH / 2
+    slab(m.lacquer, [x0, x1], [y1 - frame, y1], frameZ)
+    slab(m.lacquer, [x0 - 0.02, x1 + 0.02], [y0 - 0.02, y0 + frame], [front - 0.035, front + 0.07]) // 窗台略寬、略凸
+    slab(m.lacquer, [x0, x0 + frame], [y0 + frame, y1 - frame], frameZ)
+    slab(m.lacquer, [x1 - frame, x1], [y0 + frame, y1 - frame], frameZ)
+    slab(m.lacquer, [cx - mullion / 2, cx + mullion / 2], [y0 + frame, y1 - frame], frameZ)
+    for (const side of [-1, 1]) place(new THREE.Mesh(paneGeo, m.lattice.material), [cx + side * (mullion + paneW) / 2, winY, front + 0.02])
+  }
 }
 
 /** 以素色材質建構庭院（不載入貼圖），供烘焙匯出腳本與測試使用。 */
@@ -470,7 +592,8 @@ export function buildPlainCourtyard(tracker: ResourceTracker): Courtyard {
     ]),
   ) as Record<keyof typeof SURFACE_SPECS, Surface>
   const plaque: Surface = { material: tracker.trackMaterial(new THREE.MeshStandardMaterial()), tile: 1 }
-  return buildCourtyard({ ...surfaces, plaque }, tracker)
+  const lattice: Surface = { material: tracker.trackMaterial(new THREE.MeshStandardMaterial({ color: '#d8c7a4' })), tile: 1 }
+  return buildCourtyard({ ...surfaces, plaque, lattice }, tracker)
 }
 
 export interface TempleScene {
@@ -573,7 +696,21 @@ export function buildTempleScene(
     Object.entries(specs).map(([key, spec]) => [key, 'tex' in spec ? pbr(spec.tex, spec.tint, spec.params) : flat(spec.color, spec.params)]),
   ) as Record<keyof typeof specs, Surface>
   const plaque: Surface = { material: std({ map: tracker.track(plaqueTexture(TEMPLE_NAME)), roughness: 0.7 }), tile: 1 }
-  const court = buildCourtyard({ ...m, plaque }, tracker)
+  // 格心：與殿內門扇同一個畫法（canvas，256×352）；接收烘焙
+  // 窗紙在日光下偏白刺眼，底色略壓暗（殿內是 Lambert、沒有色調映射，看起來本來就較暗）
+  const lattice: Surface = { material: std({ map: tracker.track(latticeTexture()), color: '#d6cab4', roughness: 0.8 }), tile: 1 }
+  // 殿內景：離線擷取的殿內畫面（doorwayView.ts），已是最終顏色，不經色調映射與霧。貼圖到之前是深色。
+  const interiorMaterial = tracker.trackMaterial(
+    new THREE.MeshBasicMaterial({ color: '#2a1c15', toneMapped: false, fog: false, side: THREE.DoubleSide }),
+  )
+  loadShared(`${import.meta.env.BASE_URL}backdrops/hall_interior.ktx2?v=${INTERIOR_VIEW_VERSION}`, (tex) => {
+    tex.anisotropy = anisotropy
+  }).push((t) => {
+    interiorMaterial.map = t
+    interiorMaterial.color.set('#ffffff')
+    interiorMaterial.needsUpdate = true
+  })
+  const court = buildCourtyard({ ...m, plaque, lattice }, tracker, interiorMaterial)
   const { root, ground, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, bake } = court
 
   // 烘焙貼圖：兩張（圖集、地面）都套上之後，靜態物件才停止投射即時陰影。
