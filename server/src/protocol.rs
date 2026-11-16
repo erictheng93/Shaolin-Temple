@@ -16,6 +16,9 @@ pub const MAX_ACTION_ID_BYTES: usize = 32;
 pub const MAX_ZONE_BYTES: usize = 32;
 /// 名稱原始字串上限；清理後仍只保留 16 個字元。
 pub const MAX_RAW_NAME_BYTES: usize = 256;
+/// 聊天原始字串上限（UTF-8 bytes）；清理後最多 [`CHAT_MAX_CHARS`] 個字元。
+pub const MAX_CHAT_RAW_BYTES: usize = 512;
+pub const CHAT_MAX_CHARS: usize = 80;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -52,6 +55,9 @@ pub enum ClientMessage {
     },
     Ping {
         ts: f64,
+    },
+    Chat {
+        text: String,
     },
 }
 
@@ -166,6 +172,12 @@ pub enum ServerMessage {
         code: String,
         message: String,
     },
+    /// 文字聊天：`text` 已清理，`at` 是伺服器 Unix 毫秒。廣播給同房所有在線玩家（不分場景）。
+    Chat {
+        id: String,
+        text: String,
+        at: f64,
+    },
 }
 
 impl ClientMessage {
@@ -185,6 +197,7 @@ impl ClientMessage {
                 req_id, id: action, ..
             } => id(req_id, MAX_REQ_ID_BYTES) && id(action, MAX_ACTION_ID_BYTES),
             Self::Zone { zone, .. } => id(zone, MAX_ZONE_BYTES),
+            Self::Chat { text } => text.len() <= MAX_CHAT_RAW_BYTES,
             Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } => true,
         }
     }
@@ -450,6 +463,33 @@ pub fn clean_name(name: &str) -> String {
     }
 }
 
+/// 聊天文字清理：移除控制字元與雙向覆寫／零寬字元，空白（含換行、tab）壓成單一空格，
+/// trim，最多 [`CHAT_MAX_CHARS`] 個字元。結果為空表示應丟棄。
+pub fn clean_chat(text: &str) -> String {
+    let mut out = String::new();
+    let mut count = 0;
+    let mut pending_space = false;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            pending_space = count > 0;
+        } else if !(c.is_control()
+            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'))
+        {
+            let needed = if pending_space { 2 } else { 1 };
+            if count + needed > CHAT_MAX_CHARS {
+                break;
+            }
+            if pending_space {
+                out.push(' ');
+                pending_space = false;
+            }
+            out.push(c);
+            count += needed;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,5 +542,32 @@ mod tests {
         assert!(hello(16, Some(MAX_RESUME_TOKEN_BYTES)).within_limits());
         assert!(!hello(16, Some(MAX_RESUME_TOKEN_BYTES + 1)).within_limits());
         assert!(!hello(MAX_RAW_NAME_BYTES + 1, None).within_limits());
+    }
+
+    #[test]
+    fn chat_cleaning() {
+        assert_eq!(clean_chat("阿彌陀佛"), "阿彌陀佛");
+        assert_eq!(clean_chat("a\u{0}b\u{7}c\u{85}d\u{7f}e"), "abc de");
+        assert_eq!(
+            clean_chat("\u{202E}evil\u{200B}\u{FEFF}\u{2066}x\u{2069}"),
+            "evilx"
+        );
+        assert_eq!(clean_chat("  a \n\t b   c\r\n "), "a b c");
+        assert_eq!(clean_chat(" \n\u{200B}\u{1}\t "), "");
+        let cjk = "佛".repeat(100);
+        assert_eq!(clean_chat(&cjk).chars().count(), CHAT_MAX_CHARS);
+        assert_eq!(clean_chat(&"🙏".repeat(100)), "🙏".repeat(CHAT_MAX_CHARS));
+        // 截斷後不留尾端空白
+        let text = format!("{} b", "a".repeat(CHAT_MAX_CHARS - 1));
+        assert_eq!(clean_chat(&text), "a".repeat(CHAT_MAX_CHARS - 1));
+    }
+
+    #[test]
+    fn chat_raw_limit() {
+        let chat = |n: usize| ClientMessage::Chat {
+            text: "a".repeat(n),
+        };
+        assert!(chat(MAX_CHAT_RAW_BYTES).within_limits());
+        assert!(!chat(MAX_CHAT_RAW_BYTES + 1).within_limits());
     }
 }

@@ -1,7 +1,8 @@
 use crate::{
     metrics::Metrics,
     protocol::{
-        ClientMessage, Frame, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_name,
+        ClientMessage, Frame, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_chat,
+        clean_name,
     },
     rate_limit::{RateLimiter, Verdict},
 };
@@ -280,6 +281,12 @@ async fn session_inner(
                         member.action(req_id, id, data_ok).await
                     }
                     ClientMessage::Zone { zone, .. } => member.zone(zone).await,
+                    ClientMessage::Chat { text } => {
+                        let text = clean_chat(&text);
+                        if !text.is_empty() {
+                            member.chat(text);
+                        }
+                    }
                     ClientMessage::Hello { .. } => {}
                 }
             }

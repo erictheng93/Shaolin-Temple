@@ -103,6 +103,10 @@ enum RoomCommand {
         who: Who,
         zone: String,
     },
+    Chat {
+        who: Who,
+        text: String,
+    },
 }
 
 struct Link {
@@ -174,6 +178,13 @@ impl Membership {
                 data_ok,
             })
             .await;
+    }
+    /// 聊天可丟棄：房間指令佇列滿時直接丟棄。
+    pub fn chat(&self, text: String) {
+        let _ = self.room.try_send(RoomCommand::Chat {
+            who: self.who.clone(),
+            text,
+        });
     }
     pub async fn zone(&self, zone: String) {
         let _ = self
@@ -548,6 +559,18 @@ impl Room {
         }
     }
 
+    fn chat(&mut self, who: &Who, text: String, now: Instant) {
+        if self.live(who).is_none() {
+            return;
+        }
+        let message = ServerMessage::Chat {
+            id: who.id.clone(),
+            text,
+            at: now_ms(),
+        };
+        self.broadcast(message, now, |_| true);
+    }
+
     fn switch_zone(&mut self, who: &Who, target: &str, now: Instant) {
         let Some(p) = self.live(who) else { return };
         let allowed = world::zone(target).and_then(|zone| {
@@ -724,6 +747,7 @@ async fn run_room(
                     RoomCommand::Position { who, x, z, heading, moving, at } => room.position(&who, x, z, heading, moving, at),
                     RoomCommand::Action { who, req_id, action, data_ok } => room.action(&who, req_id, action, data_ok, now),
                     RoomCommand::Zone { who, zone } => room.switch_zone(&who, &zone, now),
+                    RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                 }
             }
             _ = tick.tick() => {
