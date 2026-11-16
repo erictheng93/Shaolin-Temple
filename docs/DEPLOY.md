@@ -10,9 +10,10 @@
                         └─ game.example.com/ws    ──▶ server 容器（Rust，8080）
 ```
 
-- **同一個網域、以路徑分流**：前端與 WebSocket 同源，`ALLOWED_ORIGINS` 只有一個值，只需一筆 DNS 記錄。若想分成 `ws.example.com`，另加一個網域指向 `server`，並把 `VITE_WS_URL` 與 `ALLOWED_ORIGINS` 對應改掉即可。
+- **同一個網域、以路徑分流**：前端與 WebSocket 同源，`ALLOWED_ORIGINS` 只有一個值，只需一筆 DNS 記錄。若想分成 `ws.example.com`，另加一個網域指向 `server`，並把 GitHub 儲存庫變數 `VITE_WS_URL`（需重新建置映像）與 `ALLOWED_ORIGINS` 對應改掉即可。
 - **TLS 由 Traefik 終結**，容器內全是明文 HTTP／ws。前端網址是 `https`，所以 WebSocket 必須是 `wss`（瀏覽器會擋混合內容）。
 - **`/metrics` 不對外**：Dokploy 只把 `/` 與 `/ws` 兩個路徑導給容器；`/metrics`、`/healthz` 在公網得到 404（見驗證清單）。需要抓指標時從主機進容器網路，或設 `METRICS_TOKEN` 後再自行決定如何公開。
+- 映像由 CI 建置：[.github/workflows/images.yml](../.github/workflows/images.yml) 在 push 到 `main` 時（先通過與 server／web 工作流程相同的檢查）建置並推送 `ghcr.io/erictheng93/temple-server` 與 `temple-web`，標籤為 commit 完整 SHA 與 `main`。正式主機只拉取映像，不編譯。
 - 檔案：[deploy/docker-compose.yml](../deploy/docker-compose.yml)、[deploy/.env.example](../deploy/.env.example)、[web/Dockerfile](../web/Dockerfile)、[web/deploy/nginx.conf](../web/deploy/nginx.conf)、[server/Dockerfile](../server/Dockerfile)。
 
 ### 伺服器映像的健康檢查
@@ -27,6 +28,7 @@
 4. DNS：`game.example.com` 的 A 記錄指向主機 IP（有 IPv6 再加 AAAA）。
 5. 是否使用 Cloudflare 代理（橘色雲朵），見下節。
 6. Git 來源：Dokploy 要能讀 repo（公開 repo 直接填網址；私有則加 deploy key）。
+7. GitHub 儲存庫變數 `VITE_WS_URL`（例如 `wss://game.example.com/ws`），以及 GHCR 套件的存取方式（見步驟 7）。
 
 ### Cloudflare 代理與 WebSocket
 
@@ -41,12 +43,12 @@
 2. **安裝 Dokploy**（主機上一次性）：依 Dokploy 官方安裝文件的一行指令安裝，登入 `http://203.0.113.10:3000` 建立管理員帳號。之後可在 Settings 設定 Dokploy 自己的網域與憑證信箱（Let's Encrypt 通知用）。
 3. **建立專案與 Compose 服務**：Projects → Create Project → Create Service → **Compose**，Compose Type 選 **Docker Compose**（不要選 Stack/Swarm）。
 4. **Provider**：Git，填 repo 網址與分支（上線用 `main`）；**Compose Path** 填 `./deploy/docker-compose.yml`。
-5. **Environment 分頁**：貼上 `deploy/.env.example` 的內容並改成實際網域：
+5. **Environment 分頁**：貼上 `deploy/.env.example` 的內容並改成實際值：
    ```
    ALLOWED_ORIGINS=https://game.example.com
-   VITE_WS_URL=wss://game.example.com/ws
+   IMAGE_TAG=<要部署的 commit 完整 SHA>
    ```
-   兩者缺一時 compose 會直接報錯，不會以錯誤設定啟動。
+   缺一時 compose 會直接報錯，不會以錯誤設定啟動。`VITE_WS_URL` 不在這裡：它在 CI 建置時編進前端映像，要先到 GitHub 儲存庫 Settings → Secrets and variables → Actions → **Variables** 新增 `VITE_WS_URL=wss://game.example.com/ws`（未設定時 images 工作流程會失敗並說明）。
 6. **Domains 分頁**新增兩筆（HTTPS 開、Certificate 選 letsencrypt）：
 
    | Host | Service Name | Container Port | Path | Strip Path |
@@ -55,7 +57,11 @@
    | `game.example.com` | `server` | 8080 | `/ws` | 關（伺服器自己的路由就是 `/ws`） |
 
    Dokploy 在部署時為 compose 服務產生 Traefik 標籤與網路，不必手寫標籤。**部署前按 Preview Compose**，確認 `server` 的路由規則含 `PathPrefix(`/ws`)`，並且沒有把 `/metrics` 導出去。
-7. **Deploy**。第一次會在主機上編譯 Rust 與前端，1 vCPU／2 GiB 可能要數分鐘，且編譯記憶體吃緊，見「未決事項」。
+7. **Deploy**：
+   - 先確認 push 到 `main` 後 GitHub Actions 的 **images** 工作流程成功（檢查通過才會推送映像）。`IMAGE_TAG` 填該次 commit 的完整 SHA。
+   - GHCR 套件預設為私有：到 GitHub 的 Packages 把 `temple-server`、`temple-web` 改為 **Public**（repo 是公開的，映像不含密鑰），或在 Dokploy 設定 Registry 憑證（GitHub PAT，`read:packages`）。
+   - Deploy 時主機只拉取該 SHA 的映像並重建容器，不編譯，也不佔用編譯所需的 CPU／記憶體。
+   - **回滾**：把 `IMAGE_TAG` 改成較舊的好 SHA 後重新 Deploy（舊映像仍在 GHCR）。
 8. 跑「上線後驗證」。
 
 ## 上線後驗證清單
@@ -121,13 +127,13 @@
 
 ## 回滾
 
-compose 服務沒有保留舊映像的機制。回滾做法：在 Git 上 `git revert` 有問題的 commit 並推送，Dokploy 重新 Deploy（或把服務的分支暫時指到先前的好 commit）。前端與伺服器同一個 compose 一起部署，協定版本（目前 2）不會不一致；若只重建其中一個，版本不符會看到 `unsupported_version` 的「重新整理」提示。映像在主機上重建需要時間（約數分鐘），回滾期間服務中斷。Dokploy 另有 Rollbacks 功能，**未查證**是否適用於 compose 服務。
+映像以 commit SHA 為標籤保存在 GHCR。回滾做法：在 Dokploy 的 Environment 把 `IMAGE_TAG` 改成先前的好 SHA，重新 Deploy（只需拉取映像，約數十秒）。前端與伺服器共用同一個 `IMAGE_TAG`，協定版本（目前 3）不會不一致；不要讓兩者用不同 SHA，否則版本不符會看到 `unsupported_version` 的「重新整理」提示。注意前端映像的 `VITE_WS_URL` 是建置當時的變數值。Dokploy 另有 Rollbacks 功能，**未查證**是否適用於 compose 服務。
 
 ## 已知未決事項
 
-- **映像已實際建置並驗證**（Docker Desktop，本機）：`temple-server`（27.8 MB）與 `temple-web`（70.9 MB）；但**沒有在 Dokploy 與真實主機上部署**，Traefik 路由、Preview Compose 輸出、Let's Encrypt、wss 全部未實測。
-- Dokploy 的 Domains 分頁對 compose 的 `Path` 欄位實際產生的規則、環境變數是否能插值到 compose 的 `build.args`，只有官方文件的概述，需在第一次部署時核對 Preview Compose。若環境變數沒插值，退而求其次：在 Dokploy 設定 `.env` 檔或改在 compose 內寫死網域。
-- 1 vCPU／2 GiB 上同時編譯 Rust release 與前端建置可能記憶體不足或很慢：建議先加 2 GiB swap；若仍不行，改在 CI 建好映像推到 registry、compose 改用 `image:`（目前不做）。
+- **映像曾在本機實際建置並驗證**（Docker Desktop）：`temple-server`（27.8 MB）與 `temple-web`（70.9 MB）；但**沒有在 Dokploy 與真實主機上部署**，Traefik 路由、Preview Compose 輸出、Let's Encrypt、wss 全部未實測。
+- Dokploy 的 Domains 分頁對 compose 的 `Path` 欄位實際產生的規則、`IMAGE_TAG` 是否能插值到 compose 的 `image:`，只有官方文件的概述，需在第一次部署時核對 Preview Compose。若環境變數沒插值，退而求其次：在 Dokploy 設定 `.env` 檔。
+- 建置已移到 CI（`images.yml`），主機不再編譯；images 工作流程與 GHCR 推送、主機拉取映像都**尚未實際跑過**。
 - `loadtest` 不支援 `wss://`，TLS 的 CPU 成本不在壓測內；要量需替工具加 TLS 功能（新增依賴，未做）。
 - Traefik 升級後 WebSocket 閒置逾時的行為未實測；以心跳間隔（20 秒）規避。
 - 沒有監控與告警（Prometheus 抓取、磁碟與記憶體警示），也沒有備份需求（目前無持久化，T10 才有）。
