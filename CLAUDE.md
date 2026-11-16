@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `web/`：Vite 8 + Vue 3.5 + TypeScript + 直接操作 Three.js 的前端，已可運作。
 - `server/`：Rust + Axum 後端，進度見 docs/BACKEND_TASKS.md。前端開發時仍可用 `web/scripts/mock-server.mjs` 測試多人功能，它實作與正式伺服器相同的協定。
+- 移動：觸控裝置（`(any-pointer: coarse)`）用 `ui/Joystick.vue` 浮動式虛擬搖桿（畫面左下約 45%×45% 為觸控區，類比輸出、死區 0.12，直接呼叫 `GameCore.setMoveStick()`，非零時優先於鍵盤）；桌機用 WASD／方向鍵。沒有點擊地面移動；進出主殿是走進出入口範圍觸發。`stepMover` 的方向輸入長度 ≤ 1 時速度按比例（半推半速），> 1 時正規化（鍵盤對角仍是全速）。
 - 玩法：參拜（`gameplay/modules/worship.ts`）——合十、跪拜（殿內走到空蒲團叩拜三次）、誦經（殿內走到空蒲團跪坐敲木魚 24 秒，可提前起身，`modules/chant.ts`）、上香（走到最近的香爐前三拜後插香）、敲鐘（庭院走到鐘亭前拉撞木撞鐘，`modules/bell.ts`）。計分、持久化等尚未定義。
 
 ## 指令（皆在 `web/` 執行）
@@ -67,10 +68,10 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 玩法以 `GameplayModule`（`gameplay/types.ts`）加入，不修改渲染、網路或 UI：在 `install(api)` 中以 `api.actions.register()` 註冊動作（動作列、冷卻、動畫、音效、伺服器確認自動接上），`api.animations.registerClip()` 加姿勢、`api.audio.defineSfx()` 以合成函式加音效（`loadSfx()` 載入音檔）、`api.setStat()` 更新 HUD；`install` 回傳的函式須清除全部註冊。模組登記於 `gameplay/modules/index.ts`。`GameplayApi` 刻意保持很小，需要時再擴充。
 
 - 動作定義的 `unavailableReason(zone)`：目前場景不能用時回傳原因，按鈕變暗、按下時以提示說明（只依場景，UI 是低頻摘要）。
-- `approach(ctx)`：需要先走到定點的動作回傳站位與面向（或找不到時的原因字串）；GameCore 以尋路走過去，抵達才開始（冷卻、動畫、送出都從抵達算起），玩家自己移動、點擊或切換場景即取消。
+- `approach(ctx)`：需要先走到定點的動作回傳站位與面向（或找不到時的原因字串）；GameCore 以尋路走過去，抵達才開始（冷卻、動畫、送出都從抵達算起），玩家自己移動（方向鍵或搖桿）或切換場景即取消。
 - `actionPerformed` 事件帶 `zone` 與 `startedAt`；遠端玩家的最後一筆位置比動作晚一個 tick 到，需要準確位置時用 `api.playerPosition(id)`。上香插香就是在插香那一刻依執行者位置推出香爐，不經伺服器、不需協定欄位。
 - 遠端玩家做鎖定移動的動作期間（`RemotePlayer.lockedUntil`）不播走路、不取消動作片段，晚到的最後一筆位置只滑過去。收到不鎖定的新動作時解除鎖定；過期才到的動作仍會取代原本的片段（`hidden` 的動作此時仍通知玩法）。
-- 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間點擊地面、方向鍵或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
+- 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間推方向鍵、搖桿或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
 - 動畫片段的第三個參數是目前時間（`ClipFn(rig, p, now)`），`api.clockOffset()`（伺服器時間 − performance.now）讓片段與聲音對齊共同的節拍；`audio.play(name, { at })` 在 AudioContext 時間軸上預排聲音。
 - 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。
 - 動作允許清單有兩份，同時是 `action` 幀的動作編號對照表（索引即編號）：`server/src/world.rs` 的 `ACTIONS`（負載工具直接用它）與 `web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（mock 伺服器直接用它）。兩邊測試都比對固定資料的 `binary.action.codes`，不一致就失敗。新增動作只能加在尾端（同時改兩份與產生腳本）；改順序或刪除要升協定版本。

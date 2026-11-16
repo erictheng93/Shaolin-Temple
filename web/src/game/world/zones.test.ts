@@ -16,9 +16,7 @@ import {
   ZONE_IDS,
   entryCamera,
   isZoneId,
-  portalApproach,
   portalAt,
-  portalForTap,
 } from './zones'
 
 const cfgFor = (id: keyof typeof ZONES): MoveConfig => ({ speed: 3.2, bounds: ZONES[id].bounds, obstacles: ZONES[id].obstacles })
@@ -53,15 +51,6 @@ describe('zones', () => {
     expect(HALL_STATUES.buddha.x).toBe(0)
     expect(HALL_STATUES.guanyin.x).toBeGreaterThan(0)
     expect(HALL_STATUES.mazu.x).toBeLessThan(0)
-  })
-
-  it('點擊主殿建築會導向殿門，且殿門的走近點可抵達並觸發入口', () => {
-    const portal = portalForTap('courtyard', 0, -12)
-    expect(portal?.to).toBe('hall')
-    const approach = resolveCollisions(portalApproach(portal!).x, portalApproach(portal!).z, cfgFor('courtyard'))
-    expect(portalAt('courtyard', approach.x, approach.z)?.to).toBe('hall')
-    expect(portalForTap('courtyard', 0.6, -63.7)?.to).toBe('hall') // 實測：點屋頂時射線落在很遠的後方
-    expect(portalForTap('courtyard', 0, 5)).toBeNull()
   })
 
   it('出殿：還原進殿前的庭院鏡頭（距離限制在庭院範圍內）', () => {

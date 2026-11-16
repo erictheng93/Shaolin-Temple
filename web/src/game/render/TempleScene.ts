@@ -598,8 +598,6 @@ export function buildPlainCourtyard(tracker: ResourceTracker): Courtyard {
 
 export interface TempleScene {
   root: THREE.Group
-  /** 可點擊行走的地面，供射線檢測使用。 */
-  walkSurface: THREE.Object3D
   /** 環境動畫（燈籠、香煙、樹冠、落葉、晾衣、鐘擺）。t 為秒。 */
   update(t: number, dt: number): void
   /** 觸發鐘的擺動。 */
@@ -711,7 +709,7 @@ export function buildTempleScene(
     interiorMaterial.needsUpdate = true
   })
   const court = buildCourtyard({ ...m, plaque, lattice }, tracker, interiorMaterial)
-  const { root, ground, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, bake } = court
+  const { root, bellPivot, canopyMesh, canopyItems, leaves, robeMesh, robeItems, bake } = court
 
   // 烘焙貼圖：兩張（圖集、地面）都套上之後，靜態物件才停止投射即時陰影。
   for (const o of bake.casters) o.castShadow = true
@@ -759,7 +757,6 @@ export function buildTempleScene(
 
   return {
     root,
-    walkSurface: ground,
     update(t, dt) {
       m.lantern.material.emissiveIntensity = 0.85 + Math.sin(t * 7.3) * 0.05 + Math.sin(t * 3.1) * 0.05
       for (const s of smoke) {
