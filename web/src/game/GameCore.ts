@@ -204,8 +204,9 @@ export class GameCore {
   constructor(private readonly opts: GameCoreOptions) {
     this.settings = opts.settings
     this.quality = resolveQuality(opts.settings.quality)
-    // 自動畫質且為觸控裝置：從等級 1 起步，開頭幾秒不致超出預算（順暢後會自動升回）。
-    this.adaptive = new AdaptiveQuality(opts.settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0)
+    // 自動畫質且為觸控裝置：固定從等級 1 起、最高也只到等級 1。幀率有上限時「順暢」量不出 GPU 餘裕，升到完整解析度只是多發熱。
+    const floor = opts.settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0
+    this.adaptive = new AdaptiveQuality(floor, floor)
     const preset = this.assetPreset()
     this.preset = preset
 
