@@ -53,6 +53,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 
 - `src/game/net/protocol.ts` 是前後端協定的定義來源（版本 3）。下行的 `moves`／`sync`／`action` 是 WebSocket 二進位幀（`net/binaryFrame.ts`，位元組配置見 docs/BACKEND_TASKS.md T8），其餘訊息與所有上行（含帶 `reqId` 的 `action` 與 `ack`）都是 JSON。編碼集中在 `encode()`／`decode()`；`decode()` 依收到字串或 `ArrayBuffer` 分流並負責驗證，新增伺服器訊息時同步擴充型別與驗證。改協定時前端、mock 伺服器與後端在同一個 PR 修改，共用固定資料 `server/tests/protocol-v3.json`（含二進位測試向量，由 `server/tests/protocol-v3-vectors.py` 獨立產生）兩邊的測試都要讀。版本不符時伺服器回 `unsupported_version`。
 - `action` 幀（7 bytes）以房內短編號 `n` 指稱執行者、以一個 byte 的動作編號指稱動作、只帶 `startedAt` 的低 32 位元。`NetworkClient` 的 `FrameContext`（由 `welcome`／`join`／`leave` 維護 `n → id`，由 `welcome`／`pong` 估計伺服器時間）在 `decode()` 時還原成 `{ t: 'action', playerId, id, startedAt }`（絕對 Unix 毫秒，與 v2 相同），GameCore 與玩法看不出差別；對照不到的 `n` 或未知動作編號整則忽略。
+- 文字聊天 `chat`（協定 v3 的向下相容擴充，不升版）：上行 `{t:'chat', text}`（原始字串上限 512 bytes）；伺服器清理（移除控制與雙向覆寫字元、空白壓成一格、trim、最多 80 個字元，空則丟棄），限速突發 3、每秒 0.5；下行 JSON `{t:'chat', id, text, at}` 廣播給同房所有在線玩家（不分場景，含本人）。
 - 語意分兩類：`move`／`stop` 可取代（`OutboundQueue` 合併未送出的舊位置）；`action` 需確認（帶 `reqId`，伺服器去重並回 `ack`，重送不重複執行）。
 - 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家。
 - 伺服器每個 tick 送批次位置 `moves`（解碼後為 `MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`；二進位每筆 6 bytes：座標量化到公分、heading 一格 2π/256）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`，0～127）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。

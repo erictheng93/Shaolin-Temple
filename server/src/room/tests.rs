@@ -190,6 +190,7 @@ fn kind(m: &ServerMessage) -> &'static str {
         ServerMessage::Zone { .. } => "zone",
         ServerMessage::Pong { .. } => "pong",
         ServerMessage::Error { .. } => "error",
+        ServerMessage::Chat { .. } => "chat",
     }
 }
 fn kinds(messages: &[ServerMessage]) -> Vec<&'static str> {
