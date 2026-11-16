@@ -28,6 +28,9 @@ pub enum ClientMessage {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         resume_token: Option<String>,
+        /// 衣裝編號。缺少或無效（非整數、超出範圍）一律當作 0，見 [`parse_outfit`]。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outfit: Option<Value>,
     },
     Move {
         x: f64,
@@ -59,6 +62,22 @@ pub enum ClientMessage {
     Chat {
         text: String,
     },
+    /// 更換衣裝。值不在範圍內時伺服器直接丟棄（見 [`parse_outfit`]）。
+    Outfit {
+        outfit: Value,
+    },
+}
+
+/// 衣裝數量：編號 `0..OUTFIT_COUNT`。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+/// 與前端 `protocol.ts` 的 `OUTFIT_COUNT` 相同，由固定資料 `tests/protocol-v3.json` 的 `outfitCount` 鎖住。
+pub const OUTFIT_COUNT: u8 = 6;
+
+/// 衣裝編號驗證：必須是 `0..OUTFIT_COUNT` 內的整數（JSON 數字），否則回 `None`。
+pub fn parse_outfit(value: &Value) -> Option<u8> {
+    value
+        .as_u64()
+        .filter(|v| *v < u64::from(OUTFIT_COUNT))
+        .map(|v| v as u8)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +99,8 @@ pub struct PlayerSnapshot {
     pub heading: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<PlayerAction>,
+    /// 衣裝編號（0～[`OUTFIT_COUNT`] − 1）。
+    pub outfit: u8,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "u8", into = "u8")]
@@ -178,6 +199,11 @@ pub enum ServerMessage {
         text: String,
         at: f64,
     },
+    /// 某玩家更換衣裝。廣播給同房所有在線玩家（不分場景、含本人）。
+    Outfit {
+        id: String,
+        outfit: u8,
+    },
 }
 
 impl ClientMessage {
@@ -198,7 +224,7 @@ impl ClientMessage {
             } => id(req_id, MAX_REQ_ID_BYTES) && id(action, MAX_ACTION_ID_BYTES),
             Self::Zone { zone, .. } => id(zone, MAX_ZONE_BYTES),
             Self::Chat { text } => text.len() <= MAX_CHAT_RAW_BYTES,
-            Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } => true,
+            Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } | Self::Outfit { .. } => true,
         }
     }
 }
@@ -560,6 +586,27 @@ mod tests {
         // 截斷後不留尾端空白
         let text = format!("{} b", "a".repeat(CHAT_MAX_CHARS - 1));
         assert_eq!(clean_chat(&text), "a".repeat(CHAT_MAX_CHARS - 1));
+    }
+
+    #[test]
+    fn outfit_validation() {
+        use serde_json::json;
+        for ok in 0..OUTFIT_COUNT {
+            assert_eq!(parse_outfit(&json!(ok)), Some(ok));
+        }
+        for bad in [
+            json!(OUTFIT_COUNT),
+            json!(-1),
+            json!(1.5),
+            json!(2.0),
+            json!("1"),
+            json!(null),
+            json!(true),
+            json!([1]),
+            json!(1e30),
+        ] {
+            assert_eq!(parse_outfit(&bad), None, "{bad}");
+        }
     }
 
     #[test]
