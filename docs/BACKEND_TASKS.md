@@ -317,6 +317,11 @@ T8 報告指出 10% 移動情境剩下的超出量主要來自仍為 JSON 的 `a
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。
 
+### T9 狀態（2026-11-16）
+
+- **已準備**（細節與步驟見 [DEPLOY.md](DEPLOY.md)）：`web/Dockerfile`＋`web/deploy/nginx.conf`（SPA 回退、MIME、快取、gzip）、`deploy/docker-compose.yml`＋`deploy/.env.example`（Dokploy Domains 分頁設網域，不手寫 Traefik 標籤；healthcheck、記憶體上限、日誌輪替、`stop_grace_period: 5s`）、伺服器 `--healthcheck` 子命令（distroless 沒有 curl）、CI 的 web 映像建置檢查。兩個映像已在本機 Docker 建置並實測回應標頭與健康檢查。
+- **尚未做**：主機、網域與 Dokploy 皆未提供，沒有實際部署；Traefik 路由／TLS／wss、`/metrics` 不外洩、正式環境壓測與 1 vCPU／2 GiB 餘裕判斷都未執行。`loadtest` 不支援 `wss://`（壓測改走暫時的 HTTP 測試網域，TLS 成本未計）。
+
 ## T10 持久化（P2）
 
 等玩法定案：決定要保存的資料（例如帳號、累計次數）後再設計資料表、連線池大小與寫入批次策略。在此之前不建立 PostgreSQL 依賴。

@@ -24,6 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
+      - run: docker build -t temple-web:test .
       - uses: actions/upload-artifact@v4
         with:
           name: web-dist

@@ -1,0 +1,55 @@
+# Dokploy 的 Docker Compose 服務（Compose Path：./deploy/docker-compose.yml）。
+# 不寫 Traefik 標籤：網域在 Dokploy 的 Domains 分頁設定，部署時由 Dokploy 產生標籤與網路。
+# 步驟見 docs/DEPLOY.md。變數值在 Dokploy 的 Environment 分頁填，範本是 deploy/.env.example。
+
+services:
+  server:
+    build:
+      context: ../server
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      PORT: "8080"
+      # 瀏覽器的 Origin：頁面網址的 scheme + 主機，不含路徑與結尾斜線。多個以逗號分隔。
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?填入前端網址，例如 https://game.example.com}
+      ROOM_CAPACITY: ${ROOM_CAPACITY:-50}
+      RUST_LOG: ${RUST_LOG:-info}
+      # 留空＝/metrics 開放（只在內部網路可達）；要在容器外抓取時設定隨機長字串。
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "/temple-server", "--healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    mem_limit: 256m
+    # 伺服器收到 SIGTERM 後 4 秒內收尾（main.rs），預設 10 秒寬限過長；5 秒內結束。
+    stop_grace_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    build:
+      context: ../web
+      args:
+        # 建置時編進前端。與前端同網域時 wss://<網域>/ws。
+        VITE_WS_URL: ${VITE_WS_URL:?填入 WebSocket 位址，例如 wss://game.example.com/ws}
+    restart: unless-stopped
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    mem_limit: 64m
+    stop_grace_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
