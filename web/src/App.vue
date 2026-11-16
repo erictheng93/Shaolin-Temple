@@ -5,8 +5,10 @@ import { assetPresetFor, loadSettings, saveSettings } from './game/core/settings
 import EntryScreen from './ui/EntryScreen.vue'
 import TopBar from './ui/TopBar.vue'
 import ActionBar from './ui/ActionBar.vue'
+import Joystick from './ui/Joystick.vue'
 import SettingsPanel from './ui/SettingsPanel.vue'
 import PerfOverlay from './ui/PerfOverlay.vue'
+import ChatPanel from './ui/ChatPanel.vue'
 import ToastHost from './ui/ToastHost.vue'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -83,7 +85,7 @@ function toggleMute() {
 
 <template>
   <main class="stage">
-    <canvas ref="canvas" class="scene" aria-label="寺院場景，點擊地面移動，拖曳旋轉視角" tabindex="0" />
+    <canvas ref="canvas" class="scene" aria-label="寺院場景，以方向鍵或虛擬搖桿移動，拖曳旋轉視角" tabindex="0" />
     <!-- 場景切換黑幕；淡出時間需與 GameCore 的 FADE_MS 一致 -->
     <div class="fade" :class="{ on: ui?.fading }" aria-hidden="true" />
 
@@ -94,7 +96,9 @@ function toggleMute() {
         @toggle-mute="toggleMute"
         @open-settings="settingsOpen = true"
       />
+      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" />
       <ActionBar :actions="ui.actions" @perform="(id) => core?.performAction(id)" />
+      <ChatPanel :chat="ui.chat" :send="(t) => core?.sendChat(t) ?? 'offline'" />
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
     </template>
 

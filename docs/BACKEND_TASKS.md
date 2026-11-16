@@ -313,6 +313,14 @@ T8 報告指出 10% 移動情境剩下的超出量主要來自仍為 JSON 的 `a
 - 沒有真實手機、弱網路與跨機器時鐘的驗證；回繞處理只以測試向量驗證（實際要 49.7 天才會遇到一次回繞）。
 - CPU 比較仍不可靠（每情境一輪、方向不一致），沒有做 profile。
 
+### 協定增修：文字聊天 `chat`（2026-11-16，向下相容，不升版號）
+
+- **上行** `{ "t": "chat", "text": string }`：原始字串上限 `MAX_CHAT_RAW_BYTES`（512 UTF-8 bytes），超過或缺欄位／型別不符都是無效訊息（走無效訊息計數）。
+- **清理**（`protocol::clean_chat`）：移除控制字元（C0、C1）與 U+200B～U+200F、U+202A～U+202E、U+2066～U+2069、U+FEFF；連續空白（含換行、tab）壓成單一空格；trim；最多 `CHAT_MAX_CHARS`（80）個 Unicode 字元（char，不是 byte）。清理後為空就丟棄，不回錯誤。
+- **限速**：`rate_limit.rs` 的 chat bucket 突發 3、每秒補充 0.5；同時算入全部訊息的總 bucket。超出者丟棄，沿用「超出計數／連續超出關閉連線」。
+- **下行** `{ "t": "chat", "id", "text", "at" }`（JSON；`at` 為伺服器 Unix 毫秒）：由房間 actor 廣播給同房所有在線玩家，不分場景，含發話者本人；斷線保留中的玩家不送。連線層到房間的指令以 `try_send` 送出（佇列滿時丟棄）。
+- 固定資料 `protocol-v3.json` 的 `client`／`server` 各加一筆；缺 `text`、`text` 非字串的案例在 `tests/protocol.rs`。
+
 ## T9 部署與正式環境壓測（P1）
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。

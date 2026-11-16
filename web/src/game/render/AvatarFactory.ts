@@ -48,6 +48,10 @@ const HELD_INCENSE = new THREE.Matrix4().compose(
 
 export interface Avatar extends AvatarRig {
   setLabelVisible(visible: boolean): void
+  /** 頭上顯示對話泡泡直到 until（performance.now 毫秒）；新的取代舊的。文字畫在 canvas 上，不經 HTML。 */
+  say(text: string, until: number): void
+  /** 過期則收掉泡泡並釋放貼圖；回傳泡泡是否仍顯示（給渲染排程判斷是否需要重繪）。 */
+  tickBubble(now: number): boolean
   /** 釋放此角色獨有的資源（名牌貼圖）並移出批次繪製。 */
   dispose(): void
 }
@@ -204,9 +208,37 @@ function makeLabelTexture(text: string): THREE.CanvasTexture {
   return tex
 }
 
+/** 對話泡泡貼圖：每行最多 BUBBLE_LINE_CHARS 個字元自動換行，半透明底，與名牌同色系。 */
+const BUBBLE_LINE_CHARS = 14
+function makeBubbleTexture(text: string): THREE.CanvasTexture {
+  const chars = Array.from(text)
+  const lines: string[] = []
+  for (let i = 0; i < chars.length; i += BUBBLE_LINE_CHARS) lines.push(chars.slice(i, i + BUBBLE_LINE_CHARS).join(''))
+  const font = '500 28px system-ui, "Noto Sans TC", sans-serif'
+  const lineH = 38
+  const c = document.createElement('canvas')
+  const ctx = c.getContext('2d')!
+  ctx.font = font
+  const w = Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) + 32
+  c.width = w
+  c.height = lines.length * lineH + 20
+  ctx.font = font
+  ctx.fillStyle = 'rgba(244,239,230,0.88)'
+  ctx.beginPath()
+  ctx.roundRect(0, 0, w, c.height, 20)
+  ctx.fill()
+  ctx.fillStyle = '#2a241c'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  lines.forEach((l, i) => ctx.fillText(l, w / 2, 10 + lineH * (i + 0.5) + 1))
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
 /**
  * 角色工廠與批次繪製擁有者。
- * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）、膚色部分（頭與手）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
+ * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）、膚色部分（頭與手）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個，對話泡泡每個正在說話的人 1 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
  * 臉（五官圖集）近遠都畫，各自貼在該 tier 的頭部曲面上，不投影。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
  * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
@@ -378,6 +410,18 @@ export class AvatarFactory {
       root.add(label)
     }
 
+    // 對話泡泡：只在名牌顯示中的人（最近 12 人）與本機玩家頭上顯示。
+    let labelOn = opts.local
+    let bubble: THREE.Sprite | null = null
+    let bubbleUntil = 0
+    const clearBubble = () => {
+      if (!bubble) return
+      bubble.removeFromParent()
+      ;(bubble.material as THREE.SpriteMaterial).map?.dispose()
+      bubble.material.dispose()
+      bubble = null
+    }
+
     const rig: AvatarRig = { root, pivot, head, face: FACE_CALM, prop: PROP_NONE, propAngle: 0 }
     const record: AvatarRecord = {
       rig,
@@ -389,12 +433,32 @@ export class AvatarFactory {
     return Object.assign(rig, {
       setLabelVisible(visible: boolean) {
         if (label) label.visible = visible
+        labelOn = visible || opts.local
+        if (bubble) bubble.visible = labelOn
+      },
+      say: (text: string, until: number) => {
+        clearBubble()
+        const tex = makeBubbleTexture(text)
+        bubble = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, depthTest: false, transparent: true }))
+        const img = tex.image as HTMLCanvasElement
+        bubble.scale.set((img.width / img.height) * 0.24 * (img.height / 44), 0.24 * (img.height / 44), 1)
+        bubble.center.set(0.5, 0)
+        bubble.position.y = FIGURE_HEIGHT + (opts.local ? 0.3 : 0.55)
+        bubble.renderOrder = 10
+        bubble.visible = labelOn
+        root.add(bubble)
+        bubbleUntil = until
+      },
+      tickBubble: (now: number) => {
+        if (bubble && now >= bubbleUntil) clearBubble()
+        return bubble !== null
       },
       dispose: () => {
         this.records.delete(record)
         root.removeFromParent()
         labelTex?.dispose()
         labelMat?.dispose()
+        clearBubble()
       },
     })
   }

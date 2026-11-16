@@ -7,6 +7,13 @@ vi.mock('../render/AvatarFactory', () => {
     pivot: {},
     head: {},
     setLabelVisible() {},
+    said: [] as Array<[string, number]>,
+    say(text: string, until: number) {
+      this.said.push([text, until])
+    },
+    tickBubble() {
+      return false
+    },
     dispose() {},
   })
   return {
@@ -27,6 +34,19 @@ function makePlayers() {
   return new Players({ add() {} } as never, anim as never, 50)
 }
 const snap = (id: string, n: number, x = 0, z = 0) => ({ id, n, name: id, x, z, heading: 0 })
+
+describe('Players 對話泡泡', () => {
+  const said = (a: unknown) => (a as { said: unknown[] }).said
+  it('以玩家 id 指定遠端玩家、null 指定本機玩家；找不到的玩家忽略', () => {
+    const p = makePlayers()
+    const r = p.upsert(snap('b', 1), 0)
+    p.say('b', '早安', 6000)
+    p.say(null, '你好', 7000)
+    p.say('zzz', '沒人', 8000)
+    expect(said(r.avatar)).toEqual([['早安', 6000]])
+    expect(said(p.local.avatar)).toEqual([['你好', 7000]])
+  })
+})
 
 describe('Players 短編號對照', () => {
   it('依 n 套用 moves；對照不到的 n（含自己的 n）忽略', () => {
