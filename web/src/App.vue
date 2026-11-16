@@ -7,6 +7,7 @@ import TopBar from './ui/TopBar.vue'
 import ActionBar from './ui/ActionBar.vue'
 import SettingsPanel from './ui/SettingsPanel.vue'
 import PerfOverlay from './ui/PerfOverlay.vue'
+import ChatPanel from './ui/ChatPanel.vue'
 import ToastHost from './ui/ToastHost.vue'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -95,6 +96,7 @@ function toggleMute() {
         @open-settings="settingsOpen = true"
       />
       <ActionBar :actions="ui.actions" @perform="(id) => core?.performAction(id)" />
+      <ChatPanel :chat="ui.chat" :send="(t) => core?.sendChat(t) ?? 'offline'" />
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
     </template>
 
