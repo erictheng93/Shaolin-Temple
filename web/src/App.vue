@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { GameCore, type UiState } from './game/GameCore'
+import { clearAuth, consumeAuthRedirect, httpBaseFromWs, loadAuth, loginUrl, markLoginPending, type AuthProvider } from './game/core/auth'
 import { assetPresetFor, loadSettings, saveSettings } from './game/core/settings'
 import { setLocale, t } from './i18n'
 import EntryScreen from './ui/EntryScreen.vue'
@@ -12,11 +13,19 @@ import PerfOverlay from './ui/PerfOverlay.vue'
 import ChatPanel from './ui/ChatPanel.vue'
 import ToastHost from './ui/ToastHost.vue'
 
+const WS_URL: string | undefined = import.meta.env.VITE_WS_URL || undefined
+/** 登入用的伺服器 HTTP 基底；離線模式為 null（入寺畫面不顯示登入選項）。 */
+const AUTH_BASE = httpBaseFromWs(WS_URL)
+
+// 登入完成導回時網址帶著權杖：先存下並立刻清掉 fragment。導回後不自動進場（音訊需要使用者手勢）。
+const authRedirect = consumeAuthRedirect()
 const canvas = ref<HTMLCanvasElement | null>(null)
 const settings = reactive(loadSettings())
 setLocale(settings.locale)
 // 本次載入時實際採用的資產預設（含自動畫質的網路降級，與 GameCore 建構時相同）；之後切換畫質，部分項目要重新載入才生效。
 const loadedPreset = assetPresetFor(settings.quality)
+/** 本機存的登入狀態（只在入寺畫面用；進場後的身份以 GameCore 的 ui.auth 為準）。 */
+const auth = shallowRef(authRedirect?.kind === 'session' ? authRedirect.auth : loadAuth())
 // UI 狀態整包替換，用 shallowRef 避免深層響應式追蹤。
 const ui = shallowRef<UiState | null>(null)
 const entered = ref(false)
@@ -41,9 +50,10 @@ onMounted(() => {
     core = new GameCore({
       canvas: canvas.value,
       settings: { ...settings },
-      wsUrl: import.meta.env.VITE_WS_URL || undefined,
+      wsUrl: WS_URL,
       onUi: (s) => (ui.value = s),
       onToast: toast,
+      onNameChanged: (name) => (settings.playerName = name),
     })
     core.start()
     // 開發模式除錯用：瀏覽器主控台可用 window.__game 檢查狀態（正式建置會移除）。
@@ -51,6 +61,9 @@ onMounted(() => {
   } catch (err) {
     console.error(err)
     fatal.value = true
+  }
+  if (authRedirect?.kind === 'error') {
+    toast(t(authRedirect.error === 'cancelled' ? 'auth.cancelled' : 'auth.failed'))
   }
 })
 
@@ -83,11 +96,36 @@ async function enter(name: string) {
   entering.value = true
   settings.playerName = name
   try {
-    await core.enter(name || t('player.visitor'))
+    await core.enter(name, auth.value)
     entered.value = true
   } finally {
     entering.value = false
   }
+}
+
+/** 整頁導向登入。先把名字存起來，導回後入寺畫面仍是同一個名字。 */
+function login(provider: AuthProvider, name: string) {
+  if (!AUTH_BASE) return
+  settings.playerName = name
+  saveSettings({ ...settings })
+  // 回來時只採用這個分頁自己發起的登入（防 login CSRF）；旗標寫不進去就無法完成登入，不導向
+  if (!markLoginPending()) {
+    toast(t('auth.unsupported'))
+    return
+  }
+  location.assign(loginUrl(AUTH_BASE, provider, location.origin))
+}
+
+/** 入寺畫面的登出：只清本機權杖，不需要打伺服器。 */
+function logoutBeforeEnter() {
+  clearAuth()
+  auth.value = null
+}
+
+/** 進場後的登出：清權杖後重新整理，回到入寺畫面（連線以訪客身份重新建立，簡單可靠）。 */
+function logoutAndReload() {
+  clearAuth()
+  location.reload()
 }
 
 function toggleMute() {
@@ -114,7 +152,16 @@ function toggleMute() {
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
     </template>
 
-    <SettingsPanel v-if="settingsOpen" :settings="settings" :active-quality="ui?.quality ?? 'medium'" :loaded-preset="loadedPreset" @close="settingsOpen = false" />
+    <SettingsPanel
+      v-if="settingsOpen"
+      :settings="settings"
+      :active-quality="ui?.quality ?? 'medium'"
+      :loaded-preset="loadedPreset"
+      :auth="ui?.auth ?? 'guest'"
+      @rename="(name) => core?.rename(name)"
+      @logout="logoutAndReload"
+      @close="settingsOpen = false"
+    />
 
     <Transition name="fade">
       <EntryScreen
@@ -124,8 +171,12 @@ function toggleMute() {
         :outfit="settings.outfit"
         :busy="entering"
         :ready="!!ui"
+        :auth-base="AUTH_BASE"
+        :logged-in="auth?.provider ?? null"
         @enter="enter"
         @outfit="(o) => (settings.outfit = o)"
+        @login="login"
+        @logout="logoutBeforeEnter"
       />
     </Transition>
 

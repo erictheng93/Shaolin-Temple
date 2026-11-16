@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { MALLET_HEAD_Z, WOODFISH_FORWARD, WOODFISH_STRIKE_Y, createChantPropsGeometry, patchChantPropsMaterial } from './chantProps'
 import { createIncenseStickGeometry } from './IncenseSystem'
+import { Nameplate } from './Nameplate'
 import { ResourceTracker } from './ResourceTracker'
 import { OUTFITS, normalizeOutfit } from '../world/outfits'
 
@@ -401,28 +402,6 @@ const AVATAR_MODEL_VERSION = 2
 /** 同時繪製的角色上限（含自己）。需大於最高畫質的可見人數。 */
 export const AVATAR_CAPACITY = 160
 
-function makeLabelTexture(text: string): THREE.CanvasTexture {
-  const c = document.createElement('canvas')
-  const ctx = c.getContext('2d')!
-  const font = '500 28px system-ui, "Noto Sans TC", sans-serif'
-  ctx.font = font
-  const w = Math.ceil(ctx.measureText(text).width) + 24
-  c.width = w
-  c.height = 44
-  ctx.font = font
-  ctx.fillStyle = 'rgba(20,22,28,0.55)'
-  ctx.beginPath()
-  ctx.roundRect(0, 0, w, 44, 22)
-  ctx.fill()
-  ctx.fillStyle = '#f4efe6'
-  ctx.textAlign = 'center'
-  ctx.textBaseline = 'middle'
-  ctx.fillText(text, w / 2, 23)
-  const tex = new THREE.CanvasTexture(c)
-  tex.colorSpace = THREE.SRGBColorSpace
-  return tex
-}
-
 /** 對話泡泡貼圖：每行最多 BUBBLE_LINE_CHARS 個字元自動換行，半透明底，與名牌同色系。 */
 const BUBBLE_LINE_CHARS = 14
 function makeBubbleTexture(text: string): THREE.CanvasTexture {
@@ -637,28 +616,8 @@ export class AvatarFactory {
     shadow.position.y = 0.06
     root.add(shadow)
 
-    let label: THREE.Sprite | null = null
-    let labelTex: THREE.Texture | null = null
-    let labelMat: THREE.SpriteMaterial | null = null
-    const clearLabel = () => {
-      label?.removeFromParent()
-      labelTex?.dispose()
-      labelMat?.dispose()
-      label = labelTex = labelMat = null
-    }
-    const setName = (name: string) => {
-      const visible = label?.visible ?? true
-      clearLabel()
-      if (!name) return
-      labelTex = makeLabelTexture(name)
-      labelMat = new THREE.SpriteMaterial({ map: labelTex, depthWrite: false, transparent: true })
-      label = new THREE.Sprite(labelMat)
-      const img = labelTex.image as HTMLCanvasElement
-      label.scale.set((img.width / img.height) * 0.28, 0.28, 1)
-      label.visible = visible
-      root.add(label)
-    }
-    setName(opts.name)
+    // 名牌的貼圖與材質由 Nameplate 擁有（每個角色獨有，改名時換掉），不登記在共用的 tracker
+    const label = new Nameplate(root, opts.name)
 
     // 對話泡泡：只在名牌顯示中的人（最近 12 人）與本機玩家頭上顯示。
     let labelOn = opts.local
@@ -676,20 +635,20 @@ export class AvatarFactory {
     const record: AvatarRecord = { rig, shadow, outfit: normalizeOutfit(opts.outfit) }
     this.records.add(record)
     /** 名牌與泡泡的高度（戴斗笠時升高）；換衣裝時重新放。 */
-    const bubbleY = () => FIGURE_HEIGHT + (label ? 0.55 : 0.3) + labelLift(record.outfit)
+    const bubbleY = () => FIGURE_HEIGHT + (label.name ? 0.55 : 0.3) + labelLift(record.outfit)
     const placeLabels = () => {
-      if (label) label.position.y = FIGURE_HEIGHT + 0.3 + labelLift(record.outfit)
+      label.setY(FIGURE_HEIGHT + 0.3 + labelLift(record.outfit))
       if (bubble) bubble.position.y = bubbleY()
     }
     placeLabels()
 
     return Object.assign(rig, {
       setName: (name: string) => {
-        setName(name)
+        label.set(name)
         placeLabels()
       },
       setLabelVisible(visible: boolean) {
-        if (label) label.visible = visible
+        label.setVisible(visible)
         labelOn = visible || opts.local
         if (bubble) bubble.visible = labelOn
       },
@@ -717,7 +676,7 @@ export class AvatarFactory {
       dispose: () => {
         this.records.delete(record)
         root.removeFromParent()
-        clearLabel()
+        label.dispose()
         clearBubble()
       },
     })

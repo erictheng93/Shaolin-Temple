@@ -1,8 +1,8 @@
 use crate::metrics::Metrics;
 use crate::{
     protocol::{
-        MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MoveTuple, Moving, PlayerAction, PlayerSnapshot,
-        ServerMessage,
+        AuthKind, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MoveTuple, Moving, PlayerAction,
+        PlayerSnapshot, ServerMessage,
     },
     world::{self, PORTAL_TOLERANCE, Zone},
 };
@@ -39,6 +39,10 @@ const BUDGET_START: f64 = 1.0;
 const CORRECTION_GAP: Duration = Duration::from_millis(300);
 /// 每位玩家快取的 reqId 結果筆數。
 const ACK_CACHE: usize = 64;
+/// 改名額度（每位玩家，`rename` 與帶新名字的斷線恢復共用）：可連續改 2 次，之後平均每 2 秒 1 次。
+/// 放在玩家身上而不是連線上：斷線恢復每次都換新連線，若以連線計算，反覆恢復就能無限改名洗全房的名牌。
+const RENAME_BURST: f64 = 2.0;
+const RENAME_PER_SEC: f64 = 0.5;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RoomConfig {
@@ -76,14 +80,16 @@ type Reply = oneshot::Sender<Option<Who>>;
 enum RoomCommand {
     Join {
         name: String,
+        auth: AuthKind,
         outfit: u8,
         outbound: mpsc::Sender<ServerMessage>,
         reply: Reply,
     },
+    /// `name` 與 `auth` 是這次 `hello` 的值：名字不同時採用新名字並廣播 `name`，`auth` 重新驗證過。
     Resume {
         token: String,
-        /// `hello` 帶的名字（已清理）；與保存的不同就改名並對其他人重送 `join`。
-        name: Option<String>,
+        name: String,
+        auth: AuthKind,
         /// `hello` 帶的有效衣裝；沒有或無效為 `None`（沿用保存的衣裝）。
         outfit: Option<u8>,
         outbound: mpsc::Sender<ServerMessage>,
@@ -108,6 +114,11 @@ enum RoomCommand {
         who: Who,
         zone: String,
     },
+    /// 改名；`name` 已經過 [`crate::protocol::clean_name`]。
+    Rename {
+        who: Who,
+        name: String,
+    },
     Chat {
         who: Who,
         text: String,
@@ -126,6 +137,8 @@ struct Player {
     id: String,
     n: u8,
     name: String,
+    /// 這條連線 `hello.session` 的驗證結果（只用來回 `welcome.auth`）。
+    auth: AuthKind,
     /// 衣裝編號（0..OUTFIT_COUNT），斷線保留期間與恢復連線時都保留。
     outfit: u8,
     token: String,
@@ -151,10 +164,27 @@ struct Player {
     /// 這位收件人的 moves 曾被丟棄，下個放得進佇列的 tick 改送 sync。
     needs_sync: bool,
     acks: VecDeque<(String, ServerMessage)>,
+    /// 改名額度（次數），算到 `rename_at` 為止。
+    rename_tokens: f64,
+    rename_at: Instant,
+}
+impl Player {
+    /// 有額度就扣一次並回 true。
+    fn take_rename(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.rename_at).as_secs_f64();
+        self.rename_tokens = (self.rename_tokens + elapsed * RENAME_PER_SEC).min(RENAME_BURST);
+        self.rename_at = now;
+        if self.rename_tokens < 1.0 {
+            return false;
+        }
+        self.rename_tokens -= 1.0;
+        true
+    }
 }
 
 struct Admission {
     name: String,
+    auth: AuthKind,
     outfit: Option<u8>,
     resume_token: Option<String>,
     reply: oneshot::Sender<Membership>,
@@ -188,6 +218,16 @@ impl Membership {
                 req_id,
                 action,
                 data_ok,
+            })
+            .await;
+    }
+    /// 改名（已清理）。與 action 一樣不可丟棄，以 `send` 等房間佇列有空位。
+    pub async fn rename(&self, name: String) {
+        let _ = self
+            .room
+            .send(RoomCommand::Rename {
+                who: self.who.clone(),
+                name,
             })
             .await;
     }
@@ -246,14 +286,14 @@ impl Lobby {
                                 .and_then(|no| rooms.get(&no))
                         {
                             let (reply, received) = oneshot::channel();
-                            let command = RoomCommand::Resume { token: token.clone(), name: Some(request.name.clone()), outfit: request.outfit, outbound: outbound.clone(), reply };
+                            let command = RoomCommand::Resume { token: token.clone(), name: request.name.clone(), auth: request.auth, outfit: request.outfit, outbound: outbound.clone(), reply };
                             if room.send(command).await.is_ok() && let Ok(Some(who)) = received.await {
                                 assigned = Some((who, room.clone()));
                             }
                         }
                         if assigned.is_none() {
                             for room in rooms.values() {
-                                if let Some(who) = join(room, &request.name, request.outfit.unwrap_or(0), outbound.clone()).await {
+                                if let Some(who) = join(room, &request.name, request.auth, request.outfit.unwrap_or(0), outbound.clone()).await {
                                     assigned = Some((who, room.clone())); break;
                                 }
                             }
@@ -262,7 +302,7 @@ impl Lobby {
                             next_room += 1;
                             let (tx, rx) = mpsc::channel(128);
                             tokio::spawn(run_room(next_room, config, rx, metrics.clone()));
-                            if let Some(who) = join(&tx, &request.name, request.outfit.unwrap_or(0), outbound.clone()).await { assigned = Some((who, tx.clone())); }
+                            if let Some(who) = join(&tx, &request.name, request.auth, request.outfit.unwrap_or(0), outbound.clone()).await { assigned = Some((who, tx.clone())); }
                             rooms.insert(next_room, tx);
                         }
                         if let Some((who, room)) = assigned {
@@ -277,11 +317,13 @@ impl Lobby {
         Self { tx }
     }
     /// 加入房間；帶有效的 `resume_token` 時恢復原本的玩家，否則視為新玩家。
+    /// `name` 已清理；`auth` 是這次 `hello.session` 的驗證結果。
     /// `outfit` 是 `hello` 帶的有效衣裝（缺少或無效為 `None`）：新玩家以它為準（沒有則 0），
     /// 恢復時只有與保存值不同才更換。
     pub async fn join(
         &self,
         name: String,
+        auth: AuthKind,
         resume_token: Option<String>,
         outfit: Option<u8>,
     ) -> Option<Membership> {
@@ -289,6 +331,7 @@ impl Lobby {
         self.tx
             .send(Admission {
                 name,
+                auth,
                 outfit,
                 resume_token,
                 reply,
@@ -301,12 +344,14 @@ impl Lobby {
 async fn join(
     room: &mpsc::Sender<RoomCommand>,
     name: &str,
+    auth: AuthKind,
     outfit: u8,
     outbound: mpsc::Sender<ServerMessage>,
 ) -> Option<Who> {
     let (reply, received) = oneshot::channel();
     room.send(RoomCommand::Join {
         name: name.into(),
+        auth,
         outfit,
         outbound,
         reply,
@@ -380,6 +425,7 @@ impl Room {
             room: self.id.clone(),
             resume_token: p.token.clone(),
             server_time: now_ms(),
+            auth: p.auth,
             players: self.players.values().map(Self::snapshot).collect(),
         }
     }
@@ -393,6 +439,7 @@ impl Room {
     fn join(
         &mut self,
         name: String,
+        auth: AuthKind,
         outfit: u8,
         outbound: mpsc::Sender<ServerMessage>,
         now: Instant,
@@ -409,6 +456,7 @@ impl Room {
             id: id.clone(),
             n,
             name,
+            auth,
             outfit,
             token: self.new_token(),
             zone: &world::COURTYARD,
@@ -426,6 +474,8 @@ impl Room {
             dirty: false,
             needs_sync: false,
             acks: VecDeque::new(),
+            rename_tokens: RENAME_BURST,
+            rename_at: now,
         };
         self.players.insert(id.clone(), player);
         if !self.send_welcome(&id) {
@@ -436,10 +486,14 @@ impl Room {
     }
 
     /// 以有效、未過期、尚未使用過的 token 恢復玩家；token 立即換新，舊連線若還在會被取代。
+    /// `hello` 帶來的名字與保留的不同時採用新名字（前端改名後斷線重連，不能退回舊名字），
+    /// 送出 welcome 後對全房廣播 `name`；但要扣改名額度，額度用完就保留舊名、不廣播
+    /// （welcome 的快照是舊名，前端以它為準）。`auth` 改為這次驗證的結果。
     fn resume(
         &mut self,
         token: &str,
-        name: Option<String>,
+        name: String,
+        auth: AuthKind,
         outfit: Option<u8>,
         outbound: mpsc::Sender<ServerMessage>,
         now: Instant,
@@ -455,6 +509,14 @@ impl Room {
         let token = self.new_token();
         let p = self.players.get_mut(&id)?;
         p.token = token;
+        p.auth = auth;
+        let renamed = p.name != name && p.take_rename(now);
+        if !renamed && p.name != name {
+            self.metrics.rate_limited();
+        }
+        if renamed {
+            p.name = name.clone();
+        }
         // 取代舊連線：舊的 Sender 被丟棄，舊連線的 session 送完佇列後以 1013 關閉。
         p.link = Some(Link { conn, tx: outbound });
         p.grace_until = None;
@@ -470,23 +532,21 @@ impl Room {
         if let Some(o) = changed {
             p.outfit = o;
         }
-        // 重新整理後換了名字：沒有改名訊息，對其他人重送同一個 id 的 join（前端會更新既有玩家）。
-        let renamed = name.filter(|n| *n != p.name);
-        if let Some(n) = &renamed {
-            p.name = n.clone();
-        }
         if !self.send_welcome(&id) {
             self.detach(&id, now);
             return None;
         }
-        if renamed.is_some()
-            && let Some(p) = self.players.get(&id)
-        {
-            let join = ServerMessage::Join {
-                player: Self::snapshot(p),
-            };
-            self.broadcast(join, now, |q| q.id != id);
-        } else if let Some(outfit) = changed {
+        if renamed {
+            self.broadcast(
+                ServerMessage::Name {
+                    id: id.clone(),
+                    name,
+                },
+                now,
+                |_| true,
+            );
+        }
+        if let Some(outfit) = changed {
             let message = ServerMessage::Outfit {
                 id: id.clone(),
                 outfit,
@@ -618,6 +678,25 @@ impl Room {
             };
             self.broadcast(message, now, |q| q.zone.id == zone && q.id != who.id);
         }
+    }
+
+    /// 改名：同名不廣播、不扣額度；額度用完則忽略；否則對同房所有人（含本人、不分場景）廣播 `name`。之後的 welcome／join 快照帶新名字。
+    fn rename(&mut self, who: &Who, name: String, now: Instant) {
+        let Some(p) = self.live(who) else { return };
+        if p.name == name {
+            return;
+        }
+        if !p.take_rename(now) {
+            // 超過額度：忽略（不關閉連線），計入既有的速率限制計數。
+            self.metrics.rate_limited();
+            return;
+        }
+        p.name = name.clone();
+        let message = ServerMessage::Name {
+            id: who.id.clone(),
+            name,
+        };
+        self.broadcast(message, now, |_| true);
     }
 
     fn chat(&mut self, who: &Who, text: String, now: Instant) {
@@ -798,9 +877,9 @@ async fn run_room(
                 let Some(command) = command else { break };
                 let now = Instant::now();
                 match command {
-                    RoomCommand::Join { name, outfit, outbound, reply } => {
+                    RoomCommand::Join { name, auth, outfit, outbound, reply } => {
                         if reply.is_closed() || outbound.is_closed() { let _ = reply.send(None); continue; }
-                        match room.join(name, outfit, outbound, now) {
+                        match room.join(name, auth, outfit, outbound, now) {
                             Some(who) => {
                                 let id = who.id.clone();
                                 if reply.send(Some(who)).is_err() {
@@ -813,8 +892,8 @@ async fn run_room(
                             None => { let _ = reply.send(None); }
                         }
                     }
-                    RoomCommand::Resume { token, name, outfit, outbound, reply } => {
-                        let _ = reply.send(room.resume(&token, name, outfit, outbound, now));
+                    RoomCommand::Resume { token, name, auth, outfit, outbound, reply } => {
+                        let _ = reply.send(room.resume(&token, name, auth, outfit, outbound, now));
                     }
                     RoomCommand::Disconnect(who) => {
                         if room.live(&who).is_some() { room.detach(&who.id, now); }
@@ -822,6 +901,7 @@ async fn run_room(
                     RoomCommand::Position { who, x, z, heading, moving, at } => room.position(&who, x, z, heading, moving, at),
                     RoomCommand::Action { who, req_id, action, data_ok } => room.action(&who, req_id, action, data_ok, now),
                     RoomCommand::Zone { who, zone } => room.switch_zone(&who, &zone, now),
+                    RoomCommand::Rename { who, name } => room.rename(&who, name, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                     RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
                 }

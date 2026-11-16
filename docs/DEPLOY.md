@@ -55,6 +55,7 @@
    | --- | --- | --- | --- | --- |
    | `game.example.com` | `web` | 8080 | `/` | 關 |
    | `game.example.com` | `server` | 8080 | `/ws` | 關（伺服器自己的路由就是 `/ws`） |
+   | `game.example.com` | `server` | 8080 | `/auth` | 關（登入端點 `/auth/*`，見「登入（Google／LINE）」；不啟用登入也建議加，前端會查 `/auth/providers`） |
 
    Dokploy 在部署時為 compose 服務產生 Traefik 標籤與網路，不必手寫標籤。**部署前按 Preview Compose**，確認 `server` 的路由規則含 `PathPrefix(`/ws`)`，並且沒有把 `/metrics` 導出去。
 7. **Deploy**：
@@ -156,6 +157,47 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
    PowerShell 的環境變數寫法是 `$env:ALLOWED_ORIGINS = 'https://temple.wishly.tw'`。 8080 被占用（例如同時開著 `npm run mock`）時加 `PORT=8081`，並把 `temple.yml` 的 `service` 改成同一個埠。
 
 驗證沿用「上線後驗證清單」，把網址換成上面兩個主機名；`curl https://temple-ws.wishly.tw/metrics` 應為 404。
+
+這個 POC 的 Tunnel 只放行 `/ws`：要在這裡啟用登入（下一節），`temple.yml` 的 ingress 要另外放行 `^/auth/`，並把 `AUTH_PUBLIC_URL` 設為 `https://temple-ws.wishly.tw`。**未實測。**
+
+## 登入（Google／LINE）
+
+選填。全部不設定時伺服器只有訪客，`/auth/providers` 回空清單（行為與協定版本 3 相同）。設計與安全細節見 [BACKEND_TASKS.md](BACKEND_TASKS.md)「協定版本 4：登入與改名」。
+
+### 環境變數（server）
+
+| 變數 | 內容 |
+| --- | --- |
+| `SESSION_SECRET` | 簽章 session 權杖與登入流程 cookie 的金鑰，**至少 32 bytes**（太短啟動失敗）。產生：`openssl rand -base64 48`。輪替＝所有人登出（沒有其他撤銷方式）。 |
+| `AUTH_PUBLIC_URL` | 瀏覽器連到 server 的 scheme＋主機，不含路徑，例如 `https://game.example.com`。用來組 redirect URI；https 時流程 cookie 加 `Secure`。 |
+| `GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET` | Google OAuth 用戶端，要成對設定。 |
+| `LINE_CHANNEL_ID`／`LINE_CHANNEL_SECRET` | LINE Login channel，要成對設定。 |
+
+某個提供者的 id 與 secret 只設一個、或設了提供者卻缺 `SESSION_SECRET`／`AUTH_PUBLIC_URL`，伺服器啟動失敗並印出缺少的變數。
+
+**已啟用登入後不可移除或更換 `SESSION_SECRET`**，否則所有玩家的登入失效（前端收到 `guest` 會清掉本機權杖），需要重新登入。只在確定要讓所有人登出時才換。
+
+### 反向代理
+
+`/auth` 路徑也要轉給 `server`（Domains 分頁多一筆 Path `/auth`，見部署步驟 6），否則 `/auth/google/start` 會被前端的 SPA 回退吃掉。登入結束時伺服器 302 回 `<前端 origin>/#session=…`，前端與 server 不同網域也可以（權杖在網址 fragment，不靠 cookie；`/auth/providers` 對 `ALLOWED_ORIGINS` 內的來源回 CORS 標頭）。
+
+建議在反向代理（Traefik 的 RateLimit middleware 或 Cloudflare 的 Rate limiting rules）對 `/auth` 加每個 IP 的頻率限制（例如每分鐘 30 次）：伺服器本身只限制同時進行的換權杖請求（8 個），不限制每個來源的次數。**未實測。**
+
+### redirect URI（在提供者的主控台登記）
+
+redirect URI 固定是 `<AUTH_PUBLIC_URL>/auth/<provider>/callback`，必須與主控台登記的**完全一致**（scheme、主機、埠、路徑）：
+
+- **Google Cloud Console** → APIs & Services → Credentials → Create credentials → OAuth client ID，類型 **Web application**；Authorized redirect URIs 填 `https://game.example.com/auth/google/callback`。Authorized JavaScript origins 不需要（瀏覽器不直接呼叫 Google API）。OAuth 同意畫面只需要 `openid` 範圍。
+- **LINE Developers Console** → Provider → 建立 **LINE Login** channel（App types 勾 Web app）→ LINE Login 分頁 → Callback URL 填 `https://game.example.com/auth/line/callback`。Basic settings 分頁的 Channel ID／Channel secret 就是 `LINE_CHANNEL_ID`／`LINE_CHANNEL_SECRET`。不需要申請 email 權限。
+
+本機開發（`AUTH_PUBLIC_URL=http://localhost:8080`）要另外登記 `http://localhost:8080/auth/google/callback`（Google 允許 localhost 的 http）；LINE 的 Callback URL 也可以多填一行本機網址。**以上主控台步驟依官方文件整理，尚未以真實帳號實測。**
+
+### 上線後驗證（登入）
+
+- [ ] `curl -s https://game.example.com/auth/providers` → `{"providers":["google","line"]}`（只列出設定完整的）。
+- [ ] `curl -sI "https://game.example.com/auth/google/start?origin=https://evil.example"` → `400`（不在 `ALLOWED_ORIGINS` 的 origin 不導向）。
+- [ ] 瀏覽器實際用 Google 與 LINE 各登入一次，回到遊戲後 `welcome.auth` 為 `google`／`line`；在提供者頁面按取消，回到遊戲顯示取消而不是錯誤頁。
+- [ ] `docker logs` 中只有 `login succeeded`／`login failed` 與固定的原因，沒有權杖、授權碼或使用者 ID。
 
 ## 正式環境壓測
 

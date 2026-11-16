@@ -319,11 +319,11 @@ T8 報告指出 10% 移動情境剩下的超出量主要來自仍為 JSON 的 `a
 - **清理**（`protocol::clean_chat`）：移除控制字元（C0、C1）與 U+200B～U+200F、U+202A～U+202E、U+2066～U+2069、U+FEFF；連續空白（含換行、tab）壓成單一空格；trim；最多 `CHAT_MAX_CHARS`（80）個 Unicode 字元（char，不是 byte）。清理後為空就丟棄，不回錯誤。
 - **限速**：`rate_limit.rs` 的 chat bucket 突發 3、每秒補充 0.5；同時算入全部訊息的總 bucket。超出者丟棄，沿用「超出計數／連續超出關閉連線」。
 - **下行** `{ "t": "chat", "id", "text", "at" }`（JSON；`at` 為伺服器 Unix 毫秒）：由房間 actor 廣播給同房所有在線玩家，不分場景，含發話者本人；斷線保留中的玩家不送。連線層到房間的指令以 `try_send` 送出（佇列滿時丟棄）。
-- 固定資料 `protocol-v3.json` 的 `client`／`server` 各加一筆；缺 `text`、`text` 非字串的案例在 `tests/protocol.rs`。
+- 固定資料 `protocol-v4.json` 的 `client`／`server` 各加一筆；缺 `text`、`text` 非字串的案例在 `tests/protocol.rs`。
 
 ### 協定增修：玩家衣裝 `outfit`（2026-11-16，向下相容，不升版號）
 
-衣裝是整數編號 `0..OUTFIT_COUNT-1`（`OUTFIT_COUNT = 8`，`protocol::OUTFIT_COUNT`；前端 `protocol.ts` 同名，固定資料 `protocol-v3.json` 的 `outfitCount` 鎖住兩邊）。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+衣裝是整數編號 `0..OUTFIT_COUNT-1`（`OUTFIT_COUNT = 8`，`protocol::OUTFIT_COUNT`；前端 `protocol.ts` 同名，固定資料 `protocol-v4.json` 的 `outfitCount` 鎖住兩邊）。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
 
 **新增衣裝**（2026-11-16 由 6 套增為 8 套：行腳僧、武僧短褂）：只能加在尾端，不可改順序或刪除；同一個變更內改 `protocol::OUTFIT_COUNT`、前端 `OUTFIT_COUNT`、`web/scripts/mock-server.mjs` 與固定資料的 `outfitCount`（測試鎖住四處一致），負載工具與 mock 的機器人隨機衣裝直接用 `OUTFIT_COUNT`。伺服器對上行的範圍驗證維持嚴格；前端的下行驗證刻意寬鬆（0～255 的整數都接受），還沒重新整理的舊分頁收到不認得的編號時顯示為預設衣裝，不會因此丟掉 `welcome`／`join`。
 
@@ -332,7 +332,87 @@ T8 報告指出 10% 移動情境剩下的超出量主要來自仍為 JSON 的 `a
 - **上行** `{ "t": "outfit", "outfit": n }`（不需 reqId／ack）：無效值丟棄（不計入無效訊息）；`rate_limit.rs` 的 outfit bucket 與 chat 同規則（突發 3、每秒補 0.5，計數各自獨立，同時算入總 bucket）；與目前相同不廣播；否則保存並廣播下行 `{ "t": "outfit", "id", "outfit" }`（JSON）給同房所有在線玩家，不分場景、含本人。連線層到房間的指令以 `send().await` 送出（是狀態，不可丟棄）。
 - **恢復連線**：衣裝留在玩家狀態裡，斷線保留期間與 `resumeToken` 恢復都保留。恢復時 `hello` 帶了有效且不同的 `outfit` 以它為準（`welcome` 已含新值），並在 `welcome` 送出後對其他人廣播一則 `outfit`；相同或沒帶則不廣播。
 - **客戶端**：`NetworkClient.setOutfit(n)` 記住衣裝（每次 `hello` 都帶，含重連），已連線時送出；客戶端限速（補充間隔多留 10%）擋下時只保留最新的一個值、額度恢復後補送，不排隊；斷線時不送。
-- 固定資料 `protocol-v3.json` 加入 `outfitCount`、帶衣裝的 `hello`／`welcome`／`join`、上行與下行 `outfit`（手寫，`protocol-v3-vectors.py` 只產生 `binary` 一段，不會覆蓋）；測試在 `tests/protocol.rs`、`tests/gameplay.rs`、`src/room/tests.rs`、`src/rate_limit.rs` 與前端 `net/outfit.test.ts`。負載工具的機器人 `hello` 帶隨機衣裝。
+- 固定資料 `protocol-v4.json` 加入 `outfitCount`、帶衣裝的 `hello`／`welcome`／`join`、上行與下行 `outfit`（手寫，`protocol-v4-vectors.py` 只產生 `binary` 一段，不會覆蓋）；測試在 `tests/protocol.rs`、`tests/gameplay.rs`、`src/room/tests.rs`、`src/rate_limit.rs` 與前端 `net/outfit.test.ts`。負載工具的機器人 `hello` 帶隨機衣裝。
+
+### 協定版本 4：登入與改名（2026-11-16）
+
+v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上：這兩項的訊息與規則不變，`hello` 同時可帶 `outfit` 與 `session`，`welcome`／`join` 的快照照舊帶衣裝；斷線恢復時先套用名字再套用衣裝，`welcome` 送出後依序廣播 `name` 與 `outfit`。
+
+玩家可以用 Google 或 LINE 登入，或以訪客身份進入；進場後可以改名。**不引入資料庫**（T10 才有 PostgreSQL）：登入狀態是伺服器以 HMAC 簽章的無狀態 session 權杖，伺服器不存任何登入資料。玩家的身分目前只用來回 `welcome.auth`，沒有任何持久化或以身分為鍵的功能。實作：`server/src/auth.rs`（端點、流程、權杖）、`config.rs`（設定）、`protocol.rs`、`connection.rs`、`room.rs`（改名）、`rate_limit.rs`（改名頻率）。
+
+**訊息**（二進位幀與 v3 完全相同；固定資料改名為 `server/tests/protocol-v4.json`，產生二進位向量的腳本改名為 `protocol-v4-vectors.py`，輸出不變）：
+
+| 方向 | 訊息 | 說明 |
+| --- | --- | --- |
+| 上行 | `{ t:'hello', v:4, name, resumeToken?, session? }` | `session` 選填，上限 512 UTF-8 bytes（超過＝無效訊息，與其他字串上限一致；空字串不算無效，只是驗證不過）。驗證通過＝已登入；缺少、過期、簽章不符或伺服器沒設定 `SESSION_SECRET` 都當訪客，**不拒絕連線**。 |
+| 下行 | `welcome` 新增必填 `auth: 'guest' \| 'google' \| 'line'` | 這條連線這次 `hello` 的驗證結果；前端據此得知權杖是否仍有效。 |
+| 上行 | `{ t:'rename', name }` | 原始字串上限 256 bytes（同 `hello.name`），清理規則與 `hello` 共用 `clean_name()`。`hello` 之前送＝無效訊息。頻率限制以**玩家**為單位（房間的玩家狀態，`rename` 與帶新名字的斷線恢復共用）：突發 2 次、之後平均每 2 秒 1 次；超過的忽略並計入 `/metrics` 的速率限制計數，不關閉連線。rename 另受每連線全部訊息每秒 30 則的總額度限制。 |
+| 下行 | `{ t:'name', id, name }` | 改名成功後送給同房所有人（含本人、不分場景），`name` 是清理後的結果；清理後與目前名字相同時不送。之後的 `welcome`／`join` 快照帶新名字。 |
+
+- **斷線恢復**：`hello.name` 清理後與保留的名字不同時採用新名字，送出 `welcome`（已是新名字）後對全房廣播 `name`（前端改名後斷線重連，名字不會退回舊的）。這次改名同樣扣該玩家的改名額度；額度用完時保留舊名、不廣播，`welcome` 的快照是舊名，前端以它為準。`session` 每次 `hello` 都重新驗證，`welcome.auth` 反映這次的結果（例如權杖在保留期間過期 → `guest`）。
+- **版本**：升為 4，策略同 v2／v3（不協商）：`hello.v != 4` 回 `unsupported_version`（訊息 `Protocol version 4 required`）後以 1008 關閉。`tests/websocket.rs` 的 `unsupported_version_then_close` 驗證 v1、v2、v3、v5。負載工具以 `PROTOCOL_VERSION` 送 `hello`（訪客）。
+
+**HTTP 端點**（與 `/ws` 同一個 Axum 服務；反向代理要把 `/auth` 也轉給 server，見 [DEPLOY.md](DEPLOY.md)「登入（Google／LINE）」）：
+
+| 端點 | 回應 |
+| --- | --- |
+| `GET /auth/providers` | `200 {"providers":[...]}`，只列出設定完整的提供者（沒有就是 `[]`）。`Origin` 在 `ALLOWED_ORIGINS` 內時回 `Access-Control-Allow-Origin: <該 origin>`；一律 `Vary: Origin`、`Cache-Control: no-store`。 |
+| `GET /auth/{provider}/start?origin=<origin>` | 302 到提供者的授權頁並設定流程 cookie。`origin` 以 `normalize_origin()` 正規化後必須**完全等於** `ALLOWED_ORIGINS` 之一，否則 400（不會成為 open redirect）。未設定／未知的提供者 404。 |
+| `GET /auth/{provider}/callback?code&state` | 成功：302 到 `<origin>/#session=<權杖>&provider=<google\|line>`。失敗：302 到 `<origin>/#auth_error=cancelled`（`error=access_denied`，大小寫不拘：LINE 文件寫 `ACCESS_DENIED`）或 `#auth_error=failed`（其他所有原因）；提供者的錯誤訊息、授權碼等都不放進網址。`state` 還原不出仍在允許清單內的 origin 時回 400 純文字。 |
+
+`start` 與 `callback` 的回應都帶 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`。session 走 fragment 而不是 cookie：前端與 server 不一定同源，WebSocket 也不必依賴 cookie；fragment 不會送到任何伺服器、也不會出現在 Referer。
+
+**安全設計**：
+
+- **授權碼流程＋PKCE（S256）＋`state`＋`nonce`**，scope 只有 `openid`（只用 `sub`；不要求也不儲存姓名、頭像、email）。`start` 產生 32 bytes 隨機的 PKCE verifier（base64url 43 字元）、nonce 與隨機值 `r`：
+  - **流程 cookie** `temple_auth`（`HttpOnly; SameSite=Lax; Path=/auth; Max-Age=600`，`AUTH_PUBLIC_URL` 是 https 時加 `Secure`）：簽章過的 `{提供者, r, verifier, nonce, 到期}`。verifier 只在這裡，**不出現在任何網址**（放進 `state` 會跟授權碼一起經過瀏覽器網址列，PKCE 就沒有意義）。
+  - **`state`**：簽章過的 `{origin, r, 到期}`。失敗時仍能導回前端，所以 origin 放在 state；callback 再確認它仍在 `ALLOWED_ORIGINS` 內。
+  - callback 要求 cookie 與 state 的簽章、10 分鐘期限都有效、cookie 的提供者與路徑相符、兩邊的 `r` 相同：callback 必須回到發起登入的同一個瀏覽器，攻擊者無法把自己的授權碼塞給受害者（login CSRF）。callback 的回應清掉 cookie（`Max-Age=0`）。伺服器不存流程狀態；簽章以不同的前綴區分用途（session／cookie／state），一種值不能冒充另一種。
+- **ID token**：以授權碼＋verifier 向 token endpoint 換（`application/x-www-form-urlencoded`，body 帶 `client_id`／`client_secret`；Google 與 LINE 的官方文件都接受），檢查 `iss`（Google：`https://accounts.google.com` 或 `accounts.google.com`；LINE：`https://access.line.me`）、`aud`（＝我方 client id／channel ID；多個 audience 時另要求 `azp`）、`exp`、`nonce`，`sub` 須為 1～255 bytes。**不驗證 JWT 簽章**，依據（程式註解 `validate_id_token` 有原文出處）：OpenID Connect Core 1.0 §3.1.3.7 第 6 點（ID token 由 client 直接從 token endpoint 取得時，可以用 TLS 伺服器驗證取代簽章檢查）；Google 文件（從 token endpoint 經無中介的 HTTPS 取得時可確信 token 來自 Google）；LINE 文件（「除非 ID token 是直接從 LINE Platform 取得，否則要在伺服器驗證」）。所以正式端點固定是 https（`ProviderEndpoints::google()`／`line()`），只有整合測試注入本機 http 的假提供者。
+- **session 權杖**：`base64url(payload).base64url(HMAC-SHA256)`，payload 只有提供者、到期（30 天，Unix 秒）與 `sub`（`<g|l>:<exp>:<sub>`）；以 `hmac` crate 的 `verify_slice` 常數時間比對。`sub` 上限 255 bytes 時權杖最長約 400 bytes（測試 `session_tokens_fit_the_hello_limit`），一般長度約 100 bytes。`sub` 只是 base64，未加密（權杖只交給本人）。
+- **日誌**：只記 `login succeeded`／`login failed` 與固定的原因字串；不印 session 權杖、授權碼、client secret、`SESSION_SECRET` 或 `sub`（啟動日誌只列啟用的提供者名稱）。
+- **對外請求**：`reqwest`（rustls），連線與整體逾時 5 秒、不跟隨轉址、回應上限 64 KiB（逐塊讀取，超過即失敗）；`code`／`state` 超過 2,048 bytes 視為失敗。同時進行中的 token endpoint 請求整台伺服器最多 8 個（`MAX_CONCURRENT_EXCHANGES`，`tokio::sync::Semaphore`），拿不到名額不等待、直接 `auth_error=failed`；反向代理另應對 `/auth` 加頻率限制。
+- **HTTP 日誌**：`TraceLayer` 的 span 只記 method 與 path（自訂 `make_span_with`），不記查詢字串；tower-http 預設的 span 在 DEBUG 等級記完整 URI，會把 callback 的 `code`／`state` 寫進日誌。callback 的每個失敗分支都是一般的錯誤回應，沒有 `unwrap`（`reqwest` 只在 HTTP handler 內使用，不進房間 actor）。
+- **設定**（`config.rs`，全部選填，空字串＝未設定）：`SESSION_SECRET`（至少 32 bytes，太短啟動失敗）、`AUTH_PUBLIC_URL`（以 `normalize_origin()` 正規化；redirect URI = `<AUTH_PUBLIC_URL>/auth/<provider>/callback`）、`GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET`、`LINE_CHANNEL_ID`／`LINE_CHANNEL_SECRET`。提供者的 id／secret 只設一個，或設了提供者卻缺 `SESSION_SECRET`／`AUTH_PUBLIC_URL`，都啟動失敗並列出缺的變數。全都沒設時與 v3 相同（純訪客，`/auth/*` 回 404，`/auth/providers` 回 `[]`）。只設 `SESSION_SECRET` 也可以（能驗證權杖，但沒有提供者能簽發）。
+
+**已知限制**：
+
+- **沒有撤銷機制**：權杖在 30 天內一直有效；要讓所有權杖失效只能輪替 `SESSION_SECRET`（所有人登出）。沒有「登出其他裝置」。程式註解（`SESSION_TTL_SECS`）與 DEPLOY.md 都寫明。
+- 同一個瀏覽器同時開兩個登入流程時，後開的會覆蓋流程 cookie，先開的那個 callback 會得到 `auth_error=failed`。
+- 身分只決定 `welcome.auth`：同一個帳號可以同時在多個分頁／裝置進場，名字也不跟帳號綁定（沒有資料庫）。
+- 重新整理頁面後前端不帶 `resumeToken`，舊角色在保留期內會與新角色並存約 30 秒（`RESUME_GRACE_SECONDS`；既有行為，非本次引入）。
+- 已啟用登入後不可移除或更換 `SESSION_SECRET`：所有玩家的權杖失效（前端收到 `guest` 會清掉本機權杖），需要重新登入。
+
+### 協定版本 4 完成紀錄（2026-11-16，後端）
+
+`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（105 個測試：lib 55、gameplay 14、loadtest 1、login 10、logging 1、metrics 3、protocol 9、websocket 12；併入 main 的 chat 與 outfit 之後的數字）在本機（Windows，Rust 1.95.0）通過。
+
+稽核後修正（同日，獨立安全審查退回的三項）：
+
+1. **改名頻率可被斷線恢復繞過**：原本的限制在連線上，而 `hello` 帶 `resumeToken` 與不同名字會改名並廣播、每次 `welcome` 又給新的 token，腳本可每秒數十次洗全房的名牌。改為每位玩家一份額度（`room.rs` 的 `Player::take_rename`，`Room::rename` 與 `Room::resume` 共用），刪除原本每連線的 rename bucket（`rate_limit.rs` 回到改動前）。測試：`repeated_resumes_with_new_names_cannot_bypass_the_rename_limit`（WebSocket，連續 6 次恢復改名只有 2 次生效與廣播，之後 `rename` 也被擋）、`resume_renames_share_the_per_player_rename_budget`（房間層，含額度回復）。
+2. **token endpoint 請求沒有併發上限**：合法的 cookie＋state 在 10 分鐘內可帶亂數 code 重複打 callback，每次都以我方憑證向提供者發請求。加上 `MAX_CONCURRENT_EXCHANGES`（8）的 semaphore。測試：`token_exchanges_are_capped_and_the_rest_fail_fast`（20 個 callback 同時打、假提供者延遲 800 ms：到達提供者的請求 ≤ 8，其餘在 600 ms 內以 `auth_error=failed` 結束，名額釋放後可再登入）。
+3. **DEBUG 日誌記下授權碼與 state**：`TraceLayer` 改為自訂 span（method＋path）。測試：`tests/logging.rs` `debug_logs_never_contain_the_query_string_or_secrets`（獨立行程、全域 DEBUG subscriber，打 start 與成功／失敗的 callback 後，日誌不含 code、state、nonce、流程 cookie、client secret、`SESSION_SECRET`、`code=`、`state=`，且含 `path=/auth/google/callback` 與 `login failed`）。已確認把 `TraceLayer` 改回預設時這個測試失敗（`secret-code-123 leaked into logs`）。
+
+| 驗收項目 | 測試 |
+| --- | --- |
+| 完整登入流程（Google、LINE 各一條）：`start` → 假提供者 → `callback` → session → WebSocket `hello` → `welcome.auth` | `tests/login.rs` `google_and_line_login_end_to_end_then_websocket_reports_the_provider`（同時檢查授權網址參數、scope 只有 `openid`、S256、redirect_uri、token endpoint 收到的 client 認證與 PKCE verifier、`/auth/providers` 與 CORS） |
+| 失敗路徑：nonce、`aud`、`iss` 不符、ID token 過期、token endpoint 錯誤、state 與 cookie 不符（login CSRF）、沒有 cookie、使用者取消（`access_denied`／`ACCESS_DENIED`）、其他錯誤、不認得的 code | `failed_logins_redirect_with_a_fixed_error_code` |
+| origin 不在允許清單（400、不導向）、正規化後相同可以、未設定／未知提供者（404）、竄改或缺少 state（400） | `bad_origins_states_and_unknown_providers_are_rejected` |
+| 沒有 `SESSION_SECRET`：`/auth/*` 404、`providers` 為空且不回 CORS、任何權杖都是訪客 | `without_session_secret_auth_endpoints_are_off_and_everyone_is_a_guest` |
+| session 權杖：往返、竄改任一位元、過期、不同 secret、用途分離、長度 ≤ 512 | `src/auth.rs` `session_round_trip`、`tampering_any_bit_fails`、`expired_session_fails`、`different_secret_fails`、`purposes_are_separated`、`session_tokens_fit_the_hello_limit`；ID token 欄位檢查 `id_token_claims_are_checked` |
+| 無效／過期／他台伺服器的 session 仍以訪客進場；超過 512 bytes 是無效訊息；恢復連線時重新驗證 | `invalid_or_expired_sessions_still_join_as_guests_and_resume_rechecks` |
+| rename：廣播給同房所有人（含殿內的人與本人）、清理規則、同名不廣播、之後加入者的 welcome | `rename_reaches_everyone_including_other_zones_and_self_and_new_joiners_see_it`；房間層 `rename_reaches_everyone_in_every_zone_once_and_later_snapshots_follow` |
+| rename：`hello` 前無效、超過 256 bytes 無效、頻率限制（每位玩家突發 2、約 2 秒 1 次）且不斷線；斷線恢復不能繞過 | `rename_is_rate_limited_ignored_before_hello_and_over_limit_is_invalid`、`repeated_resumes_with_new_names_cannot_bypass_the_rename_limit`；房間層 `resume_renames_share_the_per_player_rename_budget` |
+| 恢復連線帶新名字：採用並廣播（含本人），同名不廣播 | `resuming_with_a_new_name_adopts_and_broadcasts_it`；房間層 `resume_adopts_a_new_name_broadcasts_it_and_reports_the_new_auth` |
+| v1／v2／v3／v5 的 `hello` 收到 `unsupported_version` 並以 1008 關閉 | `tests/websocket.rs` `unsupported_version_then_close` |
+| 固定資料 `protocol-v4.json`：有效範例往返、`invalid.client` 被伺服器視為無效、`invalid.server` 無法反序列化、二進位向量不變 | `tests/protocol.rs` `shared_frontend_fixtures_round_trip`、`shared_invalid_examples_are_rejected`、`shared_binary_vectors_encode_and_decode`、`shared_action_vectors_encode_decode_and_unwrap`；`python -I server/tests/protocol-v4-vectors.py` 的輸出與固定資料的 `binary` 完全相同 |
+| 設定：全部選填、secret 太短、只設一半、缺 `SESSION_SECRET`／`AUTH_PUBLIC_URL`、`AUTH_PUBLIC_URL` 有路徑 | `config.rs` `auth_is_optional_and_providers_need_every_setting`；另以 debug 執行檔實測三種錯誤設定皆以結束碼 1 啟動失敗並印出缺少的變數 |
+
+未做到：
+
+- **沒有真實的 Google／LINE 憑證，沒有打過真正的提供者**。端點、參數、scope 與 `iss` 依官方文件（Google OpenID Connect、LINE Login v2.1 的整合、PKCE 與 ID token 驗證頁）實作，整合測試只對本機的假提供者跑。特別是 Google 文件寫 scope「以 `openid` 開頭，再加上 `profile`、`email` 或兩者」，只送 `openid` 是否被接受**未實測**；若被拒，最小修正是改送 `openid email` 或 `openid profile`（仍然不儲存那些欄位）。
+- 沒有建置 Docker 映像（本機 Docker 沒有執行）；`aws-lc-sys` 需要 C 編譯器，`rust:1.95.0-bookworm` 應該具備，CI 的 `docker build` 會驗證。
+- 沒有在瀏覽器實測登入與改名（前端由另一個任務實作）。
 
 ## T9 部署與正式環境壓測（P1）
 

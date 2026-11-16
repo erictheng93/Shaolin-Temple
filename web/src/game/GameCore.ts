@@ -2,9 +2,12 @@ import * as THREE from 'three'
 import { t, type MessageKey } from '../i18n'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
+import { clearAuth, type StoredAuth } from './core/auth'
 import { Emitter } from './core/Emitter'
 import { frameCap, isLowBattery } from './core/frameCap'
 import { debugPosition, type DebugPosition } from './core/position'
+import { normalizeName } from './core/names'
+import { decideRename, isRenamePending } from './core/rename'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
 import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, saveSettings, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
@@ -12,7 +15,7 @@ import { gameplayModules } from './gameplay/modules'
 import type { GameEvents, GameplayApi } from './gameplay/types'
 import { InputController } from './input/InputController'
 import { NetworkClient, type ConnectionStatus } from './net/NetworkClient'
-import { sanitizeChat, type ServerMessage } from './net/protocol'
+import { sanitizeChat, type AuthKind, type ServerMessage } from './net/protocol'
 import { BellStriker } from './render/BellStriker'
 import { ResourceTracker } from './render/ResourceTracker'
 import { buildHallScene, type HallScene } from './render/HallScene'
@@ -87,6 +90,8 @@ export interface UiState {
   zone: ZoneId
   /** 本機玩家目前的衣裝編號（world/outfits.ts）。 */
   outfit: number
+  /** 身份：連線前沿用本機的登入狀態，連線後以伺服器的 welcome.auth 為準。 */
+  auth: AuthKind
   actions: UiAction[]
   chat: ChatEntry[]
   stats: Array<{ key: string; label: string; value: string | number }>
@@ -103,6 +108,8 @@ export interface GameCoreOptions {
   wsUrl?: string
   onUi(state: UiState): void
   onToast(message: string): void
+  /** 自己的名字確定了（伺服器清理後的結果，或離線模式直接生效）；Vue 據此同步設定。 */
+  onNameChanged?(name: string): void
 }
 
 /** Battery Status API（Chromium 才有）的最小介面。 */
@@ -184,10 +191,15 @@ export class GameCore {
 
   private room: string | null = null
   private selfId: string | null = null
+  /** 自己目前的名字（伺服器確認過的；離線模式為本機設定）。 */
+  private selfName = ''
+  /** 送出改名的時間（頻率限制用）。 */
+  private lastRenameAt = -Infinity
+  /** 等伺服器回報 name 的改名是何時送出的；收到回報後重設。超過 RENAME_PENDING_MS 自動不算等待中（不需計時器）。 */
+  private renameSentAt = -Infinity
+  private auth: AuthKind = 'guest'
   /** 自己的房內短編號；sync 中出現它代表伺服器校正了自己的位置。 */
   private selfN = -1
-  /** 進場時的名字（未填時由 App 以進場當下語言的「訪客」代入）。 */
-  private selfName = ''
   private chatLog: ChatEntry[] = []
   private chatSeq = 0
   private serverOffset = 0
@@ -269,6 +281,11 @@ export class GameCore {
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
     this.net.events.on('rtt', (ms) => (this.rtt = ms))
+    this.net.events.on('sessionExpired', () => {
+      // 權杖失效：清掉本機權杖，照常以訪客身份遊玩（權杖本身不出現在提示或 console）
+      clearAuth()
+      this.toast('auth.expired')
+    })
 
     this.audio.setVolumes(this.volumes())
     this.installGameplay()
@@ -278,10 +295,15 @@ export class GameCore {
     this.uiTimer = setInterval(() => this.pushUi(false), UI_PUSH_MS)
   }
 
-  /** 進入遊戲：必須在使用者點擊事件中呼叫，才能啟用音訊。 */
-  async enter(playerName: string): Promise<void> {
-    this.net.setName(playerName)
+  /**
+   * 進入遊戲：必須在使用者點擊事件中呼叫，才能啟用音訊。auth 是本機存的登入權杖（沒有登入為 null），
+   * 只放進 hello.session；顯示的名字一律是玩家自己選的。
+   */
+  async enter(playerName: string, auth: StoredAuth | null = null): Promise<void> {
     this.selfName = playerName
+    this.auth = auth?.provider ?? 'guest'
+    this.net.setSession(auth?.session)
+    this.net.setName(playerName)
     this.players.local.avatar.setName(playerName)
     await this.audio.unlock()
     this.audio.startAmbient()
@@ -319,6 +341,38 @@ export class GameCore {
     this.net.setOutfit(o)
     this.wake()
     this.pushUi(true)
+  }
+
+  /**
+   * 進場後改名。空白時用隨機法號。連線中送 rename，以伺服器回報的名字為準（收到後提示）；
+   * 斷線中則在重連的 hello 帶新名字；離線模式直接生效。
+   */
+  rename(name: string): void {
+    const next = normalizeName(name)
+    const now = performance.now()
+    // 與目前名字相同：不送、不佔用頻率額度，也不提示（伺服器對同名不會回報）
+    const decision = decideRename(next, this.selfName, now, this.net.enabled ? this.lastRenameAt : -Infinity)
+    if (decision === 'unchanged') return
+    if (!this.net.enabled) {
+      this.applySelfName(next, true)
+      return
+    }
+    if (decision === 'throttled') {
+      this.toast('name.throttled')
+      return
+    }
+    this.lastRenameAt = this.renameSentAt = now
+    this.net.setName(next)
+  }
+
+  /** 自己的名字確定了：同步回設定，必要時提示。 */
+  private applySelfName(name: string, announce: boolean): void {
+    this.selfName = name
+    // 自己頭上的名牌跟著換（伺服器清理後的結果為準）
+    this.players.local.avatar.setName(name)
+    this.wake()
+    this.opts.onNameChanged?.(name)
+    if (announce) this.toast('name.updated', { name })
   }
 
   /** 開始渲染場景（進場前就先顯示背景畫面）。 */
@@ -807,12 +861,17 @@ export class GameCore {
       case 'welcome': {
         this.selfId = m.selfId
         this.room = m.room
+        this.auth = m.auth
         this.serverOffset = m.serverTime - performance.now()
         this.players.clearRemotes()
         for (const p of m.players) {
           // 自己的位置平常由本機決定；短編號只對照遠端玩家，moves 中不會有自己，sync 中的自己是伺服器的校正。
           if (p.id === m.selfId) {
             this.selfN = p.n
+            // 伺服器清理過的名字為準（斷線期間改名時，重連的 hello 已帶新名字）
+            const pending = isRenamePending(this.renameSentAt, performance.now())
+            if (p.name !== this.selfName || pending) this.applySelfName(p.name, pending)
+            this.renameSentAt = -Infinity
             // 伺服器記錄的場景與位置為準（斷線恢復時可能在殿內）。
             const zone: ZoneId = isZoneId(p.zone) ? p.zone : 'courtyard'
             this.applyZone(zone, { x: p.x, z: p.z, heading: p.heading })
@@ -869,6 +928,14 @@ export class GameCore {
         // 自己的回音一律忽略：本機已立即套用，較舊的回音晚到不可把外觀改回去（setRemoteOutfit 只動遠端玩家）。
         if (m.id !== this.selfId) this.players.setRemoteOutfit(m.id, m.outfit)
         break
+      case 'name':
+        if (m.id === this.selfId) {
+          this.applySelfName(m.name, isRenamePending(this.renameSentAt, performance.now()) || m.name !== this.selfName)
+          this.renameSentAt = -Infinity
+        } else {
+          this.players.rename(m.id, m.name)
+        }
+        break
       case 'pong':
         this.serverOffset = m.serverTime - performance.now()
         break
@@ -876,7 +943,7 @@ export class GameCore {
         this.toast(SERVER_ERRORS.get(m.code) ?? 'server.error')
         break
     }
-    if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave') this.pushUi(true)
+    if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave' || m.t === 'name') this.pushUi(true)
     this.wake()
   }
 
@@ -972,6 +1039,7 @@ export class GameCore {
       fading: this.fading,
       zone: this.zone,
       outfit: this.players.local.outfit,
+      auth: this.auth,
       actions: this.actions.list().filter((a) => !a.hidden).map((a) => {
         const unavailable = a.unavailableReason?.(this.zone)
         return {

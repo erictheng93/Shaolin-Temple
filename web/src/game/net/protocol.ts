@@ -1,9 +1,9 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式（協定版本 3）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 4）。
  *
  * 位置廣播 moves／sync 與動作廣播 action 是 WebSocket 二進位幀（格式與位元組配置見 binaryFrame.ts），
  * 其餘訊息與所有上行都是 JSON 文字。編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
- * 與 Rust 伺服器共用固定資料 server/tests/protocol-v3.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v4.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
  *
  * 版本：前端與伺服器的協定版本不同時，前端在 hello 時收到 error unsupported_version，
  * 不再重連並提示重新整理，不會出現「連上了但訊息解不開」的靜默故障。
@@ -11,6 +11,11 @@
  * 語意分類：
  * - 可取代：move/stop。尚未送出的舊位置可被新位置覆蓋。
  * - 需確認：action。帶 reqId，伺服器以 reqId 去重並回 ack，重試不會重複執行。
+ * - 改名：rename 也是可取代（未送出的舊改名被新的蓋掉）；伺服器清理名字後以 name 廣播給同房所有人（含本人、不分場景）。
+ *   斷線恢復時伺服器採用 hello.name，所以客戶端改名後之後的 hello 都帶新名字。
+ *
+ * 身份（v4）：hello.session 是登入後拿到的權杖（選填）；welcome.auth 回報伺服器認定的身份。
+ * 帶了 session 卻收到 auth 'guest' 代表權杖失效，客戶端清掉權杖並以訪客身份繼續。
  *
  * 位置廣播：
  * - 玩家加入房間時伺服器指派房內短編號 n（0～127，離開後回收）；moves／sync 以 n 取代字串 id。
@@ -35,14 +40,18 @@ import {
 
 export { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, type MoveTuple }
 
-export const PROTOCOL_VERSION = 3
+export const PROTOCOL_VERSION = 4
 /** 單則訊息上限（bytes）。超過即丟棄，伺服器端也應設相同上限。 */
 export const MAX_MESSAGE_BYTES = 16 * 1024
 /**
  * 伺服器對客戶端字串欄位的上限（UTF-8 bytes，見 server/src/protocol.rs）。超過時整則被視為無效訊息，
  * 10 秒內累積 21 則無效訊息會被斷線。前端產生的值都遠低於這些上限。
  */
-export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32, zone: 32, rawName: 256, chatRaw: 512 } as const
+export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32, zone: 32, rawName: 256, chatRaw: 512, session: 512 } as const
+
+/** 伺服器認定的身份（welcome.auth）。 */
+export type AuthKind = 'guest' | 'google' | 'line'
+const AUTH_KINDS: readonly string[] = ['guest', 'google', 'line']
 
 export interface PlayerSnapshot {
   id: string
@@ -85,8 +94,13 @@ export const isOutfitWire = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_WIRE_OUTFIT
 
 export type ClientMessage =
-  /** outfit：目前衣裝；缺少或無效時伺服器當作 0（恢復連線時缺少則沿用保存的衣裝）。 */
-  | { t: 'hello'; v: number; name: string; resumeToken?: string; outfit?: number }
+  /**
+   * outfit：目前衣裝；缺少或無效時伺服器當作 0（恢復連線時缺少則沿用保存的衣裝）。
+   * session：登入後的權杖（選填，上限 512 UTF-8 bytes）；沒有就不帶這個欄位。
+   */
+  | { t: 'hello'; v: number; name: string; resumeToken?: string; outfit?: number; session?: string }
+  /** 進場後改名（可取代）。伺服器清理並限制頻率，結果以 name 訊息廣播。 */
+  | { t: 'rename'; name: string }
   | { t: 'move'; x: number; z: number; heading: number; seq: number }
   | { t: 'stop'; x: number; z: number; heading: number; seq: number }
   | { t: 'action'; reqId: string; id: string; data?: Record<string, unknown> }
@@ -106,6 +120,8 @@ export type ServerMessage =
       resumeToken: string
       serverTime: number
       players: PlayerSnapshot[]
+      /** 伺服器認定的身份；帶了 session 卻是 'guest' 代表權杖失效。 */
+      auth: AuthKind
     }
   | { t: 'join'; player: PlayerSnapshot }
   | { t: 'leave'; id: string }
@@ -119,7 +135,7 @@ export type ServerMessage =
   | { t: 'sync'; m: MoveTuple[] }
   /**
    * 其他玩家開始一個動作（二進位幀，解碼時以 DecodeContext 還原 playerId 與絕對 startedAt）。
-   * startedAt 是伺服器的 Unix 毫秒。v3 的幀不帶 data（伺服器只接受空的 data）。
+   * startedAt 是伺服器的 Unix 毫秒。v3 起的幀不帶 data（伺服器只接受空的 data）。
    */
   | { t: 'action'; playerId: string; id: string; startedAt: number; data?: Record<string, unknown> }
   | { t: 'ack'; reqId: string; ok: boolean; reason?: string }
@@ -130,6 +146,8 @@ export type ServerMessage =
   | { t: 'chat'; id: string; text: string; at: number }
   /** 某玩家更換衣裝（同房、不分場景、含本人）。 */
   | { t: 'outfit'; id: string; outfit: number }
+  /** 某玩家（含自己）的名字改了；name 是伺服器清理後的結果。送給同房所有人、不分場景。 */
+  | { t: 'name'; id: string; name: string }
   | { t: 'error'; code: string; message: string }
 
 /** 聊天訊息的字元上限（Unicode 字元），與伺服器一致。 */
@@ -276,7 +294,9 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
         isStr(m.resumeToken) &&
         isNum(m.serverTime) &&
         Array.isArray(m.players) &&
-        m.players.every(isPlayer)
+        m.players.every(isPlayer) &&
+        typeof m.auth === 'string' &&
+        AUTH_KINDS.includes(m.auth)
         ? (m as ServerMessage)
         : null
     case 'join':
@@ -293,6 +313,8 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
         : null
     case 'zone':
       return isStr(m.id) && isStr(m.zone) && isNum(m.x) && isNum(m.z) && isNum(m.heading) ? (m as ServerMessage) : null
+    case 'name':
+      return isStr(m.id) && isStr(m.name) ? (m as ServerMessage) : null
     case 'pong':
       return isNum(m.ts) && isNum(m.serverTime) ? (m as ServerMessage) : null
     case 'chat':

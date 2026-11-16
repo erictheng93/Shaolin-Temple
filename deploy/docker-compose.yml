@@ -18,6 +18,14 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
       # 留空＝/metrics 開放（只在內部網路可達）；要在容器外抓取時設定隨機長字串。
       METRICS_TOKEN: ${METRICS_TOKEN:-}
+      # 登入（Google／LINE），全部留空＝只有訪客。說明見 docs/DEPLOY.md「登入」。
+      # SESSION_SECRET 至少 32 bytes；輪替會讓所有人登出。AUTH_PUBLIC_URL 是瀏覽器連到 server 的 scheme＋主機。
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      LINE_CHANNEL_ID: ${LINE_CHANNEL_ID:-}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET:-}
     healthcheck:
       test: ["CMD", "/temple-server", "--healthcheck"]
       interval: 15s

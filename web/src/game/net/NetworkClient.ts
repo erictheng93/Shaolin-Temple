@@ -49,6 +49,8 @@ interface NetworkEvents extends Record<string, unknown> {
   status: ConnectionStatus
   message: ServerMessage
   rtt: number
+  /** 帶了 session 卻收到 auth 'guest'：權杖已失效，之後的 hello 不再帶它。 */
+  sessionExpired: undefined
 }
 
 export interface NetworkOptions {
@@ -56,6 +58,8 @@ export interface NetworkOptions {
   name: string
   /** 初始衣裝（0..OUTFIT_COUNT-1）；每次 hello 都帶。未給時 hello 不帶，伺服器當作 0（恢復連線時沿用保存的）。 */
   outfit?: number
+  /** 登入後的權杖（hello.session）；沒有登入就省略。 */
+  session?: string
   /** 位置訊息送出頻率，與渲染頻率分開。 */
   sendHz?: number
   heartbeatMs?: number
@@ -95,6 +99,10 @@ export class NetworkClient {
   private seq = 0
   private reqCounter = 0
   private resumeToken = loadResumeToken()
+  private session: string | undefined
+  /** 這條連線的 hello 帶的名字與有沒有帶 session（收到 welcome 時用來補送改名、判斷權杖是否失效）。 */
+  private helloName = ''
+  private helloHadSession = false
   private background = false
   /** 收到 unsupported_version：版本不符，重連也不會成功，不再重連。 */
   private versionRejected = false
@@ -104,17 +112,19 @@ export class NetworkClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
-  private readonly opts: Required<Omit<NetworkOptions, 'url' | 'outfit'>> & { url: string | undefined }
+  private readonly opts: Required<Omit<NetworkOptions, 'url' | 'outfit' | 'session'>> & { url: string | undefined }
 
   constructor(options: NetworkOptions) {
+    const { session, ...rest } = options
     this.opts = {
       sendHz: 10,
       heartbeatMs: 20_000,
       ackTimeoutMs: 10_000,
       maxBufferedBytes: 64 * 1024,
-      ...options,
+      ...rest,
     }
     if (isOutfit(options.outfit)) this.outfit = options.outfit
+    this.session = session || undefined
     window.addEventListener('online', this.onBrowserOnline)
   }
 
@@ -126,9 +136,18 @@ export class NetworkClient {
     return !!this.opts.url
   }
 
-  /** 設定顯示名稱，於下次 hello 生效。 */
+  /**
+   * 設定顯示名稱：之後的 hello（含斷線恢復）都帶這個名字；已連線時另送 rename（可取代，未送出的舊改名被蓋掉）。
+   * 伺服器清理後以 name 訊息回報結果。
+   */
   setName(name: string): void {
     this.opts.name = name
+    if (this.enabled && this.status === 'online') this.queue.push({ t: 'rename', name })
+  }
+
+  /** 設定登入權杖，於下次 hello 生效（undefined＝以訪客身份連線）。 */
+  setSession(session: string | undefined): void {
+    this.session = session || undefined
   }
 
   connect(): void {
@@ -145,12 +164,15 @@ export class NetworkClient {
     // moves／sync／action 是二進位幀；arraybuffer 讓 onmessage 同步拿到資料（預設的 Blob 要非同步讀取，可能打亂訊息順序）。
     ws.binaryType = 'arraybuffer'
     ws.onopen = () => {
+      this.helloName = this.opts.name
+      this.helloHadSession = !!this.session
       this.sendNow({
         t: 'hello',
         v: PROTOCOL_VERSION,
         name: this.opts.name,
         resumeToken: this.resumeToken,
         outfit: this.outfit,
+        ...(this.session ? { session: this.session } : {}),
       })
       // hello 已帶最新衣裝，斷線期間或被限速而待送的值不必再送。
       this.outfitPending = false
@@ -302,6 +324,12 @@ export class NetworkClient {
         saveResumeToken(msg.resumeToken)
         // 伺服器快照是權威狀態：斷線期間累積的位置與場景訊息已過時。
         this.queue.clear()
+        // hello 送出後、welcome 之前改了名：hello 帶的是舊名字，被清掉的 rename 要補送。
+        if (this.opts.name !== this.helloName) this.queue.push({ t: 'rename', name: this.opts.name })
+        if (this.helloHadSession && msg.auth === 'guest') {
+          this.session = undefined
+          this.events.emit('sessionExpired', undefined)
+        }
         break
       case 'ack': {
         const p = this.pending.get(msg.reqId)

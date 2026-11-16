@@ -1,5 +1,5 @@
 {
-  "_comment": "協定版本 3 的共用固定資料。server／client 為 JSON 訊息；binary 為二進位幀（hex）：valid／invalid 是 moves／sync，input 是伺服器編碼前的 tuple、decoded 是解碼後的 tuple；action 是動作廣播（codes 為動作編號對照表，索引即編號；unwrap 為由 32 位元 startedAt 還原絕對時間的案例）。outfitCount 與 server／client 內的 outfit 範例是手寫的（衣裝編號 0..outfitCount-1，兩邊測試都比對）。binary 由 server/tests/protocol-v3-vectors.py 產生（只產生 binary 一段），見 docs/BACKEND_TASKS.md T8。",
+  "_comment": "協定版本 4 的共用固定資料。server／client 為有效的 JSON 訊息；invalid.server 是前端 decode() 必須拒絕（回傳 null）的伺服器訊息，invalid.client 是伺服器必須視為無效訊息的上行訊息（每筆的 message 是訊息本身）；binary 為二進位幀（hex）：valid／invalid 是 moves／sync，input 是伺服器編碼前的 tuple、decoded 是解碼後的 tuple；action 是動作廣播（codes 為動作編號對照表，索引即編號；unwrap 為由 32 位元 startedAt 還原絕對時間的案例）。binary 由 server/tests/protocol-v4-vectors.py 產生，見 docs/BACKEND_TASKS.md T8 與「協定版本 4」。",
   "outfitCount": 8,
   "server": [
     {
@@ -14,6 +14,7 @@
       "room": "r",
       "resumeToken": "t",
       "serverTime": 0,
+      "auth": "guest",
       "players": [
         {
           "id": "a",
@@ -26,6 +27,24 @@
           "outfit": 2
         }
       ]
+    },
+    {
+      "t": "welcome",
+      "selfId": "a",
+      "room": "r",
+      "resumeToken": "t",
+      "serverTime": 0,
+      "auth": "google",
+      "players": []
+    },
+    {
+      "t": "welcome",
+      "selfId": "a",
+      "room": "r",
+      "resumeToken": "t",
+      "serverTime": 0,
+      "auth": "line",
+      "players": []
     },
     {
       "t": "join",
@@ -79,7 +98,7 @@
     {
       "t": "error",
       "code": "unsupported_version",
-      "message": "Protocol version 3 required"
+      "message": "Protocol version 4 required"
     },
     {
       "t": "zone",
@@ -88,6 +107,11 @@
       "x": 0,
       "z": 0,
       "heading": 0
+    },
+    {
+      "t": "name",
+      "id": "a",
+      "name": "小明"
     }
   ],
   "client": [
@@ -101,21 +125,34 @@
     },
     {
       "t": "hello",
-      "v": 3,
+      "v": 4,
       "name": "n",
       "resumeToken": "t",
       "outfit": 4
     },
     {
       "t": "hello",
-      "v": 3,
+      "v": 4,
       "name": "n"
     },
     {
       "t": "hello",
-      "v": 3,
+      "v": 4,
       "name": "n",
       "resumeToken": "t"
+    },
+    {
+      "t": "hello",
+      "v": 4,
+      "name": "n",
+      "session": "s"
+    },
+    {
+      "t": "hello",
+      "v": 4,
+      "name": "n",
+      "resumeToken": "t",
+      "session": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
     },
     {
       "t": "move",
@@ -154,8 +191,31 @@
       "x": 0,
       "z": 0,
       "heading": 0
+    },
+    {
+      "t": "rename",
+      "name": "小明"
     }
   ],
+  "invalid": {
+    "server": [
+      { "name": "welcome.auth 不是 guest／google／line", "message": { "t": "welcome", "selfId": "a", "room": "r", "resumeToken": "t", "serverTime": 0, "auth": "admin", "players": [] } },
+      { "name": "welcome 缺 auth", "message": { "t": "welcome", "selfId": "a", "room": "r", "resumeToken": "t", "serverTime": 0, "players": [] } },
+      { "name": "welcome.auth 是 null", "message": { "t": "welcome", "selfId": "a", "room": "r", "resumeToken": "t", "serverTime": 0, "auth": null, "players": [] } },
+      { "name": "welcome.auth 大小寫不符（Google）", "message": { "t": "welcome", "selfId": "a", "room": "r", "resumeToken": "t", "serverTime": 0, "auth": "Google", "players": [] } },
+      { "name": "name 缺 id", "message": { "t": "name", "name": "小明" } },
+      { "name": "name 缺 name", "message": { "t": "name", "id": "a" } },
+      { "name": "name.name 不是字串", "message": { "t": "name", "id": "a", "name": 1 } },
+      { "name": "name.id 不是字串", "message": { "t": "name", "id": 1, "name": "小明" } }
+    ],
+    "client": [
+      { "name": "rename 缺 name", "message": { "t": "rename" } },
+      { "name": "rename.name 不是字串", "message": { "t": "rename", "name": 1 } },
+      { "name": "rename.name 超過 256 bytes", "message": { "t": "rename", "name": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn" } },
+      { "name": "hello.session 不是字串", "message": { "t": "hello", "v": 4, "name": "n", "session": 1 } },
+      { "name": "hello.session 超過 512 bytes", "message": { "t": "hello", "v": 4, "name": "n", "session": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss" } }
+    ]
+  },
   "binary": {
     "valid": [
       {
