@@ -5,11 +5,13 @@
  * 陣列索引就是衣裝編號（存檔與網路都用編號），日後只能加在尾端，不可改順序或刪除。
  * 顏色是 sRGB 十六進位。
  */
+import type { MessageKey } from '../../i18n'
+
 export interface Outfit {
   /** 程式內的鍵（英文）。 */
   key: string
-  /** 顯示名稱。 */
-  label: string
+  /** 顯示名稱的字典 key（i18n），顯示當下才翻譯。 */
+  label: MessageKey
   /** 袍色（袖口與鞋由模型的頂點色壓暗）。 */
   robe: string
   /** 袈裟披帶的顏色；沒有披帶時省略。披在左肩、斜到右腰（偏袒右肩）。 */
@@ -19,12 +21,12 @@ export interface Outfit {
 }
 
 export const OUTFITS: readonly Outfit[] = [
-  { key: 'orange', label: '橘黃僧袍', robe: '#c9853a' },
-  { key: 'grey', label: '灰色常服', robe: '#86837d' },
-  { key: 'brown', label: '褐色海青', robe: '#6e4f3a' },
-  { key: 'black', label: '黑色海青', robe: '#363333' },
-  { key: 'kasaya', label: '黃袍披袈裟', robe: '#c99a3e', sash: '#9c2f23' },
-  { key: 'beads', label: '灰藍袍掛念珠', robe: '#56687f', beads: '#4a2e1c' },
+  { key: 'orange', label: 'outfit.orange', robe: '#c9853a' },
+  { key: 'grey', label: 'outfit.grey', robe: '#86837d' },
+  { key: 'brown', label: 'outfit.brown', robe: '#6e4f3a' },
+  { key: 'black', label: 'outfit.black', robe: '#363333' },
+  { key: 'kasaya', label: 'outfit.kasaya', robe: '#c99a3e', sash: '#9c2f23' },
+  { key: 'beads', label: 'outfit.beads', robe: '#56687f', beads: '#4a2e1c' },
 ]
 
 export const DEFAULT_OUTFIT = 0

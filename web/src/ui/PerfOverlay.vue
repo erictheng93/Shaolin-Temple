@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import type { UiState } from '../game/GameCore'
+import { formatPosition } from '../game/core/position'
+import { t } from '../i18n'
 
 defineProps<{ ui: UiState }>()
 </script>
 
 <template>
-  <aside class="perf" aria-label="效能資訊">
+  <aside class="perf" :aria-label="t('perf.label')">
     <div>{{ ui.perf.fps }} FPS</div>
     <div>CPU {{ ui.perf.frameMs.toFixed(1) }} ms</div>
     <div>{{ ui.perf.calls }} draw · {{ (ui.perf.triangles / 1000).toFixed(1) }}k tri</div>
-    <div>畫質 {{ ui.quality }} · 省電 {{ ui.adaptive.level }}/{{ ui.adaptive.max }}</div>
+    <div>{{ t('perf.quality', { quality: ui.quality, level: ui.adaptive.level, max: ui.adaptive.max }) }}</div>
     <div v-if="ui.perf.rttMs !== null">RTT {{ Math.round(ui.perf.rttMs) }} ms</div>
+    <div v-if="ui.perf.pos" class="pos">{{ t('perf.position') }} {{ formatPosition(ui.perf.pos) }}</div>
   </aside>
 </template>
 
@@ -24,6 +27,12 @@ defineProps<{ ui: UiState }>()
   background: rgba(0, 0, 0, 0.55);
   font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
   color: #cfe8cf;
+  font-variant-numeric: tabular-nums;
   pointer-events: none;
+}
+
+/* 座標以空白補齊欄寬，保留空白才不會走動時左右跳 */
+.pos {
+  white-space: pre;
 }
 </style>

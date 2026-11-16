@@ -1,3 +1,4 @@
+import { t } from '../../i18n'
 import { BELL_PAVILION, PLAYER_RADIUS } from './layout'
 import { pickFreeSpot, type SpotContext } from './worship'
 import type { Pose } from './zones'
@@ -29,8 +30,8 @@ export const BELL_STATIONS: ReadonlyArray<Pose> = [-1, 0, 1].map((i) => {
 
 /** 敲鐘：走到最近的空站位。不在庭院或站位都有人時回傳原因。 */
 export function pickBellStation(ctx: SpotContext): Pose | string {
-  if (ctx.zone !== 'courtyard') return '鐘亭在庭院，出殿後再敲'
-  return pickFreeSpot(BELL_STATIONS, ctx, 'bell') ?? '鐘亭前都有人，請稍候再試'
+  if (ctx.zone !== 'courtyard') return t('reason.bellInCourtyard')
+  return pickFreeSpot(BELL_STATIONS, ctx, 'bell') ?? t('reason.bellTaken')
 }
 
 // ---------- 時間軸（毫秒，從動作開始算） ----------
