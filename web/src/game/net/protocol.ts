@@ -42,7 +42,7 @@ export const MAX_MESSAGE_BYTES = 16 * 1024
  * 伺服器對客戶端字串欄位的上限（UTF-8 bytes，見 server/src/protocol.rs）。超過時整則被視為無效訊息，
  * 10 秒內累積 21 則無效訊息會被斷線。前端產生的值都遠低於這些上限。
  */
-export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32, zone: 32, rawName: 256 } as const
+export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32, zone: 32, rawName: 256, chatRaw: 512 } as const
 
 export interface PlayerSnapshot {
   id: string
@@ -67,6 +67,8 @@ export type ClientMessage =
   /** 切換場景：x/z/heading 為進入新場景後的位置（出入口的 spawn）。伺服器應驗證玩家確實站在出入口。 */
   | { t: 'zone'; zone: string; x: number; z: number; heading: number }
   | { t: 'ping'; ts: number }
+  /** 文字聊天：伺服器清理後廣播給同房所有玩家（含發話者，發話者以回音為準）。 */
+  | { t: 'chat'; text: string }
 
 export type ServerMessage =
   | {
@@ -96,7 +98,51 @@ export type ServerMessage =
   /** 某玩家切換場景。 */
   | { t: 'zone'; id: string; zone: string; x: number; z: number; heading: number }
   | { t: 'pong'; ts: number; serverTime: number }
+  /** 聊天廣播（同房、不分場景、含發話者）。at 是伺服器 Unix 毫秒。 */
+  | { t: 'chat'; id: string; text: string; at: number }
   | { t: 'error'; code: string; message: string }
+
+/** 聊天訊息的字元上限（Unicode 字元），與伺服器一致。 */
+export const CHAT_MAX_CHARS = 80
+
+/**
+ * 聊天文字清理，規則與伺服器相同：移除控制字元與雙向覆寫字元、壓縮空白、trim、截到 CHAT_MAX_CHARS 個 Unicode 字元。
+ * 結果為空字串代表應丟棄。
+ */
+export function sanitizeChat(text: string): string {
+  // 與 server/src/protocol.rs 的 clean_chat 同一組字元：先移除零寬／雙向字元（否則會在兩個空白之間留下雙空格），
+  // 再把空白（含 \t \n）壓成單一空格，最後移除剩下的控制字元。
+  const cleaned = text
+    .replace(/[​-‏‪-‮⁦-⁩﻿]/gu, '')
+    .replace(/\s+/gu, ' ')
+    .replace(/\p{Cc}/gu, '')
+    .trim()
+  return Array.from(cleaned).slice(0, CHAT_MAX_CHARS).join('').trim()
+}
+
+/** 聊天限速（突發 3 則、每 2 秒補 1 則），客戶端與伺服器相同；超出的訊息不送出。 */
+export class ChatLimiter {
+  private tokens: number
+  private last: number
+  constructor(
+    private readonly clock: () => number = () => performance.now(),
+    private readonly burst = 3,
+    private readonly refillMs = 2000,
+  ) {
+    this.last = clock()
+    this.tokens = burst
+  }
+
+  /** 取得一個額度；沒有額度回傳 false。 */
+  tryTake(): boolean {
+    const now = this.clock()
+    this.tokens = Math.min(this.burst, this.tokens + (now - this.last) / this.refillMs)
+    this.last = now
+    if (this.tokens < 1) return false
+    this.tokens -= 1
+    return true
+  }
+}
 
 export function encode(msg: ClientMessage): string {
   return JSON.stringify(msg)
@@ -218,6 +264,8 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
       return isStr(m.id) && isStr(m.zone) && isNum(m.x) && isNum(m.z) && isNum(m.heading) ? (m as ServerMessage) : null
     case 'pong':
       return isNum(m.ts) && isNum(m.serverTime) ? (m as ServerMessage) : null
+    case 'chat':
+      return isStr(m.id) && isStr(m.text) && isNum(m.at) ? (m as ServerMessage) : null
     case 'error':
       return isStr(m.code) && isStr(m.message) ? (m as ServerMessage) : null
     default:

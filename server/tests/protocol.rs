@@ -43,6 +43,8 @@ fn malformed_client_fields_rejected() {
         r#"{"t":"ping","ts":1e999}"#,
         r#"{"t":"action","reqId":"r","id":"bow","data":[]}"#,
         r#"{"t":"unknown"}"#,
+        r#"{"t":"chat"}"#,
+        r#"{"t":"chat","text":5}"#,
     ] {
         assert!(serde_json::from_str::<ClientMessage>(raw).is_err());
     }

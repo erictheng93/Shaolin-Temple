@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `web/`：Vite 8 + Vue 3.5 + TypeScript + 直接操作 Three.js 的前端，已可運作。
 - `server/`：Rust + Axum 後端，進度見 docs/BACKEND_TASKS.md。前端開發時仍可用 `web/scripts/mock-server.mjs` 測試多人功能，它實作與正式伺服器相同的協定。
+- 移動：觸控裝置（`(any-pointer: coarse)`）用 `ui/Joystick.vue` 浮動式虛擬搖桿（畫面左下約 45%×45% 為觸控區，類比輸出、死區 0.12，直接呼叫 `GameCore.setMoveStick()`，非零時優先於鍵盤）；桌機用 WASD／方向鍵。沒有點擊地面移動；進出主殿是走進出入口範圍觸發。`stepMover` 的方向輸入長度 ≤ 1 時速度按比例（半推半速），> 1 時正規化（鍵盤對角仍是全速）。
 - 玩法：參拜（`gameplay/modules/worship.ts`）——合十、跪拜（殿內走到空蒲團叩拜三次）、誦經（殿內走到空蒲團跪坐敲木魚 24 秒，可提前起身，`modules/chant.ts`）、上香（走到最近的香爐前三拜後插香）、敲鐘（庭院走到鐘亭前拉撞木撞鐘，`modules/bell.ts`）。計分、持久化等尚未定義。
 
 ## 指令（皆在 `web/` 執行）
@@ -42,6 +43,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - **Vue ↔ 核心邊界**：Vue（`src/App.vue`、`src/ui/`）只透過 `onUi(UiState)` 接收低頻摘要（內容改變才推送，最多每 250 ms 一次），透過 GameCore 的方法下指令。高頻狀態（玩家位置、Three.js 物件）不放進 Vue 響應式系統。
 - **GPU 資源**：geometry／material／texture 透過 `render/ResourceTracker` 的 `track()`／`trackMaterial()` 登記，由 tracker 統一釋放。
 - **渲染排程**：前景時一律以畫質的幀率上限繪製（省電與標準 30、高畫質 60 FPS；`auto` 依 `detectQuality()` 的裝置規則選，觸控裝置自動畫質時 `AdaptiveQuality` 從等級 1 起步），庭院有持續的環境動畫，所以不會停止迴圈；15 秒沒有操作也沒有移動時降到 20 FPS、60 秒降到 10 FPS，一有操作立即恢復；電量過低（`getBattery`，僅 Chromium：未充電且 ≤ 20%）時操作中也只到 20 FPS（皆由 `core/frameCap.ts` 的 `frameCap()` 決定）。另外由 `core/AdaptiveQuality.ts` 依實際幀間隔動態調整（網頁讀不到溫度）：變慢約 2 秒就降一級（降低繪製解析度、縮小完整模型與投影的範圍），順暢約 30 秒才升回；等級表是 `ADAPTIVE_LEVELS`。背景分頁停止迴圈、暫停 AudioContext、停止送位置。自動畫質遇資料節省或 3g 以下網路時，貼圖與神像降為 512／std（`effectivePreset()`）。改動任何會讓畫面變化的狀態，記得呼叫 `wake()`。
+- **聊天**：文字聊天（`{ t: 'chat' }`，不需 reqId／ack，伺服器清理、限速並廣播給同房所有人含發話者）。`protocol.ts` 有與伺服器同規則的 `sanitizeChat()` 與 `ChatLimiter`（突發 3 則、每 2 秒補 1 則）；`NetworkClient.sendChat()` 清理並限速後送出（回傳 `sent`／`empty`／`rate`／`offline`，斷線直接丟棄）。`GameCore.sendChat()` 連線時以伺服器回音為準（不先顯示），離線模式本機直接回音；`onChat()` 把 `ChatEntry` 放進 `UiState.chat`（最近 30 則，name 在收到當下解析）並以 `Players.say()` 在頭上顯示 6 秒的泡泡（`AvatarFactory` 的 canvas 精靈，只限名牌顯示中的人與本機玩家，文字不經 HTML）。UI 是 `ui/ChatPanel.vue`（說話按鈕在右側動作列上方，Enter 開啟、Esc 關閉；紀錄在左上，關閉時最近 5 則 12 秒淡出）。
 - **角色繪製**：角色是 Q 版小沙彌公仔（`public/models/monk.glb`，沒有骨架）。身體（袍與鞋）與膚色部分（頭與手）與臉各分近、遠兩批，加上影子，以 InstancedMesh 批次繪製（固定 7 個 draw call；有人手上拿香時另加 1 個，有人誦經時木魚與槌另加 1 個）：離本機玩家 `nearRadius` 內用完整模型並投影，之外用 `monk-lod.glb` 且不投影；動畫是公仔式的：整尊繞腳底傾斜；蹲坐時壓扁、走路時彈跳只作用在身體（袍與鞋），頭、耳朵、手與臉用不縮放的剛體矩陣只隨肩膀（`SHOULDER_HEIGHT`）升降，不會變形（`AvatarFactory.sync()`）；`nod` 是整尊小幅前傾點頭，`rig.head` 的旋轉仍不會顯示。整尊由 `scripts/build-avatar.mjs` 以光滑的橢球與旋轉體產生（頭、耳朵、鐘形的袍、寬袖、合十的手、鞋尖），造型要改就改腳本裡的數字再重新產生。臉是貼合頭部曲面的一層（近、遠都畫，各取自該 tier 自己的膚色幾何，不投影），五官畫在執行時產生的圖集上，每格一種表情（`FACE_CALM` 豆豆眼、`FACE_SMILE` 瞇瞇笑眼）；動畫片段以 `rig.face` 指定表情，`AnimationSystem.apply()` 每幀重設為平常的臉；手上拿的東西同理以 `rig.prop`（`PROP_INCENSE` 香、`PROP_CHANT` 木魚與槌）指定，由 `AvatarFactory` 畫在合十的手上；`rig.propAngle` 是槌抬起的角度（每幀重設為 0）。木魚與槌合成一個幾何（`render/chantProps.ts`），一個 InstancedMesh 每人兩個實例，以實例屬性決定畫哪一部分。容量 `AVATAR_CAPACITY`（160）須大於最高畫質的可見人數；名牌只顯示最近 12 人。
 - **庭院視覺**：`render/TempleScene.ts` 以程序化幾何＋ Poly Haven CC0 貼圖的 `MeshStandardMaterial` 建構（貼圖為 KTX2，在 `web/public/textures/`，原檔在 `web/assets/textures/`；UV 以公尺為單位）；`SceneRenderer` 負責程序化天空、天空環境貼圖、戶外色調映射與主光陰影。陰影、貼圖解析度與細節貼圖依 `core/settings.ts` 的畫質預設在載入時決定。細節與量測見 docs/TECH_STACK.md「庭院視覺」。
 - **靜態光照烘焙**：庭院靜態物件的影子與 AO 是 Blender 烘焙的貼圖（RGB = AO 走 `aoMap`，A = 太陽可見度由 `patchBakedSun` 乘在平行光上），不進即時陰影貼圖；標準畫質沒有陰影貼圖，高畫質的陰影貼圖只給近處角色。uv1 由 `render/lightmapUv.ts` 在執行時產生（與烘焙匯出同一份程式）；幾何指紋不符時 `courtyardBake.test.ts` 失敗，開發模式另會退回即時陰影並警告（正式版不計算指紋、直接載入，貼圖網址帶 `?v=<指紋>`）：**改了庭院幾何、太陽方向（`OUTDOOR_SUN_POSITION`）或 `BAKE_SETTINGS` 要重跑 `npm run bake:lightmaps`**。會動的物件（樹冠、晾衣）用 InstancedMesh 且不可與接收烘焙的物件共用材質；新增的靜態物件用一般 Mesh。角色走進烘焙影子不會變暗（已知限制）。細節見 docs/TECH_STACK.md「靜態光照烘焙」。
@@ -52,6 +54,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 
 - `src/game/net/protocol.ts` 是前後端協定的定義來源（版本 3）。下行的 `moves`／`sync`／`action` 是 WebSocket 二進位幀（`net/binaryFrame.ts`，位元組配置見 docs/BACKEND_TASKS.md T8），其餘訊息與所有上行（含帶 `reqId` 的 `action` 與 `ack`）都是 JSON。編碼集中在 `encode()`／`decode()`；`decode()` 依收到字串或 `ArrayBuffer` 分流並負責驗證，新增伺服器訊息時同步擴充型別與驗證。改協定時前端、mock 伺服器與後端在同一個 PR 修改，共用固定資料 `server/tests/protocol-v3.json`（含二進位測試向量，由 `server/tests/protocol-v3-vectors.py` 獨立產生）兩邊的測試都要讀。版本不符時伺服器回 `unsupported_version`。
 - `action` 幀（7 bytes）以房內短編號 `n` 指稱執行者、以一個 byte 的動作編號指稱動作、只帶 `startedAt` 的低 32 位元。`NetworkClient` 的 `FrameContext`（由 `welcome`／`join`／`leave` 維護 `n → id`，由 `welcome`／`pong` 估計伺服器時間）在 `decode()` 時還原成 `{ t: 'action', playerId, id, startedAt }`（絕對 Unix 毫秒，與 v2 相同），GameCore 與玩法看不出差別；對照不到的 `n` 或未知動作編號整則忽略。
+- 文字聊天 `chat`（協定 v3 的向下相容擴充，不升版）：上行 `{t:'chat', text}`（原始字串上限 512 bytes）；伺服器清理（移除控制與雙向覆寫字元、空白壓成一格、trim、最多 80 個字元，空則丟棄），限速突發 3、每秒 0.5；下行 JSON `{t:'chat', id, text, at}` 廣播給同房所有在線玩家（不分場景，含本人）。
 - 語意分兩類：`move`／`stop` 可取代（`OutboundQueue` 合併未送出的舊位置）；`action` 需確認（帶 `reqId`，伺服器去重並回 `ack`，重送不重複執行）。
 - 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家。
 - 伺服器每個 tick 送批次位置 `moves`（解碼後為 `MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`；二進位每筆 6 bytes：座標量化到公分、heading 一格 2π/256）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`，0～127）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
@@ -65,10 +68,10 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 玩法以 `GameplayModule`（`gameplay/types.ts`）加入，不修改渲染、網路或 UI：在 `install(api)` 中以 `api.actions.register()` 註冊動作（動作列、冷卻、動畫、音效、伺服器確認自動接上），`api.animations.registerClip()` 加姿勢、`api.audio.defineSfx()` 以合成函式加音效（`loadSfx()` 載入音檔）、`api.setStat()` 更新 HUD；`install` 回傳的函式須清除全部註冊。模組登記於 `gameplay/modules/index.ts`。`GameplayApi` 刻意保持很小，需要時再擴充。
 
 - 動作定義的 `unavailableReason(zone)`：目前場景不能用時回傳原因，按鈕變暗、按下時以提示說明（只依場景，UI 是低頻摘要）。
-- `approach(ctx)`：需要先走到定點的動作回傳站位與面向（或找不到時的原因字串）；GameCore 以尋路走過去，抵達才開始（冷卻、動畫、送出都從抵達算起），玩家自己移動、點擊或切換場景即取消。
+- `approach(ctx)`：需要先走到定點的動作回傳站位與面向（或找不到時的原因字串）；GameCore 以尋路走過去，抵達才開始（冷卻、動畫、送出都從抵達算起），玩家自己移動（方向鍵或搖桿）或切換場景即取消。
 - `actionPerformed` 事件帶 `zone` 與 `startedAt`；遠端玩家的最後一筆位置比動作晚一個 tick 到，需要準確位置時用 `api.playerPosition(id)`。上香插香就是在插香那一刻依執行者位置推出香爐，不經伺服器、不需協定欄位。
 - 遠端玩家做鎖定移動的動作期間（`RemotePlayer.lockedUntil`）不播走路、不取消動作片段，晚到的最後一筆位置只滑過去。收到不鎖定的新動作時解除鎖定；過期才到的動作仍會取代原本的片段（`hidden` 的動作此時仍通知玩法）。
-- 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間點擊地面、方向鍵或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
+- 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間推方向鍵、搖桿或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
 - 動畫片段的第三個參數是目前時間（`ClipFn(rig, p, now)`），`api.clockOffset()`（伺服器時間 − performance.now）讓片段與聲音對齊共同的節拍；`audio.play(name, { at })` 在 AudioContext 時間軸上預排聲音。
 - 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。
 - 動作允許清單有兩份，同時是 `action` 幀的動作編號對照表（索引即編號）：`server/src/world.rs` 的 `ACTIONS`（負載工具直接用它）與 `web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（mock 伺服器直接用它）。兩邊測試都比對固定資料的 `binary.action.codes`，不一致就失敗。新增動作只能加在尾端（同時改兩份與產生腳本）；改順序或刪除要升協定版本。

@@ -2,11 +2,13 @@ import { Emitter } from '../core/Emitter'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import {
+  ChatLimiter,
   FrameContext,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   decode,
   encode,
+  sanitizeChat,
   type ClientMessage,
   type ServerMessage,
 } from './protocol'
@@ -53,6 +55,7 @@ export class NetworkClient {
   private queue = new OutboundQueue()
   /** action 幀的 n → 玩家 id 與伺服器時鐘，由收到的 welcome／join／leave／pong 維護。 */
   private frames = new FrameContext()
+  private chatLimiter = new ChatLimiter()
   private pending = new Map<string, PendingAck>()
   private attempt = 0
   private seq = 0
@@ -142,6 +145,18 @@ export class NetworkClient {
       this.pending.set(reqId, { msg, timer, resolve: (ok, reason) => resolve({ ok, reason }) })
       if (this.status === 'online') this.sendNow(msg)
     })
+  }
+
+  /**
+   * 送出聊天（不需確認、不重送）。回傳 'sent'；'empty' 清理後沒有內容；'rate' 超過限速；'offline' 未連線（直接丟棄）。
+   * 限速先於連線判斷；離線模式（沒有 url）也回 'offline'，由呼叫端自行回音。
+   */
+  sendChat(text: string): 'sent' | 'empty' | 'rate' | 'offline' {
+    const clean = sanitizeChat(text)
+    if (!clean) return 'empty'
+    if (!this.chatLimiter.tryTake()) return 'rate'
+    if (!this.enabled || this.status !== 'online') return 'offline'
+    return this.sendNow({ t: 'chat', text: clean }) ? 'sent' : 'offline'
   }
 
   /**
