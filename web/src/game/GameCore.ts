@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
+import { frameCap, isLowBattery } from './core/frameCap'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
 import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
@@ -59,13 +60,15 @@ export interface GameCoreOptions {
   onToast(message: string): void
 }
 
+/** Battery Status API（Chromium 才有）的最小介面。 */
+interface BatteryManagerLike extends EventTarget {
+  charging: boolean
+  level: number
+}
+
 const MOVE_SPEED = 3.2
 const SFX_HEARING_RANGE = 28
 const UI_PUSH_MS = 250
-/** 平常就省電：這麼久沒有操作也沒有移動，就把幀率上限降到 IDLE_FPS；一有操作立即恢復。 */
-const IDLE_AFTER_MS = 15_000
-/** 20 FPS 對緩慢的環境動畫（落葉、樹冠、香煙）仍然順，繪製量是 60 FPS 的三分之一。 */
-const IDLE_FPS = 20
 /** 走向參拜點：離站位這麼近就算抵達（抵達後直接站到站位上並轉向）。 */
 const APPROACH_ARRIVE = 0.3
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
@@ -128,6 +131,8 @@ export class GameCore {
   private contextLost = false
   private wasMoving = false
   private disposed = false
+  private lowBattery = false
+  private battery: BatteryManagerLike | null = null
 
   private room: string | null = null
   private selfId: string | null = null
@@ -205,6 +210,8 @@ export class GameCore {
       },
     })
 
+    this.watchBattery()
+
     this.net = new NetworkClient({ url: opts.wsUrl, name: '' })
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
@@ -240,6 +247,7 @@ export class GameCore {
    */
   performAction(id: string): void {
     const now = performance.now()
+    this.lastInputAt = now
     const local = this.players.local
     const def = this.actions.get(id)
     if (!def || def.hidden || this.fading) return
@@ -377,6 +385,9 @@ export class GameCore {
     if (this.disposed) return
     this.disposed = true
     document.removeEventListener('visibilitychange', this.onVisibility)
+    this.battery?.removeEventListener('levelchange', this.onBattery)
+    this.battery?.removeEventListener('chargingchange', this.onBattery)
+    this.battery = null
     clearInterval(this.uiTimer)
     this.stopLoop()
     for (const off of this.uninstallers) off()
@@ -402,6 +413,31 @@ export class GameCore {
     if (!this.raf) this.raf = requestAnimationFrame(this.frame)
   }
 
+  /** 低電量時降低幀率上限；Safari／Firefox 沒有 getBattery，維持原樣。 */
+  private onBattery = (): void => {
+    const b = this.battery
+    if (!b) return
+    const low = isLowBattery(b.charging, b.level)
+    if (low === this.lowBattery) return
+    this.lowBattery = low
+    this.wake()
+  }
+
+  private watchBattery(): void {
+    const nav = navigator as Navigator & { getBattery?: () => Promise<BatteryManagerLike> }
+    if (typeof nav.getBattery !== 'function') return
+    nav
+      .getBattery()
+      .then((b) => {
+        if (this.disposed) return
+        this.battery = b
+        b.addEventListener('levelchange', this.onBattery)
+        b.addEventListener('chargingchange', this.onBattery)
+        this.onBattery()
+      })
+      .catch(() => {})
+  }
+
   private stopLoop(): void {
     if (this.raf) cancelAnimationFrame(this.raf)
     this.raf = 0
@@ -413,7 +449,7 @@ export class GameCore {
     const preset = this.preset
 
     // 依目標幀率略過多餘的 rAF（高更新率螢幕上限制在 30/60 FPS）。
-    const fps = time - this.lastInputAt > IDLE_AFTER_MS ? Math.min(IDLE_FPS, preset.activeFps) : preset.activeFps
+    const fps = frameCap({ activeFps: preset.activeFps, idleMs: time - this.lastInputAt, lowBattery: this.lowBattery })
     const minInterval = 1000 / fps - 1
     if (!this.dirty && time - this.lastRender < minInterval) {
       this.raf = requestAnimationFrame(this.frame)
