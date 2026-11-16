@@ -1,5 +1,5 @@
 import type { GameplayModule } from '../types'
-import { demoModule } from './demo'
+import { worshipModule } from './worship'
 
-/** 啟用的玩法模組。玩法定案後在這裡替換。 */
-export const gameplayModules: GameplayModule[] = [demoModule]
+/** 啟用的玩法模組。 */
+export const gameplayModules: GameplayModule[] = [worshipModule]

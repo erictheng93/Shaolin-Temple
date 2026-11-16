@@ -3,3 +3,8 @@ web/public/basis/** -text
 # 烘焙貼圖（PNG 原檔與 KTX2）為二進位，逐位元保存
 web/assets/lightmaps/** -text
 web/public/lightmaps/** -text
+# three 附的 Draco 解碼器副本，須與 node_modules 逐位元相同（draco.test.ts）
+web/public/draco/** -text
+# 殿內神像成品（烘焙貼圖 PNG、Draco glb 與 KTX2）為二進位，逐位元保存
+web/assets/statues/** -text
+web/public/statues/** -text

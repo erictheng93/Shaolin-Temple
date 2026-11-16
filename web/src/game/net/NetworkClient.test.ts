@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient, PENALTY_RECONNECT_MS } from './NetworkClient'
+import { encodeBatch } from './moveFrame'
+import type { ServerMessage } from './protocol'
 
 class FakeSocket {
   static OPEN = 1
   static instances: FakeSocket[] = []
   readyState = 1
   bufferedAmount = 0
+  binaryType = 'blob'
   sent: Array<Record<string, unknown>> = []
   onopen: (() => void) | null = null
-  onmessage: ((ev: { data: string }) => void) | null = null
+  onmessage: ((ev: { data: string | ArrayBuffer }) => void) | null = null
   onclose: ((ev: { code: number }) => void) | null = null
   onerror: (() => void) | null = null
   constructor(readonly url: string) {
@@ -24,6 +27,9 @@ class FakeSocket {
   }
   receive(msg: unknown) {
     this.onmessage?.({ data: JSON.stringify(msg) })
+  }
+  receiveBinary(bytes: Uint8Array) {
+    this.onmessage?.({ data: bytes.slice().buffer })
   }
   drop(code = 1006) {
     this.onclose?.({ code })
@@ -57,6 +63,21 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+})
+
+describe('NetworkClient 下行二進位幀', () => {
+  it('以 arraybuffer 接收，moves／sync 解碼後與 JSON 訊息照收到的順序交給同一個事件', () => {
+    const got: ServerMessage[] = []
+    client.events.on('message', (m) => got.push(m))
+    connectOnline()
+    expect(last().binaryType).toBe('arraybuffer')
+    last().receiveBinary(encodeBatch({ t: 'moves', m: [[3, 1.5, -2, 0, 1]] })!)
+    last().receive({ t: 'leave', id: 'b' })
+    last().receiveBinary(encodeBatch({ t: 'sync', m: [] })!)
+    last().receiveBinary(new Uint8Array([0x09])) // 未知幀型：忽略
+    expect(got.map((m) => m.t)).toEqual(['welcome', 'moves', 'leave', 'sync'])
+    expect(got[1]).toEqual({ t: 'moves', m: [[3, 1.5, -2, 0, 1]] })
+  })
 })
 
 describe('NetworkClient 上行座標', () => {

@@ -17,11 +17,13 @@ export interface QualityPreset {
   textureSize: 512 | 1024
   /** 細節貼圖：1 為底色加法線、2 再加粗糙度。於下次載入生效。 */
   detailMaps: 1 | 2
+  /** 殿內寫實神像的層級：std 每尊約 1.5 萬三角形、1024 貼圖；hi 約 4 萬三角形、2048 貼圖。於下次載入生效。 */
+  statueTier: 'std' | 'hi'
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
-  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1 },
-  high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2 },
+  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1, statueTier: 'std' },
+  high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2, statueTier: 'hi' },
 }
 
 export interface Settings {

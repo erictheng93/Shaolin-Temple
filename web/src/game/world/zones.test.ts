@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import { resolveCollisions, stepMover, type MoveConfig } from './movement'
 import { HALL } from './layout'
-import { HALL_STATUES, ZONES, ZONE_IDS, entryCamera, isZoneId, portalApproach, portalAt, portalForTap } from './zones'
+import { findPath } from './pathfind'
+import { BELL_STATIONS } from './bell'
+import {
+  CENSERS,
+  CUSHION_RADIUS,
+  HALL_AISLE_HALF_WIDTH,
+  HALL_CENSERS,
+  HALL_CUSHIONS,
+  HALL_PILLARS,
+  HALL_STATUES,
+  HALL_TABLE,
+  ZONES,
+  ZONE_IDS,
+  entryCamera,
+  isZoneId,
+  portalApproach,
+  portalAt,
+  portalForTap,
+} from './zones'
 
 const cfgFor = (id: keyof typeof ZONES): MoveConfig => ({ speed: 3.2, bounds: ZONES[id].bounds, obstacles: ZONES[id].obstacles })
 
@@ -31,10 +49,10 @@ describe('zones', () => {
     }
   })
 
-  it('神像方位：以神明為主體，觀音在主佛左手邊（+x，龍邊），關聖帝君在右手邊（-x，虎邊）', () => {
+  it('神像方位：以神明為主體，觀音在主佛左手邊（+x，龍邊），媽祖在右手邊（-x，虎邊）', () => {
     expect(HALL_STATUES.buddha.x).toBe(0)
     expect(HALL_STATUES.guanyin.x).toBeGreaterThan(0)
-    expect(HALL_STATUES.guangong.x).toBeLessThan(0)
+    expect(HALL_STATUES.mazu.x).toBeLessThan(0)
   })
 
   it('點擊主殿建築會導向殿門，且殿門的走近點可抵達並觸發入口', () => {
@@ -74,6 +92,83 @@ describe('zones', () => {
     const exit = ZONES.hall.portals[0]!.spawn
     const door = ZONES.courtyard.portals[0]!.rect
     expect(exit.z - door.maxZ).toBeGreaterThanOrEqual(1)
+  })
+
+  describe('參拜點（蒲團、香爐前站位、鐘亭前站位）', () => {
+    const spots = [
+      ...HALL_CUSHIONS.map((p, i) => ({ zone: 'hall' as const, name: `蒲團 ${i}`, p })),
+      ...CENSERS.flatMap((c) => c.spots.map((p, i) => ({ zone: c.zone, name: `${c.id} 站位 ${i}`, p }))),
+      ...BELL_STATIONS.map((p, i) => ({ zone: 'courtyard' as const, name: `鐘亭站位 ${i}`, p })),
+    ]
+
+    it('蒲團 24 個：左右各 3 欄 × 4 排，避開中軸走道，全部面向神龕', () => {
+      expect(HALL_CUSHIONS).toHaveLength(24)
+      expect(HALL_CUSHIONS.filter((c) => c.x < 0)).toHaveLength(12)
+      for (const c of HALL_CUSHIONS) {
+        expect(Math.abs(c.x) - CUSHION_RADIUS).toBeGreaterThan(HALL_AISLE_HALF_WIDTH)
+        expect(c.heading).toBe(Math.PI)
+      }
+    })
+
+    it('都在可走範圍內、不在障礙物或出入口裡', () => {
+      for (const { zone, name, p } of spots) {
+        expect(resolveCollisions(p.x, p.z, cfgFor(zone)), name).toEqual({ x: p.x, z: p.z })
+        expect(portalAt(zone, p.x, p.z), name).toBeNull()
+      }
+    })
+
+    it('從入口可經尋路走到，且照路徑走會停在站位上', () => {
+      for (const { zone, name, p } of spots) {
+        const starts = zone === 'hall' ? [ZONES.hall.spawn] : [ZONES.courtyard.spawn, ZONES.hall.portals[0]!.spawn]
+        for (const start of starts) {
+          const path = findPath(start, p, cfgFor(zone))
+          expect(path, `${name} 從 (${start.x}, ${start.z})`).not.toBeNull()
+          // 與 GameCore 相同的走法：一段一段走到轉折點
+          const s = { x: start.x, z: start.z, heading: 0, target: path!.shift() ?? null }
+          for (let i = 0; i < 2000 && s.target; i++) {
+            const target = s.target
+            stepMover(s, { dirX: 0, dirZ: 0 }, 0.05, cfgFor(zone))
+            if (!s.target) s.target = Math.hypot(target.x - s.x, target.z - s.z) < 0.2 ? (path!.shift() ?? null) : null
+          }
+          expect(Math.hypot(s.x - p.x, s.z - p.z), name).toBeLessThan(0.3)
+        }
+      }
+    })
+
+    it('彼此不重疊：跪拜的角色互不碰到，香爐前的站位也不壓到蒲團', () => {
+      // 跪拜的佔地（見 zones.ts 的說明）：左右半寬 0.3，前方 0.8、後方 0.22（面向 -z）
+      const kneel = (c: { x: number; z: number }) => ({ minX: c.x - 0.3, maxX: c.x + 0.3, minZ: c.z - 0.8, maxZ: c.z + 0.22 })
+      const overlap = (a: ReturnType<typeof kneel>, b: ReturnType<typeof kneel>) =>
+        a.minX < b.maxX && b.minX < a.maxX && a.minZ < b.maxZ && b.minZ < a.maxZ
+      HALL_CUSHIONS.forEach((a, i) =>
+        HALL_CUSHIONS.forEach((b, j) => {
+          if (i >= j) return
+          expect(overlap(kneel(a), kneel(b)), `蒲團 ${i} 與 ${j}`).toBe(false)
+          // 相鄰兩欄之間留得下一個人走過（角色寬約 0.43，碰撞直徑 0.7）
+          if (a.z === b.z) expect(Math.abs(a.x - b.x) - 0.6).toBeGreaterThanOrEqual(0.6)
+        }),
+      )
+      const all = [...HALL_CUSHIONS.map((c) => ({ ...c, r: CUSHION_RADIUS })), ...CENSERS.filter((c) => c.zone === 'hall').flatMap((c) => c.spots.map((s) => ({ ...s, r: 0.3 })))]
+      all.forEach((a, i) => all.forEach((b, j) => i < j && expect(Math.hypot(a.x - b.x, a.z - b.z), `${i}-${j}`).toBeGreaterThan(a.r + b.r)))
+      // 上香的人（前傾時頭約到前方 0.6）與第一排叩拜的頭之間留空
+      const frontRow = Math.min(...HALL_CUSHIONS.map((c) => c.z))
+      for (const c of HALL_CENSERS) for (const s of c.spots) expect(frontRow - 0.8 - (s.z + 0.22)).toBeGreaterThan(0.5)
+    })
+
+    it('蒲團不壓到柱子（柱礎半徑 0.42）', () => {
+      for (const c of HALL_CUSHIONS) for (const p of HALL_PILLARS) expect(Math.hypot(c.x - p.x, c.z - p.z)).toBeGreaterThan(CUSHION_RADIUS + 0.42)
+    })
+
+    it('殿內香爐在供桌上、每尊神像正前方各一個（由 HALL_STATUES 導出）', () => {
+      expect(HALL_CENSERS.map((c) => c.x).sort()).toEqual(Object.values(HALL_STATUES).map((s) => s.x).sort())
+      for (const c of HALL_CENSERS) {
+        expect(c.x - 0.27).toBeGreaterThan(HALL_TABLE.minX)
+        expect(c.x + 0.27).toBeLessThan(HALL_TABLE.maxX)
+        expect(c.z).toBeGreaterThan(HALL_TABLE.minZ)
+        expect(c.z).toBeLessThan(HALL_TABLE.maxZ)
+        for (const s of c.spots) expect(s.z).toBeGreaterThan(HALL_TABLE.maxZ)
+      }
+    })
   })
 
   it('isZoneId 只接受已知場景', () => {

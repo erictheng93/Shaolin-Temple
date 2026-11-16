@@ -23,6 +23,11 @@ export interface RemotePlayer {
   /** 最近一次收到此玩家位置的時間（毫秒），給停止看門狗用。 */
   lastMoveAt: number
   zone: string
+  /**
+   * 正在做鎖定移動的動作直到此時間（毫秒）。期間不播走路、不打斷動作片段：動作訊息是立即轉送，
+   * 對方最後一筆位置要等下一個 tick 才到，這段「走完最後一小段」不應該把跪拜或上香的動畫取消。
+   */
+  lockedUntil: number
 }
 
 export interface LocalPlayer {
@@ -102,6 +107,7 @@ export class Players {
       serverMoving: false,
       lastMoveAt: now,
       zone: p.zone ?? 'courtyard',
+      lockedUntil: 0,
     }
     this.remotes.set(p.id, r)
     this.byN.set(p.n, r)
@@ -202,7 +208,7 @@ export class Players {
       this.place(r, now)
       // 還沒走到最新位置時也要播走路動畫（停止訊息到達後仍有最後一小段路）。
       const arriving = now < r.to.t && (r.from.x !== r.to.x || r.from.z !== r.to.z)
-      r.anim.moving = r.serverMoving || arriving
+      r.anim.moving = now < r.lockedUntil ? false : r.serverMoving || arriving
       if (!r.avatar.root.visible) continue
       r.avatar.root.position.set(r.x, 0, r.z)
       r.avatar.root.rotation.y = r.heading

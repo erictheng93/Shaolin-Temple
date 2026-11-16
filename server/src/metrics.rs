@@ -102,7 +102,7 @@ impl Metrics {
     pub fn rate_limited(&self) {
         self.rate_limited.fetch_add(1, Relaxed);
     }
-    /// 一則已實際寫到 WebSocket 的伺服器訊息（`bytes` 為 JSON 文字長度）。
+    /// 一則已實際寫到 WebSocket 的伺服器訊息（`bytes` 為酬載長度：JSON 文字或 moves／sync 的二進位幀）。
     pub fn message_out(&self, message: &ServerMessage, bytes: usize) {
         let kind = kind_index(message);
         self.out_messages[kind].fetch_add(1, Relaxed);
@@ -216,7 +216,7 @@ impl Metrics {
             ),
             (
                 "temple_bytes_out_total",
-                "JSON bytes written to WebSockets, by type.",
+                "Payload bytes (JSON text or binary frame) written to WebSockets, by type.",
                 &self.out_bytes,
             ),
         ] {

@@ -101,6 +101,8 @@ export class NetworkClient {
       return
     }
     this.ws = ws
+    // moves／sync 是二進位幀；arraybuffer 讓 onmessage 同步拿到資料（預設的 Blob 要非同步讀取，可能打亂訊息順序）。
+    ws.binaryType = 'arraybuffer'
     ws.onopen = () => {
       this.sendNow({ t: 'hello', v: PROTOCOL_VERSION, name: this.opts.name, resumeToken: this.resumeToken })
       // 重送尚未確認的操作；伺服器以 reqId 去重。

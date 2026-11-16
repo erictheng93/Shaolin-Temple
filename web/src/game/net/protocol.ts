@@ -1,22 +1,30 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式草案（協定版本 1）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 2）。
  *
- * 目前使用 JSON 以便除錯；編碼集中在 encode()/decode()，之後改二進位只需替換這兩個函式。
- * 與 Rust 伺服器共用固定資料 server/tests/protocol-v1.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」。
+ * 位置廣播 moves／sync 是 WebSocket 二進位幀（格式與位元組配置見 moveFrame.ts），其餘訊息與上行都是 JSON 文字。
+ * 編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v2.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
+ *
+ * 版本：v2 的前端連到 v1 伺服器、或 v1 的前端連到 v2 伺服器，都會在 hello 時收到 error unsupported_version，
+ * 前端不再重連並提示重新整理，不會出現「連上了但位置解不開」的靜默故障。
  *
  * 語意分類：
  * - 可取代：move/stop。尚未送出的舊位置可被新位置覆蓋。
  * - 需確認：action。帶 reqId，伺服器以 reqId 去重並回 ack，重試不會重複執行。
  *
  * 位置廣播：
- * - 玩家加入房間時伺服器指派房內短編號 n（0～65535，離開後回收）；moves／sync 以 n 取代字串 id。
+ * - 玩家加入房間時伺服器指派房內短編號 n（0～127，離開後回收）；moves／sync 以 n 取代字串 id。
  *   客戶端以 welcome／join 建立 n → 玩家對照，leave 時移除，對照不到的 n 直接忽略。
  * - moves 是增量（只含有變動的玩家）；sync 是整批校正（收件人所在場景的所有其他玩家），客戶端直接套用、不插值。
  * - moves／sync／action 只送給同場景玩家；zone／join／leave 送給同房所有人。
- * - 上行 move／stop 的座標與 heading 四捨五入到 0.01。
+ * - 上行 move／stop 的座標與 heading 四捨五入到 0.01（JSON）。下行 moves／sync 的座標精度 0.01 公尺、heading 一格 2π/256。
  */
 
-export const PROTOCOL_VERSION = 1
+import { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, decodeBatch, type MoveTuple } from './moveFrame'
+
+export { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, type MoveTuple }
+
+export const PROTOCOL_VERSION = 2
 /** 單則訊息上限（bytes）。超過即丟棄，伺服器端也應設相同上限。 */
 export const MAX_MESSAGE_BYTES = 16 * 1024
 /**
@@ -27,7 +35,7 @@ export const CLIENT_STRING_LIMITS = { reqId: 128, resumeToken: 128, actionId: 32
 
 export interface PlayerSnapshot {
   id: string
-  /** 房內短編號（0～65535），moves／sync 以此指稱玩家。 */
+  /** 房內短編號（0～127），moves／sync 以此指稱玩家。 */
   n: number
   name: string
   x: number
@@ -39,12 +47,6 @@ export interface PlayerSnapshot {
   /** 所在場景（'courtyard'、'hall'…）；省略時視為 'courtyard'。 */
   zone?: string
 }
-
-/** 批次位置的單筆：[n, x, z, heading, moving]，n 為房內短編號，moving 為 0 或 1。座標四捨五入到 0.01 公尺。 */
-export type MoveTuple = [n: number, x: number, z: number, heading: number, moving: 0 | 1]
-
-/** 單則 moves 最多筆數；超過時伺服器應拆成多則。 */
-export const MAX_MOVES_PER_MESSAGE = 200
 
 export type ClientMessage =
   | { t: 'hello'; v: number; name: string; resumeToken?: string }
@@ -67,10 +69,12 @@ export type ServerMessage =
   | { t: 'join'; player: PlayerSnapshot }
   | { t: 'leave'; id: string }
   | { t: 'move'; id: string; x: number; z: number; heading: number; moving: boolean }
-  /** 批次位置：伺服器每個 tick 一則，只含有變動的玩家。元素為 [n, x, z, heading, moving(0|1)]。 */
+  /** 批次位置（二進位幀）：伺服器每個 tick 一則，只含有變動的玩家。元素為 [n, x, z, heading, moving(0|1)]。 */
   | { t: 'moves'; m: MoveTuple[] }
-  /** 整批位置校正（切換場景後、moves 被丟棄後）：直接套用位置、面向與移動狀態，不插值。 */
-  /** 整批校正：直接套用不插值。若含收件人自己的短編號，代表伺服器拒絕了他送出的位置，須回到這個位置。 */
+  /**
+   * 整批位置校正（二進位幀；切換場景後、moves 被丟棄後）：直接套用位置、面向與移動狀態，不插值。
+   * 若含收件人自己的短編號，代表伺服器拒絕了他送出的位置，須回到這個位置。
+   */
   | { t: 'sync'; m: MoveTuple[] }
   | { t: 'action'; playerId: string; id: string; startedAt: number; data?: Record<string, unknown> }
   | { t: 'ack'; reqId: string; ok: boolean; reason?: string }
@@ -88,7 +92,8 @@ const isObj = (v: unknown): v is Record<string, unknown> =>
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.length <= 256
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-const isShortId = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 65535
+const isShortId = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_SHORT_ID
 
 function isPlayer(v: unknown): v is PlayerSnapshot {
   if (!isObj(v)) return false
@@ -98,22 +103,13 @@ function isPlayer(v: unknown): v is PlayerSnapshot {
   return isObj(v.action) && isStr(v.action.id) && isNum(v.action.startedAt)
 }
 
-function isMoveTuple(v: unknown): v is MoveTuple {
-  return (
-    Array.isArray(v) &&
-    v.length === 5 &&
-    isShortId(v[0]) &&
-    isNum(v[1]) &&
-    isNum(v[2]) &&
-    isNum(v[3]) &&
-    (v[4] === 0 || v[4] === 1)
-  )
-}
-
 /**
  * 解析伺服器訊息。格式不符、過大或未知類型時回傳 null，呼叫端直接忽略，不讓壞資料進入遊戲狀態。
+ * ArrayBuffer（WebSocket binaryType = 'arraybuffer'）是 moves／sync 的二進位幀；字串是 JSON。
+ * moves／sync 只接受二進位幀，以 JSON 送來的視為無效（v1 格式）。
  */
 export function decode(raw: unknown): ServerMessage | null {
+  if (raw instanceof ArrayBuffer) return raw.byteLength > MAX_MESSAGE_BYTES ? null : decodeBatch(raw)
   if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_BYTES) return null
   let m: unknown
   try {
@@ -138,14 +134,6 @@ export function decode(raw: unknown): ServerMessage | null {
       return isStr(m.id) ? (m as ServerMessage) : null
     case 'move':
       return isStr(m.id) && isNum(m.x) && isNum(m.z) && isNum(m.heading) && typeof m.moving === 'boolean'
-        ? (m as ServerMessage)
-        : null
-    case 'moves':
-      return Array.isArray(m.m) && m.m.length <= MAX_MOVES_PER_MESSAGE && m.m.every(isMoveTuple)
-        ? (m as ServerMessage)
-        : null
-    case 'sync':
-      return Array.isArray(m.m) && m.m.length <= MAX_MOVES_PER_MESSAGE && m.m.every(isMoveTuple)
         ? (m as ServerMessage)
         : null
     case 'action':

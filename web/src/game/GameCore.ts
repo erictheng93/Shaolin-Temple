@@ -10,14 +10,17 @@ import type { GameEvents, GameplayApi } from './gameplay/types'
 import { InputController } from './input/InputController'
 import { NetworkClient, type ConnectionStatus } from './net/NetworkClient'
 import type { ServerMessage } from './net/protocol'
+import { BellStriker } from './render/BellStriker'
 import { ResourceTracker } from './render/ResourceTracker'
 import { buildHallScene, type HallScene } from './render/HallScene'
+import { IncenseSystem } from './render/IncenseSystem'
 import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
 import { resolveCollisions, stepMover, type MoveConfig } from './world/movement'
 import { findPath, type Point } from './world/pathfind'
 import { Players } from './world/Players'
-import { ZONES, entryCamera, isZoneId, portalApproach, portalAt, portalForTap, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
+import type { SpotContext } from './world/worship'
+import { CENSERS, ZONES, entryCamera, isZoneId, portalApproach, portalAt, portalForTap, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
 
 export interface UiAction {
   id: string
@@ -26,6 +29,8 @@ export interface UiAction {
   cooldownMs: number
   /** 冷卻結束的時間（performance.now 毫秒），UI 自行計算倒數。 */
   readyAt: number
+  /** 目前場景不能用時的原因（按鈕變暗，按下時提示）；可用時沒有這個欄位。 */
+  unavailable?: string
 }
 
 /** 給 Vue 的低頻狀態摘要。遊戲核心只在內容改變時推送。 */
@@ -61,6 +66,8 @@ const UI_PUSH_MS = 250
 const IDLE_AFTER_MS = 15_000
 /** 20 FPS 對緩慢的環境動畫（落葉、樹冠、香煙）仍然順，繪製量是 60 FPS 的三分之一。 */
 const IDLE_FPS = 20
+/** 走向參拜點：離站位這麼近就算抵達（抵達後直接站到站位上並轉向）。 */
+const APPROACH_ARRIVE = 0.3
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
 const FADE_MS = 400
 const FADE_HOLD_MS = 150
@@ -84,6 +91,14 @@ export class GameCore {
   private savedCamera: Partial<Record<ZoneId, CameraPose>> = {}
   /** 點擊移動尚未走到的轉折點（目前目標在 mover.target）。 */
   private path: Point[] = []
+  /** 正在走向定點、抵達後才開始的動作（approach）。玩家自己移動、點擊或切換場景時取消。 */
+  private pending: { id: string; pose: Pose } | null = null
+  /** 本機正在進行、鎖定移動的動作 id（鎖定結束後不一定清除，以 lockedUntil 為準）；用來判斷能不能提前結束（endAction）。 */
+  private lockedAction: string | null = null
+  /** 香爐裡的香與煙（兩個場景共用，只畫目前場景的香爐）。 */
+  private incense: IncenseSystem
+  /** 鐘亭的撞木（只在庭院顯示）。 */
+  private striker: BellStriker
   private fading = false
   private anim = new AnimationSystem()
   private players: Players
@@ -148,6 +163,8 @@ export class GameCore {
 
     this.temple = buildTempleScene(this.renderer.renderer, this.tracker, preset, () => this.wake())
     this.renderer.scene.add(this.temple.root)
+    this.incense = new IncenseSystem(this.renderer.scene, this.tracker, CENSERS)
+    this.striker = new BellStriker(this.renderer.scene, this.tracker)
 
     const markerGeo = this.tracker.track(new THREE.RingGeometry(0.28, 0.4, 24))
     markerGeo.rotateX(-Math.PI / 2)
@@ -208,15 +225,61 @@ export class GameCore {
     this.wake()
   }
 
+  /**
+   * 玩家按下動作。不能在目前場景使用時提示原因；需要先走到定點的動作（approach）先自動走過去，抵達後才開始。
+   * 正在做可提前結束的動作（endAction，例如誦經）時，按任何動作都先起身；按的是同一個動作就只起身。
+   */
   performAction(id: string): void {
     const now = performance.now()
     const local = this.players.local
-    if (now < local.lockedUntil) return
+    const def = this.actions.get(id)
+    if (!def || def.hidden || this.fading) return
+    if (now < local.lockedUntil) {
+      const interrupted = this.interruptLocal()
+      if (!interrupted || interrupted === id) return
+    }
+    const reason = def.unavailableReason?.(this.zone)
+    if (reason) {
+      this.opts.onToast(reason)
+      return
+    }
+    if (this.actions.cooldownLeft(id, now) > 0) return
+    if (!def.approach) {
+      this.beginAction(id, null)
+      return
+    }
+    const spot = def.approach(this.spotContext())
+    if (typeof spot === 'string') {
+      this.opts.onToast(spot)
+      return
+    }
+    if (Math.hypot(spot.x - local.mover.x, spot.z - local.mover.z) <= APPROACH_ARRIVE) {
+      this.beginAction(id, spot)
+      return
+    }
+    if (!this.walkTo(spot)) {
+      this.opts.onToast('走不過去，請換個位置再試')
+      return
+    }
+    this.pending = { id, pose: spot }
+  }
+
+  /** 開始執行動作（已在定點或不需要定點）：冷卻、鎖定移動、動畫、音效、事件與送出。 */
+  private beginAction(id: string, pose: Pose | null): void {
+    const now = performance.now()
+    const local = this.players.local
     const def = this.actions.tryBegin(id, now)
     if (!def) return
-
+    if (pose) {
+      // 站到站位上、面向神龕或香爐；位置與面向一起送出（排在動作之前）
+      Object.assign(local.mover, { x: pose.x, z: pose.z, heading: pose.heading, target: null })
+      this.path = []
+      this.marker.visible = false
+      this.net.sendPosition(pose.x, pose.z, pose.heading, false)
+    }
     if (def.locksMovement) {
       local.lockedUntil = now + def.durationMs
+      this.lockedAction = id
       local.mover.target = null
       this.path = []
     }
@@ -226,6 +289,8 @@ export class GameCore {
       playerId: this.selfId ?? 'local',
       actionId: id,
       local: true,
+      zone: this.zone,
+      startedAt: now,
       x: local.mover.x,
       z: local.mover.z,
     })
@@ -237,6 +302,47 @@ export class GameCore {
       if (res.ok) def.onConfirmed?.()
       else this.opts.onToast(res.reason === 'timeout' ? '連線不穩，動作未送達' : `動作未完成：${res.reason ?? '未知原因'}`)
     })
+  }
+
+  /**
+   * 提前結束本機正在進行的鎖定動作（只限有 endAction 的動作）：解除鎖定，改為執行 endAction（送出後其他玩家也停止）。
+   * 回傳被結束的動作 id；沒有可結束的動作時回傳 null。
+   */
+  private interruptLocal(): string | null {
+    const local = this.players.local
+    const running = this.lockedAction
+    const def = running ? this.actions.get(running) : undefined
+    if (!running || !def?.endAction || performance.now() >= local.lockedUntil) return null
+    local.lockedUntil = 0
+    this.lockedAction = null
+    local.anim.clip = null
+    this.beginAction(def.endAction, null)
+    return running
+  }
+
+  /** 以尋路走向某點並顯示目標標記（直到抵達）。找不到路時回傳 false。 */
+  private walkTo(p: Point): boolean {
+    const local = this.players.local
+    const path = findPath({ x: local.mover.x, z: local.mover.z }, p, this.moveCfg)
+    if (!path) return false
+    local.mover.target = path.shift() ?? null
+    this.path = path
+    this.marker.position.set(p.x, 0.08, p.z)
+    this.marker.visible = true
+    this.markerUntil = performance.now() + 60_000
+    this.wake()
+    return true
+  }
+
+  /** 參拜點選擇需要的資訊：自己的位置與同場景其他玩家（顯示位置與最新收到的位置都算）。 */
+  private spotContext(): SpotContext {
+    const local = this.players.local.mover
+    const others: Array<{ x: number; z: number }> = []
+    for (const r of this.players.remotes.values()) {
+      if (r.zone !== this.zone) continue
+      others.push({ x: r.x, z: r.z }, { x: r.to.x, z: r.to.z })
+    }
+    return { zone: this.zone, x: local.x, z: local.z, selfId: this.selfId ?? 'local', others }
   }
 
   applySettings(settings: Settings): void {
@@ -261,9 +367,12 @@ export class GameCore {
     for (const off of this.uninstallers) off()
     this.uninstallers = []
     this.input.dispose()
+    this.incense.dispose()
+    this.striker.dispose()
     this.net.dispose()
     void this.audio.dispose()
     this.players.dispose()
+    this.hall?.dispose()
     this.tracker.dispose()
     this.renderer.dispose()
     this.events.clear()
@@ -324,9 +433,18 @@ export class GameCore {
     // 有移動意圖就保持迴圈運作；喚醒後第一幀 dt=0 不會位移，不能只看本幀是否移動。
     let wantsMove = false
 
+    // 可提前結束的動作（誦經）進行中按方向鍵：起身，接著照常移動
+    if (now < local.lockedUntil) {
+      const k = this.input.keyDirection
+      if (k.x !== 0 || k.y !== 0) this.interruptLocal()
+    }
     if (now >= local.lockedUntil) {
       const k = this.input.keyDirection
-      if (k.x !== 0 || k.y !== 0) this.path = [] // 鍵盤操作取消點擊路徑
+      if (k.x !== 0 || k.y !== 0) {
+        // 鍵盤操作取消點擊路徑與正在走向定點的動作
+        this.path = []
+        this.pending = null
+      }
       wantsMove = k.x !== 0 || k.y !== 0 || local.mover.target !== null
       const yaw = this.renderer.yaw
       // 鏡頭在角色後方 (sin yaw, cos yaw) 方向，畫面「上」= 遠離鏡頭。
@@ -339,6 +457,17 @@ export class GameCore {
         const arrived = Math.hypot(target.x - local.mover.x, target.z - local.mover.z) < 0.2
         local.mover.target = arrived ? (this.path.shift() ?? null) : null
         if (!arrived) this.path = []
+      }
+      // 走向定點的動作：路走完（或被擋住）時，抵達就開始，沒抵達就提示
+      if (this.pending && !local.mover.target) {
+        const { id, pose } = this.pending
+        this.pending = null
+        if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) <= APPROACH_ARRIVE) {
+          this.beginAction(id, pose)
+          moving = false
+        } else {
+          this.opts.onToast('被擋住了，沒有走到')
+        }
       }
     }
     local.anim.moving = moving
@@ -356,6 +485,8 @@ export class GameCore {
     this.inPortal = portal !== null
 
     const playersActive = this.players.update(now, dt, t)
+    this.incense.update(now, t)
+    const striking = this.zone === 'courtyard' && this.striker.update(now)
     if (this.zone === 'hall') this.hall?.update(t, dt)
     else this.temple.update(t, dt)
     // 殿內越靠近神龕（z 從 1 到 -3.5），鏡頭注視點越往上抬，像抬頭仰望神像。
@@ -377,7 +508,7 @@ export class GameCore {
       }
     }
 
-    const sceneMotion = this.zone === 'courtyard' && this.temple.hasTransientMotion()
+    const sceneMotion = this.zone === 'courtyard' && (this.temple.hasTransientMotion() || striking)
     if (moving || wantsMove) this.lastInputAt = now
     return moving || wantsMove || playersActive || cameraMoving || markerActive || sceneMotion
   }
@@ -406,7 +537,8 @@ export class GameCore {
 
   private onTap(ndcX: number, ndcY: number): void {
     const local = this.players.local
-    if (performance.now() < local.lockedUntil) return
+    // 鎖定中只有可提前結束的動作（誦經）能被點擊打斷：起身並走向點擊處
+    if (performance.now() < local.lockedUntil && !this.interruptLocal()) return
     this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.renderer.camera)
     const surface = this.zone === 'hall' && this.hall ? this.hall.walkSurface : this.temple.walkSurface
     const hit = this.raycaster.intersectObject(surface, false)[0]
@@ -417,6 +549,7 @@ export class GameCore {
     const p = resolveCollisions(want.x, want.z, this.moveCfg)
     const path = findPath({ x: local.mover.x, z: local.mover.z }, p, this.moveCfg)
     if (!path) return
+    this.pending = null
     local.mover.target = path.shift() ?? null
     this.path = path
     this.marker.position.set(p.x, 0.08, p.z)
@@ -433,6 +566,8 @@ export class GameCore {
     this.fading = true
     local.mover.target = null
     this.path = []
+    this.pending = null
+    this.lockedAction = null
     local.lockedUntil = performance.now() + FADE_MS * 2 + FADE_HOLD_MS
     this.input.clearKeys()
     this.pushUi(true)
@@ -453,7 +588,7 @@ export class GameCore {
   /** 立即切換到指定場景與位置（無過場）。 */
   private applyZone(zone: ZoneId, pose: Pose): void {
     if (zone === 'hall' && !this.hall) {
-      this.hall = buildHallScene(this.tracker)
+      this.hall = buildHallScene(this.renderer.renderer, this.tracker, QUALITY_PRESETS[this.quality], () => this.wake())
       this.renderer.scene.add(this.hall.root)
     }
     if (zone !== this.zone) {
@@ -476,7 +611,10 @@ export class GameCore {
     const pos = resolveCollisions(pose.x, pose.z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, heading: pose.heading, target: null })
     this.path = []
+    this.pending = null
     this.players.setLocalZone(zone)
+    this.incense.setZone(zone)
+    this.striker.visible = zone === 'courtyard'
     this.inPortal = portalAt(zone, pos.x, pos.z) !== null
     this.marker.visible = false
     this.audio.setIndoor(zone === 'hall')
@@ -490,6 +628,7 @@ export class GameCore {
     const pos = resolveCollisions(x, z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, target: null })
     this.path = []
+    this.pending = null
     this.marker.visible = false
     this.snapCamera = true
     this.wake()
@@ -535,7 +674,11 @@ export class GameCore {
             const r = this.players.upsert(p)
             if (p.action) {
               const def = this.actions.get(p.action.id)
-              if (def) this.anim.play(r.anim, def.animation, performance.now(), def.durationMs, p.action.startedAt - this.serverOffset)
+              if (def) {
+                const startedAt = p.action.startedAt - this.serverOffset
+                if (def.locksMovement) r.lockedUntil = startedAt + def.durationMs
+                this.anim.play(r.anim, def.animation, performance.now(), def.durationMs, startedAt)
+              }
             }
           }
         }
@@ -591,14 +734,21 @@ export class GameCore {
     if (!r || !def) return
     const now = performance.now()
     const startedAt = m.startedAt - this.serverOffset
-    if (now - startedAt > def.durationMs) return
+    // 新的動作取代原本的動作片段；不鎖定的動作（例如誦經的「起身」）同時解除原本的鎖定。
+    // 已經過期的動作也照樣取代（片段下一幀就結束），延遲很久才到的「起身」仍能讓對方停下來。
+    r.lockedUntil = def.locksMovement ? startedAt + def.durationMs : Math.min(r.lockedUntil, startedAt)
     this.anim.play(r.anim, def.animation, now, def.durationMs, startedAt)
+    if (now - startedAt > def.durationMs) {
+      // 過期的一般動作不再播聲音、不通知玩法；只用來結束其他動作的（hidden）仍要通知，玩法才會停止對應的聲音
+      if (def.hidden) this.events.emit('actionPerformed', { playerId: r.id, actionId: m.id, local: false, zone: r.zone, startedAt, x: r.x, z: r.z })
+      return
+    }
     if (def.sound && r.zone === this.zone && now - startedAt < 1500) {
       const local = this.players.local.mover
       const d = Math.hypot(r.x - local.x, r.z - local.z)
       this.audio.play(def.sound, { gain: Math.max(0, 1 - d / SFX_HEARING_RANGE) * 0.7 })
     }
-    this.events.emit('actionPerformed', { playerId: r.id, actionId: m.id, local: false, x: r.x, z: r.z })
+    this.events.emit('actionPerformed', { playerId: r.id, actionId: m.id, local: false, zone: r.zone, startedAt, x: r.x, z: r.z })
   }
 
   // ---------- 玩法模組 ----------
@@ -614,13 +764,26 @@ export class GameCore {
           this.temple.swingBell()
           this.wake()
         },
+        strikeBell: (startedAt) => {
+          this.striker.strike(startedAt)
+          this.wake()
+        },
+        offerIncense: (censerId) => {
+          if (this.incense.add(censerId, performance.now())) this.wake()
+        },
       },
       setStat: (key, label, value) => {
         if (value === null) this.stats.delete(key)
         else this.stats.set(key, { label, value })
         this.pushUi(true)
       },
+      clockOffset: () => this.serverOffset,
       localPosition: () => ({ x: this.players.local.mover.x, z: this.players.local.mover.z }),
+      playerPosition: (id) => {
+        if (id === 'local' || id === this.selfId) return { x: this.players.local.mover.x, z: this.players.local.mover.z, zone: this.zone }
+        const r = this.players.remotes.get(id)
+        return r ? { x: r.to.x, z: r.to.z, zone: r.zone } : null
+      },
     }
     for (const mod of gameplayModules) {
       try {
@@ -646,13 +809,17 @@ export class GameCore {
       contextLost: this.contextLost,
       fading: this.fading,
       zone: this.zone,
-      actions: this.actions.list().map((a) => ({
-        id: a.id,
-        label: a.label,
-        glyph: a.glyph,
-        cooldownMs: a.cooldownMs,
-        readyAt: this.actions.readyAt(a.id),
-      })),
+      actions: this.actions.list().filter((a) => !a.hidden).map((a) => {
+        const unavailable = a.unavailableReason?.(this.zone)
+        return {
+          id: a.id,
+          label: a.label,
+          glyph: a.glyph,
+          cooldownMs: a.cooldownMs,
+          readyAt: this.actions.readyAt(a.id),
+          ...(unavailable ? { unavailable } : {}),
+        }
+      }),
       stats: [...this.stats].map(([key, s]) => ({ key, ...s })),
       // 迴圈停止時不再計幀，顯示 0 而非最後一次的數值。
       perf: { fps: performance.now() - this.lastRender > 1500 ? 0 : this.fps, frameMs: this.frameMs, calls: r.calls, triangles: r.triangles, rttMs: this.rtt },

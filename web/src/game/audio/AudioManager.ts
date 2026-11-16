@@ -72,6 +72,36 @@ function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
 }
 
 /**
+ * 合成引磬（手持的小磬）：清亮的高音、餘韻約 2 秒。strikes 是每一聲的起點（秒），可在一段音效裡敲數下，
+ * 例如對齊叩拜的動畫。音量為每聲疊加後再正規化。
+ */
+export function synthesizeQing(ctx: BaseAudioContext, strikes: readonly number[] = [0]): AudioBuffer {
+  const sr = ctx.sampleRate
+  const f0 = 1320
+  const partials: Array<[ratio: number, amp: number, decay: number]> = [[1, 1, 1.4], [2.32, 0.35, 0.6], [4.1, 0.18, 0.3], [6.3, 0.08, 0.15]]
+  const tail = 2.6
+  const len = Math.floor(sr * ((strikes.length ? Math.max(...strikes) : 0) + tail))
+  const buffer = ctx.createBuffer(1, len, sr)
+  const data = buffer.getChannelData(0)
+  const attack = Math.floor(sr * 0.002)
+  for (const start of strikes) {
+    const s0 = Math.floor(start * sr)
+    for (let i = 0; i < len - s0; i++) {
+      const t = i / sr
+      let v = 0
+      for (const [ratio, amp, decay] of partials) v += amp * Math.sin(2 * Math.PI * f0 * ratio * t) * Math.exp(-t / decay)
+      if (i < attack) v *= i / attack
+      data[s0 + i]! += v
+    }
+  }
+  let peak = 0
+  for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(data[i]!))
+  const norm = peak > 0 ? 0.6 / peak : 1
+  for (let i = 0; i < len; i++) data[i]! *= norm
+  return buffer
+}
+
+/**
  * 合成一段鳥叫：數個快速滑音組成的短句。每次呼叫用 random 產生不同的叫法。
  * random 可注入，方便產生可重現的結果。
  */
@@ -167,6 +197,7 @@ export class AudioManager {
   private sfxBus: GainNode | null = null
   private buffers = new Map<string, AudioBuffer>()
   private pendingUrls = new Map<string, string>()
+  private pendingSynths = new Map<string, (ctx: BaseAudioContext) => AudioBuffer>()
   private voices = 0
   private birdBuffers: AudioBuffer[] = []
   private birdTimer: ReturnType<typeof setTimeout> | null = null
@@ -215,6 +246,8 @@ export class AudioManager {
       this.windBuffer = synthesizeWindNoise(ctx)
       for (const [name, url] of this.pendingUrls) void this.loadSfx(name, url)
       this.pendingUrls.clear()
+      for (const [name, synth] of this.pendingSynths) this.buffers.set(name, synth(ctx))
+      this.pendingSynths.clear()
     }
     await this.applyRunState(1.5)
   }
@@ -235,12 +268,29 @@ export class AudioManager {
     this.buffers.set(name, await this.ctx.decodeAudioData(await res.arrayBuffer()))
   }
 
-  hasSfx(name: string): boolean {
-    return this.buffers.has(name) || this.pendingUrls.has(name)
+  /**
+   * 以合成函式定義音效（玩法模組加自己的聲音，不用音檔）。unlock 前呼叫會延到建立 AudioContext 時才合成。
+   * 回傳的函式移除這個音效。
+   */
+  defineSfx(name: string, synth: (ctx: BaseAudioContext) => AudioBuffer): () => void {
+    if (this.ctx) this.buffers.set(name, synth(this.ctx))
+    else this.pendingSynths.set(name, synth)
+    return () => {
+      this.pendingSynths.delete(name)
+      this.buffers.delete(name)
+    }
   }
 
-  /** 播放短音效。gain 可用於距離衰減。超過同時發聲上限或音效音量為 0 時略過。 */
-  play(name: string, opts: { gain?: number; rate?: number } = {}): void {
+  hasSfx(name: string): boolean {
+    return this.buffers.has(name) || this.pendingUrls.has(name) || this.pendingSynths.has(name)
+  }
+
+  /**
+   * 播放短音效。gain 可用於距離衰減。超過同時發聲上限或音效音量為 0 時略過。
+   * at 是預定的播放時間（performance.now 毫秒）：在 AudioContext 的時間軸上排程，不受計時器誤差影響
+   * （節拍類的聲音先排好接下來幾百毫秒內的拍點）；已經過去或沒給時立即播放。
+   */
+  play(name: string, opts: { gain?: number; rate?: number; at?: number } = {}): void {
     const ctx = this.ctx
     const buffer = this.buffers.get(name)
     if (!ctx || !buffer || !this.sfxBus || ctx.state !== 'running' || this.voices >= MAX_VOICES) return
@@ -259,7 +309,7 @@ export class AudioManager {
       src.disconnect()
       g.disconnect()
     }
-    src.start()
+    src.start(opts.at === undefined ? 0 : ctx.currentTime + Math.max(0, (opts.at - performance.now()) / 1000))
   }
 
   /** 開始環境音：風聲、鳥鳴、遠處頌缽與遠鐘。 */

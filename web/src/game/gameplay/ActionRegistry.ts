@@ -1,3 +1,6 @@
+import type { SpotContext } from '../world/worship'
+import type { Pose, ZoneId } from '../world/zones'
+
 /**
  * 玩家可執行的動作定義。玩法定案後，新動作只需註冊一筆定義，UI 動作列、動畫、音效、網路確認都會自動接上。
  */
@@ -19,6 +22,24 @@ export interface GameActionDef {
   sound?: string
   /** 伺服器確認後的本地效果（例如更新計數）。 */
   onConfirmed?: () => void
+  /**
+   * 依場景判斷能不能用：可用回傳 null，不可用回傳給玩家看的原因（按鈕變暗，按下時提示原因）。
+   * 只依場景判斷，因為 UI 是低頻摘要，不隨位置每幀更新。
+   */
+  unavailableReason?: (zone: ZoneId) => string | null
+  /**
+   * 需要先走到定點再執行：回傳站位與面向，角色會自動走過去、轉向後才開始動作（冷卻、動畫、送出都從抵達時算起）；
+   * 回傳字串表示現在找不到可用的點（提示玩家原因）。
+   */
+  approach?: (ctx: SpotContext) => Pose | string
+  /**
+   * 可提前結束的鎖定動作（需搭配 locksMovement）：鎖定期間玩家點擊地面、用方向鍵或按任何動作時立即結束，
+   * 改為執行這個動作 id（通常是 hidden 的「起身」）。它和一般動作一樣送給伺服器並轉送給同場景的人，
+   * 其他玩家收到後原本的動作片段被取代、解除鎖定，畫面上也停止。按的若是同一個動作，只結束、不重新開始。
+   */
+  endAction?: string
+  /** 不顯示在動作列（例如只用來結束其他動作的「起身」）。 */
+  hidden?: boolean
 }
 
 export class ActionRegistry {

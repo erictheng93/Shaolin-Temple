@@ -19,7 +19,7 @@ fn full_room_welcome_fits_message_limit() {
     let player = PlayerSnapshot {
         zone: Some(longest(&zone_ids)),
         id: format!("p-{:032x}", u128::MAX),
-        n: u16::MAX,
+        n: crate::protocol::MAX_SHORT_ID,
         name: "😀".repeat(16),
         x: n,
         z: n,
@@ -55,7 +55,7 @@ struct Client {
     room: RoomTx,
     who: Who,
     rx: Outbound,
-    n: u16,
+    n: u8,
     token: String,
     zone: String,
     x: f64,
@@ -90,7 +90,7 @@ impl Client {
     /// 以事件而非時間判斷「該位置已廣播」：測試的 sleep 常與房間 tick 落在同一個虛擬瞬間，
     /// 誰先執行不固定，只 sleep 一個 tick 不保證那個 tick 已經送出。
     /// 位置被伺服器拒絕時永遠等不到，1 秒（虛擬時間）後失敗。
-    async fn recv_move_of(&mut self, n: u16, x: f64, z: f64) {
+    async fn recv_move_of(&mut self, n: u8, x: f64, z: f64) {
         let target = (n, round2(x), round2(z));
         let wait = async {
             loop {
@@ -614,7 +614,7 @@ async fn actions_are_acked_idempotently_and_only_known_ones_broadcast() {
     assert_eq!(acks(&a.drain()), [ack("r2", false, Some("unknown_action"))]);
     // 只快取最近 64 個：r1 被擠出後重送會重新執行並再廣播一次，最新的仍在快取內
     for i in 0..64 {
-        a.action(&format!("f{i}"), "bowl", true).await;
+        a.action(&format!("f{i}"), "incense", true).await;
     }
     sleep(TICK).await;
     a.drain();
@@ -622,7 +622,7 @@ async fn actions_are_acked_idempotently_and_only_known_ones_broadcast() {
     a.action("r1", "bow", true).await;
     sleep(TICK).await;
     assert_eq!(count(&b.drain(), "action"), 1);
-    a.action("f63", "bowl", true).await;
+    a.action("f63", "incense", true).await;
     sleep(TICK).await;
     assert!(b.drain().is_empty());
 }
@@ -655,6 +655,43 @@ async fn snapshots_only_contain_known_zones_and_allowlisted_actions() {
         );
     }
     assert!(players.iter().any(|p| p.action.is_some()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn chant_and_early_end_are_relayed_in_order_and_snapshot_keeps_the_end() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    a.enter_hall().await;
+    b.enter_hall().await;
+    sleep(TICK).await;
+    a.drain();
+    b.drain();
+    // 誦經後提前起身：同場景的人依序收到 chant、chant_end（與一般動作相同的允許清單與確認）
+    a.action("r1", "chant", true).await;
+    a.action("r2", "chant_end", true).await;
+    sleep(TICK).await;
+    assert_eq!(
+        acks(&a.drain()),
+        [ack("r1", true, None), ack("r2", true, None)]
+    );
+    let ids: Vec<String> = b
+        .drain()
+        .into_iter()
+        .filter_map(|m| match m {
+            ServerMessage::Action { id, .. } => Some(id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["chant", "chant_end"]);
+    // 之後才進房的人在快照裡看到的是起身，不會以為他還在誦經
+    let (out, mut rx) = mpsc::channel(64);
+    join(&room, "觀察", out).await.unwrap();
+    let ServerMessage::Welcome { players, .. } = rx.try_recv().unwrap() else {
+        panic!()
+    };
+    let me = players.iter().find(|p| p.id == a.who.id).unwrap();
+    assert_eq!(me.action.as_ref().unwrap().id, "chant_end");
 }
 
 // ---- 伺服器端停止看門狗與斷線保留 ----
