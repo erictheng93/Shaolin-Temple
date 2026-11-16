@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { QUALITY_PRESETS, detectQuality, effectivePreset, loadSettings, saveSettings } from './settings'
+import { QUALITY_PRESETS, detectQuality, effectivePreset, loadSettings, needsReload, saveSettings } from './settings'
 
 const stubStorage = (init: Record<string, string>) => {
   const store = new Map(Object.entries(init))
@@ -74,5 +74,21 @@ describe('effectivePreset', () => {
     effectivePreset('high', { saveData: true })
     expect(QUALITY_PRESETS.high.textureSize).toBe(1024)
     expect(QUALITY_PRESETS.high.statueTier).toBe('hi')
+  })
+})
+
+describe('needsReload', () => {
+  it('省電與標準載入內容相同，不需重新載入；高畫質與兩者不同', () => {
+    expect(needsReload(QUALITY_PRESETS.low, QUALITY_PRESETS.medium)).toBe(false)
+    expect(needsReload(QUALITY_PRESETS.medium, QUALITY_PRESETS.high)).toBe(true)
+    expect(needsReload(QUALITY_PRESETS.high, QUALITY_PRESETS.low)).toBe(true)
+  })
+
+  it('只看載入時決定的欄位，執行中可切換的欄位不算', () => {
+    const m = QUALITY_PRESETS.medium
+    expect(needsReload(m, { ...m, maxPixelRatio: 2, maxPixels: 1, activeFps: 60 })).toBe(false)
+    for (const patch of [{ antialias: true }, { shadowMapSize: 1024 }, { textureSize: 1024 as const }, { detailMaps: 2 as const }, { statueTier: 'hi' as const }]) {
+      expect(needsReload(m, { ...m, ...patch })).toBe(true)
+    }
   })
 })

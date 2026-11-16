@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { GameCore, type UiState } from './game/GameCore'
-import { loadSettings, saveSettings } from './game/core/settings'
+import { loadSettings, resolveQuality, saveSettings } from './game/core/settings'
 import EntryScreen from './ui/EntryScreen.vue'
 import TopBar from './ui/TopBar.vue'
 import ActionBar from './ui/ActionBar.vue'
@@ -11,6 +11,8 @@ import ToastHost from './ui/ToastHost.vue'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const settings = reactive(loadSettings())
+// 本次載入時採用的畫質等級（與 GameCore 建構時相同的解析）；之後切換畫質，部分項目要重新載入才生效。
+const loadedQuality = resolveQuality(settings.quality)
 // UI 狀態整包替換，用 shallowRef 避免深層響應式追蹤。
 const ui = shallowRef<UiState | null>(null)
 const entered = ref(false)
@@ -96,7 +98,7 @@ function toggleMute() {
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
     </template>
 
-    <SettingsPanel v-if="settingsOpen" :settings="settings" :active-quality="ui?.quality ?? 'medium'" @close="settingsOpen = false" />
+    <SettingsPanel v-if="settingsOpen" :settings="settings" :active-quality="ui?.quality ?? 'medium'" :loaded-quality="loadedQuality" @close="settingsOpen = false" />
 
     <Transition name="fade">
       <EntryScreen
