@@ -393,6 +393,11 @@ const FIGURE_HEIGHT = 1.15
  * 頭與手以剛體跟著這個高度上下移動，不做縮放，避免蹲坐時頭被壓扁、臉變形。
  */
 const SHOULDER_HEIGHT = 0.66
+/**
+ * 模型網址的版本。/models/* 快取一天且檔名固定，程式（檔名有雜湊）卻立即換新：
+ * 重跑 npm run build:avatar 後要加一，否則舊快取的模型缺新屬性，角色會停在替代用的圓柱。
+ */
+const AVATAR_MODEL_VERSION = 2
 /** 同時繪製的角色上限（含自己）。需大於最高畫質的可見人數。 */
 export const AVATAR_CAPACITY = 160
 
@@ -590,7 +595,7 @@ export class AvatarFactory {
     // 動態載入 GLTFLoader（與 statues.ts 共用同一個延後載入的區塊）
     void import('three/examples/jsm/loaders/GLTFLoader.js').then(({ GLTFLoader }) => {
       ;['monk.glb', 'monk-lod.glb'].forEach((file, i) =>
-        new GLTFLoader().load(`${import.meta.env.BASE_URL}models/${file}`, (gltf) => {
+        new GLTFLoader().load(`${import.meta.env.BASE_URL}models/${file}?v=${AVATAR_MODEL_VERSION}`, (gltf) => {
           const geometryOf = (name: string) => (gltf.scene.getObjectByName(name) as THREE.Mesh | undefined)?.geometry
           const body = geometryOf('body')
           const skin = geometryOf('skin')
