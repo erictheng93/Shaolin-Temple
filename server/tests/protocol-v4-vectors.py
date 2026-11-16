@@ -1,6 +1,8 @@
-# 獨立的第三份實作（Python），用來產生 protocol-v3.json 的 binary 一段（二進位測試向量）。
+# 獨立的第三份實作（Python），用來產生 protocol-v4.json 的 binary 一段（二進位測試向量）。
 # 不 import 前端或 Rust 的任何程式；要增修向量時改這個腳本，執行後把輸出貼回固定資料的 "binary"。
-# 用法：python server/tests/protocol-v3-vectors.py > binary.json
+# 協定版本 4 只新增 JSON 訊息（hello.session、welcome.auth、rename、name），二進位幀與 v3 完全相同，
+# 所以這個腳本的輸出與 v3 相同（只改了檔名）。
+# 用法：python server/tests/protocol-v4-vectors.py > binary.json
 import json, math, struct, sys
 PI = math.pi
 

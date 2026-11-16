@@ -35,6 +35,7 @@ fn full_room_welcome_fits_message_limit() {
         room: format!("room-{}", u64::MAX),
         resume_token: format!("{:x}.{:032x}", u64::MAX, u128::MAX),
         server_time: n,
+        auth: AuthKind::Google,
         players: vec![player; MAX_ROOM_CAPACITY],
     };
     let bytes = serde_json::to_string(&welcome).unwrap().len();
@@ -166,8 +167,13 @@ impl Client {
     }
 }
 /// 以預設衣裝（0）加入。
-async fn join(room: &RoomTx, name: &str, out: mpsc::Sender<ServerMessage>) -> Option<Who> {
-    join_with(room, name, 0, out).await
+async fn join(
+    room: &RoomTx,
+    name: &str,
+    auth: AuthKind,
+    out: mpsc::Sender<ServerMessage>,
+) -> Option<Who> {
+    super::join(room, name, auth, 0, out).await
 }
 async fn join_with(
     room: &RoomTx,
@@ -175,33 +181,38 @@ async fn join_with(
     outfit: u8,
     out: mpsc::Sender<ServerMessage>,
 ) -> Option<Who> {
-    super::join(room, name, outfit, out).await
+    super::join(room, name, AuthKind::Guest, outfit, out).await
 }
 async fn connect_with(room: &RoomTx, capacity: usize) -> Client {
     let (out, rx) = mpsc::channel(capacity);
-    let who = join(room, "測試", out).await.unwrap();
+    let who = join(room, "測試", AuthKind::Guest, out).await.unwrap();
     Client::from_welcome(room, who, rx)
 }
 async fn connect(room: &RoomTx) -> Client {
     connect_with(room, 64).await
 }
 async fn resume(room: &RoomTx, token: &str) -> Option<Client> {
-    resume_with(room, token, None).await
+    resume_full(room, token, "測試", AuthKind::Guest, None).await
 }
 async fn resume_with(room: &RoomTx, token: &str, outfit: Option<u8>) -> Option<Client> {
-    resume_as(room, token, None, outfit).await
+    resume_full(room, token, "測試", AuthKind::Guest, outfit).await
 }
-async fn resume_as(
+async fn resume_as(room: &RoomTx, token: &str, name: &str, auth: AuthKind) -> Option<Client> {
+    resume_full(room, token, name, auth, None).await
+}
+async fn resume_full(
     room: &RoomTx,
     token: &str,
-    name: Option<&str>,
+    name: &str,
+    auth: AuthKind,
     outfit: Option<u8>,
 ) -> Option<Client> {
     let (outbound, rx) = mpsc::channel(64);
     let (reply, received) = oneshot::channel();
     room.send(RoomCommand::Resume {
         token: token.into(),
-        name: name.map(Into::into),
+        name: name.into(),
+        auth,
         outfit,
         outbound,
         reply,
@@ -227,6 +238,7 @@ fn kind(m: &ServerMessage) -> &'static str {
         ServerMessage::Error { .. } => "error",
         ServerMessage::Chat { .. } => "chat",
         ServerMessage::Outfit { .. } => "outfit",
+        ServerMessage::Name { .. } => "name",
     }
 }
 fn kinds(messages: &[ServerMessage]) -> Vec<&'static str> {
@@ -671,7 +683,7 @@ async fn snapshots_only_contain_known_zones_and_allowlisted_actions() {
     a.action("r1", &"x".repeat(32), true).await;
     sleep(TICK).await;
     let (out, mut rx) = mpsc::channel(64);
-    join(&room, "觀察", out).await.unwrap();
+    join(&room, "觀察", AuthKind::Guest, out).await.unwrap();
     let ServerMessage::Welcome { players, .. } = rx.try_recv().unwrap() else {
         panic!()
     };
@@ -679,7 +691,7 @@ async fn snapshots_only_contain_known_zones_and_allowlisted_actions() {
     a.action("r2", "bell", true).await;
     sleep(TICK).await;
     let (out, mut rx) = mpsc::channel(64);
-    join(&room, "觀察", out).await.unwrap();
+    join(&room, "觀察", AuthKind::Guest, out).await.unwrap();
     let ServerMessage::Welcome { players, .. } = rx.try_recv().unwrap() else {
         panic!()
     };
@@ -723,7 +735,7 @@ async fn chant_and_early_end_are_relayed_in_order_and_snapshot_keeps_the_end() {
     assert_eq!(ids, ["chant", "chant_end"]);
     // 之後才進房的人在快照裡看到的是起身，不會以為他還在誦經
     let (out, mut rx) = mpsc::channel(64);
-    join(&room, "觀察", out).await.unwrap();
+    join(&room, "觀察", AuthKind::Guest, out).await.unwrap();
     let ServerMessage::Welcome { players, .. } = rx.try_recv().unwrap() else {
         panic!()
     };
@@ -953,7 +965,7 @@ async fn resume_keeps_the_outfit_and_a_different_hello_outfit_wins_and_is_announ
 }
 
 #[tokio::test(start_paused = true)]
-async fn resume_with_a_different_name_renames_and_rejoins_for_others() {
+async fn resume_with_a_different_name_and_outfit_broadcasts_name_then_outfit() {
     let room = spawn_room(RoomConfig::new(50));
     let a = connect(&room).await;
     let mut b = connect(&room).await;
@@ -961,24 +973,19 @@ async fn resume_with_a_different_name_renames_and_rejoins_for_others() {
     b.drain();
     a.disconnect().await;
     sleep(Duration::from_secs(1)).await;
-    let a2 = resume_as(&room, &a.token, Some("新名字"), Some(3))
+    let a2 = resume_full(&room, &a.token, "新名字", AuthKind::Guest, Some(3))
         .await
         .unwrap();
     sleep(TICK).await;
-    // join 的快照已含新名字與新衣裝，不另外送 outfit
-    let got: Vec<_> = b
-        .drain()
-        .into_iter()
-        .map(|m| match m {
-            ServerMessage::Join { player } => (player.id, player.name, player.outfit),
-            other => panic!("unexpected {}", kind(&other)),
-        })
-        .collect();
-    assert_eq!(got, vec![(a.who.id.clone(), "新名字".to_string(), 3)]);
+    // v4 有改名訊息：不重送 join，name 與 outfit 各一則
+    let got = b.drain();
+    assert_eq!(names(&got), [(a.who.id.clone(), "新名字".to_string())]);
+    assert_eq!(outfit_of(&got), vec![(a.who.id.clone(), 3)]);
+    assert_eq!(got.len(), 2);
     // 名字相同：不重送
     a2.disconnect().await;
     sleep(Duration::from_secs(1)).await;
-    resume_as(&room, &a2.token, Some("新名字"), None)
+    resume_as(&room, &a2.token, "新名字", AuthKind::Guest)
         .await
         .unwrap();
     sleep(TICK).await;
@@ -1037,7 +1044,7 @@ async fn resume_fails_after_grace_and_the_player_is_gone() {
         assert!(resume(&room, token).await.is_none());
     }
     let (out, _rx) = mpsc::channel(64);
-    let fresh = join(&room, "新", out).await.unwrap();
+    let fresh = join(&room, "新", AuthKind::Guest, out).await.unwrap();
     assert_ne!(fresh.id, a.who.id);
 }
 
@@ -1103,14 +1110,18 @@ async fn capacity_is_held_during_grace_and_released_after() {
     tokio::spawn(run_room(1, RoomConfig::new(1), rx, Default::default()));
     let one = connect(&tx).await;
     let (out, _inbox) = mpsc::channel(64);
-    assert!(join(&tx, "full", out).await.is_none());
+    assert!(join(&tx, "full", AuthKind::Guest, out).await.is_none());
     one.disconnect().await;
     sleep(Duration::from_secs(29)).await;
     let (out, _inbox) = mpsc::channel(64);
-    assert!(join(&tx, "still full", out).await.is_none());
+    assert!(
+        join(&tx, "still full", AuthKind::Guest, out)
+            .await
+            .is_none()
+    );
     sleep(Duration::from_secs(2)).await;
     let (out, _inbox) = mpsc::channel(64);
-    assert!(join(&tx, "free", out).await.is_some());
+    assert!(join(&tx, "free", AuthKind::Guest, out).await.is_some());
 }
 
 #[tokio::test(start_paused = true)]
@@ -1127,4 +1138,180 @@ async fn idle_deadline_restarts_when_the_last_player_leaves() {
     sleep(Duration::from_secs(5)).await;
     task.await.unwrap();
     assert!(tx.is_closed());
+}
+
+// ---- 協定版本 4：改名與 welcome.auth ----
+
+fn names(messages: &[ServerMessage]) -> Vec<(String, String)> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            ServerMessage::Name { id, name } => Some((id.clone(), name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+async fn rename(c: &Client, name: &str) {
+    let command = RoomCommand::Rename {
+        who: c.who.clone(),
+        name: name.into(),
+    };
+    c.room.send(command).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn rename_reaches_everyone_in_every_zone_once_and_later_snapshots_follow() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut hall = connect(&room).await;
+    hall.enter_hall().await;
+    let mut yard = connect(&room).await;
+    sleep(TICK).await;
+    a.drain();
+    hall.drain();
+    rename(&a, "新名字").await;
+    rename(&a, "新名字").await; // 同名：不再廣播
+    sleep(TICK).await;
+    let expected = vec![(a.who.id.clone(), "新名字".to_string())];
+    for c in [&mut a, &mut hall, &mut yard] {
+        assert_eq!(names(&c.drain()), expected);
+    }
+    // 之後加入的人在 welcome 看到新名字，原本的人收到的 join 也是
+    let (out, mut rx) = mpsc::channel(64);
+    join(&room, "後來", AuthKind::Guest, out).await.unwrap();
+    let ServerMessage::Welcome { players, auth, .. } = rx.try_recv().unwrap() else {
+        panic!("welcome");
+    };
+    assert_eq!(auth, AuthKind::Guest);
+    let me = players.iter().find(|p| p.id == a.who.id).unwrap();
+    assert_eq!(me.name, "新名字");
+}
+
+#[tokio::test(start_paused = true)]
+async fn resume_adopts_a_new_name_broadcasts_it_and_reports_the_new_auth() {
+    let room = spawn_room(RoomConfig::new(50));
+    let (out, rx) = mpsc::channel(64);
+    let who = join(&room, "測試", AuthKind::Google, out).await.unwrap();
+    let mut first = rx;
+    let ServerMessage::Welcome {
+        auth, resume_token, ..
+    } = first.try_recv().unwrap()
+    else {
+        panic!("welcome");
+    };
+    assert_eq!(auth, AuthKind::Google);
+    let mut b = connect(&room).await;
+    sleep(TICK).await;
+    b.drain();
+    room.send(RoomCommand::Disconnect(who.clone()))
+        .await
+        .unwrap();
+    // 同名恢復不廣播；名字不同則採用並廣播（含本人）
+    let same = resume_as(&room, &resume_token, "測試", AuthKind::Guest)
+        .await
+        .unwrap();
+    sleep(TICK).await;
+    assert!(names(&b.drain()).is_empty());
+    same.disconnect().await;
+    let (out, mut rx) = mpsc::channel(64);
+    let (reply, received) = oneshot::channel();
+    room.send(RoomCommand::Resume {
+        token: same.token.clone(),
+        name: "改過".into(),
+        auth: AuthKind::Line,
+        outfit: None,
+        outbound: out,
+        reply,
+    })
+    .await
+    .unwrap();
+    assert_eq!(received.await.unwrap().unwrap().id, who.id);
+    let ServerMessage::Welcome { auth, players, .. } = rx.try_recv().unwrap() else {
+        panic!("welcome");
+    };
+    assert_eq!(auth, AuthKind::Line);
+    assert_eq!(
+        players.iter().find(|p| p.id == who.id).unwrap().name,
+        "改過"
+    );
+    sleep(TICK).await;
+    let expected = vec![(who.id.clone(), "改過".to_string())];
+    assert_eq!(
+        names(&std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>()),
+        expected
+    );
+    assert_eq!(names(&b.drain()), expected);
+}
+
+/// 斷線恢復帶新名字與 `rename` 共用同一份每位玩家的改名額度：反覆恢復不能繞過頻率限制。
+#[tokio::test(start_paused = true)]
+async fn resume_renames_share_the_per_player_rename_budget() {
+    let room = spawn_room(RoomConfig::new(50));
+    let a = connect(&room).await;
+    let mut b = connect(&room).await;
+    sleep(TICK).await;
+    b.drain();
+    let id = a.who.id.clone();
+    // 額度 2：第一次 rename、第二次以恢復改名都生效；第三次（恢復）額度用完 → 保留舊名、不廣播
+    rename(&a, "一").await;
+    a.disconnect().await;
+    let a2 = resume_as(&room, &a.token, "二", AuthKind::Guest)
+        .await
+        .unwrap();
+    a2.disconnect().await;
+    let (out, mut rx) = mpsc::channel(64);
+    let (reply, received) = oneshot::channel();
+    room.send(RoomCommand::Resume {
+        token: a2.token.clone(),
+        name: "三".into(),
+        auth: AuthKind::Guest,
+        outfit: None,
+        outbound: out,
+        reply,
+    })
+    .await
+    .unwrap();
+    let who = received.await.unwrap().unwrap();
+    let ServerMessage::Welcome {
+        players,
+        resume_token,
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("welcome");
+    };
+    assert_eq!(
+        players.iter().find(|p| p.id == id).unwrap().name,
+        "二",
+        "over budget: the old name stays and the snapshot says so"
+    );
+    sleep(TICK).await;
+    assert_eq!(
+        names(&b.drain()),
+        [
+            (id.clone(), "一".to_string()),
+            (id.clone(), "二".to_string())
+        ]
+    );
+    assert!(names(&std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>()).is_empty());
+    // rename 也被同一份額度擋下
+    let a3 = Client {
+        room: room.clone(),
+        who,
+        rx,
+        n: a.n,
+        token: resume_token,
+        zone: a.zone.clone(),
+        outfit: a.outfit,
+        x: a.x,
+        z: a.z,
+    };
+    rename(&a3, "四").await;
+    sleep(TICK).await;
+    assert!(names(&b.drain()).is_empty());
+    // 約 2 秒後回復一次額度
+    sleep(Duration::from_millis(2100)).await;
+    rename(&a3, "五").await;
+    sleep(TICK).await;
+    assert_eq!(names(&b.drain()), [(id.clone(), "五".to_string())]);
 }

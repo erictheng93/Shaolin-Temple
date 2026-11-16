@@ -1,8 +1,8 @@
 use crate::{
     metrics::Metrics,
     protocol::{
-        ClientMessage, Frame, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_chat,
-        clean_name, parse_outfit,
+        AuthKind, ClientMessage, Frame, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage,
+        clean_chat, clean_name, parse_outfit,
     },
     rate_limit::{RateLimiter, Verdict},
 };
@@ -201,6 +201,7 @@ async fn session_inner(
                 name: requested,
                 resume_token,
                 outfit,
+                session,
             }) if name.is_none() => {
                 if v != PROTOCOL_VERSION {
                     deliver(
@@ -208,7 +209,7 @@ async fn session_inner(
                         &state.metrics,
                         ServerMessage::Error {
                             code: "unsupported_version".into(),
-                            message: "Protocol version 2 required".into(),
+                            message: format!("Protocol version {PROTOCOL_VERSION} required"),
                         },
                     )
                     .await;
@@ -216,10 +217,20 @@ async fn session_inner(
                     return;
                 }
                 let cleaned = clean_name(&requested);
+                // session 缺少、過期、簽章不符或伺服器沒設定 SESSION_SECRET：當訪客，不拒絕連線。
+                // 恢復連線（resumeToken）時同樣重新驗證，welcome.auth 反映這次的結果。
+                let auth = session
+                    .as_deref()
+                    .zip(state.auth.as_deref())
+                    .and_then(|(token, auth)| {
+                        auth.signer.verify_session(token, crate::auth::now_secs())
+                    })
+                    .map_or(AuthKind::Guest, |identity| identity.provider.auth_kind());
                 *membership = state
                     .lobby
                     .join(
                         cleaned.clone(),
+                        auth,
                         resume_token,
                         outfit.as_ref().and_then(parse_outfit),
                     )
@@ -301,6 +312,7 @@ async fn session_inner(
                             member.outfit(outfit).await;
                         }
                     }
+                    ClientMessage::Rename { name } => member.rename(clean_name(&name)).await,
                     ClientMessage::Hello { .. } => {}
                 }
             }

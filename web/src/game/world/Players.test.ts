@@ -18,6 +18,7 @@ vi.mock('../render/AvatarFactory', () => {
     tickBubble() {
       return false
     },
+    setName: vi.fn(),
     dispose() {},
   })
   return {
@@ -90,6 +91,28 @@ describe('Players 短編號對照', () => {
     expect(r.from).toBe(r.to)
     expect(r).toMatchObject({ x: 4, z: 4, serverMoving: true })
     expect(() => p.syncRemoteByN(2, 0, 0, 0, false, 500)).not.toThrow()
+  })
+})
+
+describe('Players 改名', () => {
+  it('更新名字與名牌；同名或不認得的 id 不動', () => {
+    const p = makePlayers()
+    p.upsert(snap('b', 1), 0)
+    const r = p.remotes.get('b')!
+    const setName = r.avatar.setName as ReturnType<typeof vi.fn>
+    expect(p.rename('b', '慧明')).toBe(true)
+    expect(r.name).toBe('慧明')
+    expect(setName).toHaveBeenLastCalledWith('慧明')
+    expect(p.rename('b', '慧明')).toBe(false)
+    expect(p.rename('zz', 'x')).toBe(false)
+    expect(setName).toHaveBeenCalledTimes(1)
+  })
+
+  it('既有玩家再次 join（名字不同）時名牌跟著更新', () => {
+    const p = makePlayers()
+    p.upsert(snap('b', 1), 0)
+    p.upsert({ ...snap('b', 1), name: '淨塵' }, 10)
+    expect(p.remotes.get('b')!.name).toBe('淨塵')
   })
 })
 

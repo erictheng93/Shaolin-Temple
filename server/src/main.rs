@@ -1,5 +1,5 @@
 use std::{future::IntoFuture, time::Duration};
-use temple_server::{ServerOptions, app_with_options, config::Config, shutdown};
+use temple_server::{ServerOptions, app_with_options, auth::Auth, config::Config, shutdown};
 
 /// `temple-server --healthcheck`：供容器 HEALTHCHECK 使用（distroless 映像沒有 curl／shell）。
 /// 對本機 `PORT` 的 `/healthz` 發 HTTP/1.0 請求，回應狀態碼 200 才成功。
@@ -34,11 +34,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_env_filter(config.log_filter)
         .try_init()?;
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port)).await?;
-    tracing::info!(port = config.port, room_capacity = config.room_capacity, tick_hz = config.tick_hz, resume_grace_seconds = config.resume_grace_seconds, origins = ?config.allowed_origins, "server started");
+    // 只記錄啟用了哪些提供者；不印 client secret 與 SESSION_SECRET。
+    let providers: Vec<&str> = config
+        .auth
+        .iter()
+        .flat_map(|a| a.providers.iter().map(|p| p.kind.as_str()))
+        .collect();
+    let auth = config
+        .auth
+        .map(Auth::new)
+        .transpose()?
+        .map(std::sync::Arc::new);
+    tracing::info!(port = config.port, room_capacity = config.room_capacity, tick_hz = config.tick_hz, resume_grace_seconds = config.resume_grace_seconds, origins = ?config.allowed_origins, sessions = auth.is_some(), login_providers = ?providers, "server started");
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let options = ServerOptions {
         room,
         metrics_token: config.metrics_token,
+        auth,
         ..ServerOptions::new(config.allowed_origins)
     };
     let server = axum::serve(listener, app_with_options(options))
