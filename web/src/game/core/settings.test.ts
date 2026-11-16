@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { QUALITY_PRESETS, detectQuality, effectivePreset, loadSettings, needsReload, saveSettings } from './settings'
+import { QUALITY_PRESETS, assetPresetFor, detectQuality, effectivePreset, loadSettings, needsReload, saveSettings } from './settings'
 
 const stubStorage = (init: Record<string, string>) => {
   const store = new Map(Object.entries(init))
@@ -74,6 +74,22 @@ describe('effectivePreset', () => {
     effectivePreset('high', { saveData: true })
     expect(QUALITY_PRESETS.high.textureSize).toBe(1024)
     expect(QUALITY_PRESETS.high.statueTier).toBe('hi')
+  })
+})
+
+describe('assetPresetFor', () => {
+  it('auto 遇資料節省時降級，手動選同一等級不降級，兩者需要重新載入', () => {
+    const conn = Object.getOwnPropertyDescriptor(navigator, 'connection')
+    Object.defineProperty(navigator, 'connection', { value: { saveData: true }, configurable: true })
+    try {
+      expect(assetPresetFor('high')).toBe(QUALITY_PRESETS.high)
+      const auto = assetPresetFor('auto')
+      expect(auto.textureSize).toBe(512)
+      expect(needsReload(auto, assetPresetFor(detectQuality()))).toBe(detectQuality() === 'high')
+    } finally {
+      if (conn) Object.defineProperty(navigator, 'connection', conn)
+      else delete (navigator as { connection?: unknown }).connection
+    }
   })
 })
 
