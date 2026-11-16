@@ -104,6 +104,7 @@ const en: Record<MessageKey, string> = {
   'outfit.beads': 'Blue-grey robe & mala',
 
   'perf.label': 'Performance',
+  'perf.position': 'Position',
   'perf.quality': 'Quality {quality} · Saver {level}/{max}',
 }
 

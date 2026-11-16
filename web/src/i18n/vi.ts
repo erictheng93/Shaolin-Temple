@@ -104,6 +104,7 @@ const vi: Record<MessageKey, string> = {
   'outfit.beads': 'Áo lam đeo tràng hạt',
 
   'perf.label': 'Thông tin hiệu năng',
+  'perf.position': 'Tọa độ',
   'perf.quality': 'Đồ họa {quality} · Tiết kiệm pin {level}/{max}',
 }
 

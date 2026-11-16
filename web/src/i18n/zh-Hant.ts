@@ -107,6 +107,7 @@ const zhHant = {
   'outfit.beads': '灰藍袍掛念珠',
 
   'perf.label': '效能資訊',
+  'perf.position': '座標',
   'perf.quality': '畫質 {quality} · 省電 {level}/{max}',
 }
 

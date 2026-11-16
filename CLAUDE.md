@@ -95,5 +95,5 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 ## 驗證注意
 
 - 前端變更：`npm run typecheck`、`npm test`、`npm run build`；涉及畫面或互動時以 `npm run dev`（多人加 `npm run mock`）在瀏覽器實際確認。
-- 效能數據可在遊戲設定開啟「顯示效能資訊」（FPS、CPU 時間、draw call）。目前量測都是桌面 Chromium，非手機實測；容量聲明須附負載條件（見 AGENTS.md）。
+- 效能數據可在遊戲設定開啟「顯示效能資訊」（FPS、CPU 時間、draw call、本機座標：場景 id 與場景內公尺座標）。目前量測都是桌面 Chromium，非手機實測；容量聲明須附負載條件（見 AGENTS.md）。
 - 修改同步或連線生命週期時，用 mock 伺服器驗證斷線重連與多人情境。
