@@ -20,6 +20,8 @@ function submit() {
 <template>
   <section class="entry" aria-labelledby="entry-title">
     <form class="card" @submit.prevent="submit">
+      <!-- 放在最上方：看不懂目前語言的玩家第一眼就找得到 -->
+      <LocaleSelect v-model="locale" compact class="lang" />
       <p class="eyebrow">{{ t('entry.eyebrow') }}</p>
       <h1 id="entry-title">{{ t('app.title') }}</h1>
       <p class="lead">{{ t('entry.lead') }}<br />{{ t('entry.headphones') }}</p>
@@ -39,8 +41,6 @@ function submit() {
       </button>
 
       <p class="hint">{{ t('entry.hintPointer') }}<br />{{ t('entry.hintKeys') }}</p>
-
-      <LocaleSelect v-model="locale" class="lang" />
     </form>
   </section>
 </template>
@@ -169,15 +169,18 @@ h1:is(:lang(en), :lang(vi)) {
 }
 
 .lang {
-  margin-top: 14px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
+  /* 疊進卡片上方的留白，不增加卡片高度 */
+  margin: -22px -14px -6px 0;
 }
 
 /* 橫向手機：壓縮間距，讓按鈕盡量不用捲動就看得到。 */
 @media (max-height: 480px) {
   .card {
     padding: 16px 24px 14px;
+  }
+
+  .lang {
+    margin-top: -10px;
   }
 
   h1 {
