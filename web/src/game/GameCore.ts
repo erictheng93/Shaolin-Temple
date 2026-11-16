@@ -2,8 +2,9 @@ import * as THREE from 'three'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
+import { frameCap, isLowBattery } from './core/frameCap'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
-import { QUALITY_PRESETS, resolveQuality, type QualityLevel, type Settings } from './core/settings'
+import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
 import type { GameEvents, GameplayApi } from './gameplay/types'
@@ -59,13 +60,15 @@ export interface GameCoreOptions {
   onToast(message: string): void
 }
 
+/** Battery Status API（Chromium 才有）的最小介面。 */
+interface BatteryManagerLike extends EventTarget {
+  charging: boolean
+  level: number
+}
+
 const MOVE_SPEED = 3.2
 const SFX_HEARING_RANGE = 28
 const UI_PUSH_MS = 250
-/** 平常就省電：這麼久沒有操作也沒有移動，就把幀率上限降到 IDLE_FPS；一有操作立即恢復。 */
-const IDLE_AFTER_MS = 15_000
-/** 20 FPS 對緩慢的環境動畫（落葉、樹冠、香煙）仍然順，繪製量是 60 FPS 的三分之一。 */
-const IDLE_FPS = 20
 /** 走向參拜點：離站位這麼近就算抵達（抵達後直接站到站位上並轉向）。 */
 const APPROACH_ARRIVE = 0.3
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
@@ -114,11 +117,13 @@ export class GameCore {
 
   private settings: Settings
   private quality: QualityLevel
+  /** 目前畫質對應的預設（自動畫質在慢速網路或資料節省時，貼圖與神像已降級）。 */
+  private preset: QualityPreset
   private raf = 0
   private lastTime = 0
   private lastRender = 0
   private startTime = performance.now()
-  private adaptive = new AdaptiveQuality()
+  private adaptive: AdaptiveQuality
   private lastInputAt = performance.now()
   private dirty = true
   private snapCamera = true
@@ -126,6 +131,8 @@ export class GameCore {
   private contextLost = false
   private wasMoving = false
   private disposed = false
+  private lowBattery = false
+  private battery: BatteryManagerLike | null = null
 
   private room: string | null = null
   private selfId: string | null = null
@@ -145,7 +152,10 @@ export class GameCore {
   constructor(private readonly opts: GameCoreOptions) {
     this.settings = opts.settings
     this.quality = resolveQuality(opts.settings.quality)
-    const preset = QUALITY_PRESETS[this.quality]
+    // 自動畫質且為觸控裝置：從等級 1 起步，開頭幾秒不致超出預算（順暢後會自動升回）。
+    this.adaptive = new AdaptiveQuality(opts.settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0)
+    const preset = this.assetPreset()
+    this.preset = preset
 
     this.renderer = new SceneRenderer(opts.canvas, preset, {
       onContextLost: () => {
@@ -177,6 +187,10 @@ export class GameCore {
     this.renderer.scene.add(this.marker)
 
     this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality))
+    // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
+    const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
+    this.renderer.setResolutionScale(startLevel.resolution)
+    this.players.nearRadius = startLevel.nearRadius
 
     this.input = new InputController(opts.canvas, {
       onTap: (x, y) => this.onTap(x, y),
@@ -195,6 +209,8 @@ export class GameCore {
         this.wake()
       },
     })
+
+    this.watchBattery()
 
     this.net = new NetworkClient({ url: opts.wsUrl, name: '' })
     this.net.events.on('status', () => this.pushUi(true))
@@ -231,6 +247,7 @@ export class GameCore {
    */
   performAction(id: string): void {
     const now = performance.now()
+    this.lastInputAt = now
     const local = this.players.local
     const def = this.actions.get(id)
     if (!def || def.hidden || this.fading) return
@@ -345,12 +362,18 @@ export class GameCore {
     return { zone: this.zone, x: local.x, z: local.z, selfId: this.selfId ?? 'local', others }
   }
 
+  /** 載入資產用的預設：只有自動畫質才依網路狀況降級，使用者明確選的畫質照選擇。 */
+  private assetPreset(): QualityPreset {
+    return effectivePreset(this.quality, this.settings.quality === 'auto' ? readNetworkInfo() : undefined)
+  }
+
   applySettings(settings: Settings): void {
     this.settings = settings
     const q = resolveQuality(settings.quality)
     if (q !== this.quality) {
       this.quality = q
-      this.renderer.setQuality(QUALITY_PRESETS[q])
+      this.preset = this.assetPreset()
+      this.renderer.setQuality(this.preset)
       this.players.maxVisible = this.maxVisibleFor(q)
     }
     this.audio.setVolumes(this.volumes())
@@ -362,6 +385,9 @@ export class GameCore {
     if (this.disposed) return
     this.disposed = true
     document.removeEventListener('visibilitychange', this.onVisibility)
+    this.battery?.removeEventListener('levelchange', this.onBattery)
+    this.battery?.removeEventListener('chargingchange', this.onBattery)
+    this.battery = null
     clearInterval(this.uiTimer)
     this.stopLoop()
     for (const off of this.uninstallers) off()
@@ -387,6 +413,31 @@ export class GameCore {
     if (!this.raf) this.raf = requestAnimationFrame(this.frame)
   }
 
+  /** 低電量時降低幀率上限；Safari／Firefox 沒有 getBattery，維持原樣。 */
+  private onBattery = (): void => {
+    const b = this.battery
+    if (!b) return
+    const low = isLowBattery(b.charging, b.level)
+    if (low === this.lowBattery) return
+    this.lowBattery = low
+    this.wake()
+  }
+
+  private watchBattery(): void {
+    const nav = navigator as Navigator & { getBattery?: () => Promise<BatteryManagerLike> }
+    if (typeof nav.getBattery !== 'function') return
+    nav
+      .getBattery()
+      .then((b) => {
+        if (this.disposed) return
+        this.battery = b
+        b.addEventListener('levelchange', this.onBattery)
+        b.addEventListener('chargingchange', this.onBattery)
+        this.onBattery()
+      })
+      .catch(() => {})
+  }
+
   private stopLoop(): void {
     if (this.raf) cancelAnimationFrame(this.raf)
     this.raf = 0
@@ -395,10 +446,10 @@ export class GameCore {
   private frame = (time: number): void => {
     this.raf = 0
     if (this.paused || this.contextLost) return
-    const preset = QUALITY_PRESETS[this.quality]
+    const preset = this.preset
 
     // 依目標幀率略過多餘的 rAF（高更新率螢幕上限制在 30/60 FPS）。
-    const fps = time - this.lastInputAt > IDLE_AFTER_MS ? Math.min(IDLE_FPS, preset.activeFps) : preset.activeFps
+    const fps = frameCap({ activeFps: preset.activeFps, idleMs: time - this.lastInputAt, lowBattery: this.lowBattery })
     const minInterval = 1000 / fps - 1
     if (!this.dirty && time - this.lastRender < minInterval) {
       this.raf = requestAnimationFrame(this.frame)
@@ -588,7 +639,7 @@ export class GameCore {
   /** 立即切換到指定場景與位置（無過場）。 */
   private applyZone(zone: ZoneId, pose: Pose): void {
     if (zone === 'hall' && !this.hall) {
-      this.hall = buildHallScene(this.renderer.renderer, this.tracker, QUALITY_PRESETS[this.quality], () => this.wake())
+      this.hall = buildHallScene(this.renderer.renderer, this.tracker, this.assetPreset(), () => this.wake())
       this.renderer.scene.add(this.hall.root)
     }
     if (zone !== this.zone) {
@@ -836,7 +887,7 @@ export class GameCore {
   }
 
   private maxVisibleFor(q: QualityLevel): number {
-    return q === 'medium' ? 60 : 120
+    return q === 'low' ? 40 : q === 'medium' ? 60 : 120
   }
 }
 
