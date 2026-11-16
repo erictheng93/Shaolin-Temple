@@ -35,6 +35,27 @@ const ROAM = {
   hall: { x: [-6, 6], z: [-2.5, 7.5] },
 }
 const pick = ([a, b]) => a + Math.random() * (b - a)
+// 聊天（與正式伺服器相同的規則）：清理（空白壓縮、移除控制與雙向覆寫字元、截到 80 字元）、突發 3 則每 2 秒補 1 則、全房廣播含發話者。
+// 這裡刻意不 import protocol.ts（它的相對匯入沒有副檔名，Node 直接載入會失敗），規則重寫一份，兩邊由測試與正式伺服器的固定資料對照。
+const CHAT_MAX_CHARS = 80
+const sanitizeChat = (text) =>
+  Array.from(String(text).replace(/\s+/gu, ' ').replace(/[\p{Cc}\p{Bidi_Control}]/gu, '').trim())
+    .slice(0, CHAT_MAX_CHARS)
+    .join('')
+    .trim()
+const takeChatToken = (p) => {
+  const t = now()
+  p.chatTokens = Math.min(3, (p.chatTokens ?? 3) + (t - (p.chatAt ?? t)) / 2000)
+  p.chatAt = t
+  if (p.chatTokens < 1) return false
+  p.chatTokens -= 1
+  return true
+}
+const broadcastChat = (from, raw) => {
+  const text = sanitizeChat(raw)
+  if (text) broadcast({ t: 'chat', id: from.id, text, at: now() })
+}
+const BOT_LINES = ['阿彌陀佛', '早安', '這裡好安靜', '鐘聲真好聽', '南無觀世音菩薩', '今天天氣真好', '來上炷香吧', '心靜自然涼']
 const NAMES = ['靜心', '晨鐘', '松風', '雲水', '明月', '竹影', '清泉', '山嵐']
 
 const wss = new WebSocketServer({ port: PORT, path: '/ws', maxPayload: 16 * 1024 })
@@ -92,7 +113,7 @@ for (let i = 0; i < BOTS; i++) {
     z: pick(ROAM[zone].z),
     heading: 0,
     zone,
-    bot: { tx: 0, tz: 0, wait: Math.random() * 3 },
+    bot: { tx: 0, tz: 0, wait: Math.random() * 3, chatIn: 5 + Math.random() * 40 },
   })
 }
 
@@ -101,6 +122,11 @@ setInterval(() => {
   for (const p of players.values()) {
     if (!p.bot) continue
     const b = p.bot
+    // 每 40～90 秒說一句（首句較早，方便測試）
+    if ((b.chatIn -= dt) <= 0) {
+      b.chatIn = 40 + Math.random() * 50
+      broadcastChat(p, BOT_LINES[Math.floor(Math.random() * BOT_LINES.length)])
+    }
     if (b.wait > 0) {
       b.wait -= dt
       if (b.wait <= 0) {
@@ -215,6 +241,9 @@ wss.on('connection', (ws) => {
         if (ack.ok) broadcastAction(me, m.id)
         break
       }
+      case 'chat':
+        if (typeof m.text === 'string' && m.text.length <= 512 && takeChatToken(me)) broadcastChat(me, m.text)
+        break
       case 'ping':
         send(ws, { t: 'pong', ts: m.ts, serverTime: now() })
         break

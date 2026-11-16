@@ -199,6 +199,12 @@ export class Players {
     root.rotation.y = this.local.mover.heading
   }
 
+  /** 在玩家頭上顯示對話泡泡；playerId 為 null 代表本機玩家，找不到的遠端玩家忽略。 */
+  say(playerId: string | null, text: string, until: number): void {
+    const avatar = playerId === null ? this.local.avatar : this.remotes.get(playerId)?.avatar
+    avatar?.say(text, until)
+  }
+
   /** 每幀更新。回傳是否仍有動態需要重繪。 */
   update(now: number, dt: number, t: number): boolean {
     let active = false
@@ -214,11 +220,13 @@ export class Players {
       r.avatar.root.rotation.y = r.heading
       this.anim.apply(r.avatar, r.anim, now, dt, t)
       if (this.anim.isActive(r.anim, now)) active = true
+      if (r.avatar.tickBubble(now)) active = true
     }
 
     this.syncLocalTransform()
     this.anim.apply(this.local.avatar, this.local.anim, now, dt, t)
     if (this.anim.isActive(this.local.anim, now)) active = true
+    if (this.local.avatar.tickBubble(now)) active = true
 
     this.cullTimer += dt
     if (this.cullTimer >= CULL_INTERVAL_S) {

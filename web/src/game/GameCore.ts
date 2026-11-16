@@ -10,7 +10,7 @@ import { gameplayModules } from './gameplay/modules'
 import type { GameEvents, GameplayApi } from './gameplay/types'
 import { InputController } from './input/InputController'
 import { NetworkClient, type ConnectionStatus } from './net/NetworkClient'
-import type { ServerMessage } from './net/protocol'
+import { sanitizeChat, type ServerMessage } from './net/protocol'
 import { BellStriker } from './render/BellStriker'
 import { ResourceTracker } from './render/ResourceTracker'
 import { buildHallScene, type HallScene } from './render/HallScene'
@@ -34,6 +34,26 @@ export interface UiAction {
   unavailable?: string
 }
 
+/** 聊天紀錄的一則（收到伺服器廣播當下建立，name 在當下解析）。 */
+export interface ChatEntry {
+  /** 本機流水號，給列表 key。 */
+  seq: number
+  id: string
+  name: string
+  text: string
+  /** 伺服器 Unix 毫秒。 */
+  at: number
+  /** 收到的時間（performance.now 毫秒），UI 用來淡出舊訊息。 */
+  seen: number
+  self: boolean
+}
+
+/** sendChat 的結果；empty 與 sent 之外都由 UI 提示。 */
+export type ChatSendResult = 'sent' | 'empty' | 'rate' | 'offline'
+
+const CHAT_LOG_MAX = 30
+const CHAT_BUBBLE_MS = 6000
+
 /** 給 Vue 的低頻狀態摘要。遊戲核心只在內容改變時推送。 */
 export interface UiState {
   status: ConnectionStatus
@@ -48,6 +68,7 @@ export interface UiState {
   fading: boolean
   zone: ZoneId
   actions: UiAction[]
+  chat: ChatEntry[]
   stats: Array<{ key: string; label: string; value: string | number }>
   perf: { fps: number; frameMs: number; calls: number; triangles: number; rttMs: number | null }
 }
@@ -138,6 +159,9 @@ export class GameCore {
   private selfId: string | null = null
   /** 自己的房內短編號；sync 中出現它代表伺服器校正了自己的位置。 */
   private selfN = -1
+  private selfName = '訪客'
+  private chatLog: ChatEntry[] = []
+  private chatSeq = 0
   private serverOffset = 0
   private rtt: number | null = null
   private stats = new Map<string, { label: string; value: string | number }>()
@@ -228,12 +252,26 @@ export class GameCore {
   /** 進入遊戲：必須在使用者點擊事件中呼叫，才能啟用音訊。 */
   async enter(playerName: string): Promise<void> {
     this.net.setName(playerName)
+    this.selfName = playerName || '訪客'
     await this.audio.unlock()
     this.audio.startAmbient()
     this.net.connect()
     this.snapCamera = true
     this.wake()
     this.pushUi(true)
+  }
+
+  /**
+   * 送出聊天。連線時由伺服器回音顯示（不先顯示，避免重複）；離線模式（沒有 VITE_WS_URL）本機直接回音。
+   * 斷線時直接丟棄，回傳 'offline' 讓 UI 提示。
+   */
+  sendChat(text: string): ChatSendResult {
+    const res = this.net.sendChat(text)
+    if (res === 'offline' && !this.net.enabled) {
+      this.onChat({ t: 'chat', id: this.selfId ?? 'local', text: sanitizeChat(text), at: Date.now() })
+      return 'sent'
+    }
+    return res
   }
 
   /** 開始渲染場景（進場前就先顯示背景畫面）。 */
@@ -769,6 +807,9 @@ export class GameCore {
       case 'zone':
         if (m.id !== this.selfId) this.players.setRemoteZone(m.id, m.zone, m.x, m.z, m.heading, performance.now())
         break
+      case 'chat':
+        this.onChat(m)
+        break
       case 'pong':
         this.serverOffset = m.serverTime - performance.now()
         break
@@ -778,6 +819,15 @@ export class GameCore {
     }
     if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave') this.pushUi(true)
     this.wake()
+  }
+
+  private onChat(m: Extract<ServerMessage, { t: 'chat' }>): void {
+    const self = m.id === (this.selfId ?? 'local')
+    const now = performance.now()
+    const name = self ? this.selfName : (this.players.remotes.get(m.id)?.name ?? '訪客')
+    this.chatLog = [...this.chatLog, { seq: ++this.chatSeq, id: m.id, name, text: m.text, at: m.at, seen: now, self }].slice(-CHAT_LOG_MAX)
+    this.players.say(self ? null : m.id, m.text, now + CHAT_BUBBLE_MS)
+    this.pushUi(true)
   }
 
   private onRemoteAction(m: Extract<ServerMessage, { t: 'action' }>): void {
@@ -873,6 +923,7 @@ export class GameCore {
           ...(unavailable ? { unavailable } : {}),
         }
       }),
+      chat: this.chatLog,
       stats: [...this.stats].map(([key, s]) => ({ key, ...s })),
       // 迴圈停止時不再計幀，顯示 0 而非最後一次的數值。
       perf: { fps: performance.now() - this.lastRender > 1500 ? 0 : this.fps, frameMs: this.frameMs, calls: r.calls, triangles: r.triangles, rttMs: this.rtt },
