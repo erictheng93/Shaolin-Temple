@@ -17,7 +17,6 @@ import { buildStatue, createStatueKit, createStatueLoaders, loadStatueModel, typ
 
 export interface HallScene {
   root: THREE.Group
-  walkSurface: THREE.Object3D
   /** 三尊神像的插槽：先放程序化造型，寫實模型下載完成後替換。 */
   statueSlots: Record<StatueId, THREE.Group>
   /** 寫實模型與門外景貼圖全部載入（或失敗）後 resolve；失敗的那尊維持程序化造型。 */
@@ -337,7 +336,7 @@ export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceT
   instanced(cushionGeo, m.cushion, HALL_CUSHIONS.map((c) => ({ pos: [c.x, 0, c.z], scale: [CUSHION_RADIUS, 0.15, CUSHION_RADIUS] })))
 
   // 靜態物件依材質合併以減少 draw call。神像各自合併、不跨插槽，才能單獨換成寫實模型；
-  // 地板（點擊射線目標）不合併。
+  // 地板不合併。
   for (const slot of Object.values(statueSlots)) for (const statue of slot.children) mergeStatic(statue, tracker)
   mergeStatic(root, tracker, (o) => o === floor || o.name.startsWith('slot:') || o.name.startsWith('doorway-'))
 
@@ -380,7 +379,6 @@ export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceT
 
   return {
     root,
-    walkSurface: floor,
     statueSlots,
     statuesReady,
     dispose() {
