@@ -2,19 +2,21 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatEntry, ChatSendResult } from '../game/GameCore'
 import { CHAT_MAX_CHARS } from '../game/net/protocol'
+import { t, type MessageKey } from '../i18n'
 
 const props = defineProps<{ chat: ChatEntry[]; send: (text: string) => ChatSendResult }>()
 
 const RECENT_COUNT = 5
 const FADE_MS = 12_000
-const HINTS: Record<Exclude<ChatSendResult, 'sent' | 'empty'>, string> = {
-  rate: '說得太快了，請稍候',
-  offline: '尚未連線，訊息未送出',
+const HINTS: Record<Exclude<ChatSendResult, 'sent' | 'empty'>, MessageKey> = {
+  rate: 'chat.rate',
+  offline: 'chat.offline',
 }
 
 const open = ref(false)
 const text = ref('')
-const hint = ref('')
+/** 送出失敗的提示（存 key，顯示時才翻譯，提示期間切換語言也會跟著換）。 */
+const hint = ref<MessageKey | null>(null)
 const input = ref<HTMLInputElement | null>(null)
 const logEl = ref<HTMLElement | null>(null)
 const now = ref(performance.now())
@@ -45,10 +47,10 @@ watch(
   },
 )
 
-function showHint(msg: string) {
-  hint.value = msg
+function showHint(key: MessageKey) {
+  hint.value = key
   if (hintTimer) clearTimeout(hintTimer)
-  hintTimer = setTimeout(() => (hint.value = ''), 2500)
+  hintTimer = setTimeout(() => (hint.value = null), 2500)
 }
 
 async function openInput() {
@@ -61,7 +63,7 @@ async function openInput() {
 
 function closeInput() {
   open.value = false
-  hint.value = ''
+  hint.value = null
   input.value?.blur()
 }
 
@@ -69,7 +71,7 @@ function submit() {
   const res = props.send(text.value)
   if (res === 'sent') {
     text.value = ''
-    hint.value = ''
+    hint.value = null
   } else if (res !== 'empty') {
     showHint(HINTS[res])
   }
@@ -107,10 +109,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="chat" :style="{ '--vv-top': vvTop + 'px' }" aria-label="聊天">
+  <section class="chat" :style="{ '--vv-top': vvTop + 'px' }" :aria-label="t('chat.label')">
     <ul v-if="shown.length" ref="logEl" class="log" :class="{ scroll: open }" aria-live="polite">
       <li v-for="c in shown" :key="c.seq" :class="{ self: c.self, faded: faded(c) }">
-        <span class="who">{{ c.name }}：</span><span class="msg">{{ c.text }}</span>
+        <span class="who">{{ t('chat.who', { name: c.name }) }}</span><span class="msg">{{ c.text }}</span>
       </li>
     </ul>
 
@@ -120,21 +122,21 @@ onBeforeUnmount(() => {
         v-model="text"
         type="text"
         :maxlength="CHAT_MAX_CHARS"
-        placeholder="說點什麼…"
-        aria-label="聊天訊息"
+        :placeholder="t('chat.placeholder')"
+        :aria-label="t('chat.inputLabel')"
         enterkeyhint="send"
         autocomplete="off"
         autocapitalize="off"
         spellcheck="false"
       />
-      <button type="submit" class="send">送出</button>
-      <button type="button" class="close" aria-label="關閉聊天輸入" @click="closeInput">✕</button>
+      <button type="submit" class="send">{{ t('chat.send') }}</button>
+      <button type="button" class="close" :aria-label="t('chat.close')" @click="closeInput">✕</button>
     </form>
-    <p v-if="open && hint" class="hint" role="status">{{ hint }}</p>
+    <p v-if="open && hint" class="hint" role="status">{{ t(hint) }}</p>
   </section>
 
-  <button v-if="!open" type="button" class="talk" aria-label="說話" @click="openInput">
-    <span aria-hidden="true">💬</span><span class="talk-label">說話</span>
+  <button v-if="!open" type="button" class="talk" :aria-label="t('chat.talk')" @click="openInput">
+    <span aria-hidden="true">💬</span><span class="talk-label">{{ t('chat.talk') }}</span>
   </button>
 </template>
 

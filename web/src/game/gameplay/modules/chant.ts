@@ -1,6 +1,7 @@
 import { smooth, type ClipFn } from '../../anim/AnimationSystem'
 import { FACE_SMILE, PIVOT_HEIGHT, PROP_CHANT } from '../../render/AvatarFactory'
 import { pickChantCushion } from '../../world/worship'
+import { t } from '../../../i18n'
 import type { GameplayApi } from '../types'
 
 /**
@@ -198,20 +199,20 @@ export function installChant(api: GameplayApi, onConfirmed: () => void): () => v
     api.animations.registerClip('chantEnd', chantEndClip),
     api.actions.register({
       id: 'chant',
-      label: '誦經',
+      label: 'action.chant',
       glyph: '經',
       cooldownMs: CHANT_COOLDOWN_MS,
       animation: 'chant',
       durationMs: CHANT_MS,
       locksMovement: true,
       endAction: 'chant_end',
-      unavailableReason: (zone) => (zone === 'hall' ? null : '誦經要在殿內的蒲團上進行，請先進殿'),
+      unavailableReason: (zone) => (zone === 'hall' ? null : t('reason.chantInHall')),
       approach: pickChantCushion,
       onConfirmed,
     }),
     api.actions.register({
       id: 'chant_end',
-      label: '起身',
+      label: 'action.chantEnd',
       cooldownMs: 0,
       animation: 'chantEnd',
       durationMs: CHANT_END_MS,

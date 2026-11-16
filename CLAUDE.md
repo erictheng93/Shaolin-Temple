@@ -50,6 +50,14 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - **場地與場景**：`world/zones.ts` 定義庭院與殿內兩個場景（可走範圍、障礙物、出生點、出入口、鏡頭範圍），庭院的細節在 `world/layout.ts`。場景建構、碰撞、尋路（`world/pathfind.ts`）都讀這份資料，改場地要一致；`zones.test.ts` 檢查落點不會卡進障礙物或來回瞬移。殿內場景在 `render/HallScene.ts`，第一次進殿才建立；靜態物件以 `render/mergeStatic.ts` 依材質合併。殿門（`render/hallDoorway.ts`）：推開貼牆的格扇門與門框用殿內既有材質；門外的庭院景色是 `render/doorwayView.ts` 的相機投影（離線擷取的全景圖貼在門外的代理幾何上；貼圖兩層：地面與半球取拿掉香爐與石燈籠的底圖，它們的直立片取只有物件本身不透明的那層，否則鏡頭一動會看到兩個香爐），**改了庭院的樣子、太陽方向或 `DOORWAY_VIEW` 要重跑 `npm run capture:doorway` 並把 `DOORWAY_VIEW_VERSION` 加一**。庭院的主殿正面（`TempleScene` 的 `buildHallFront`）共用同一套門框、門扇與格心造型，等比縮小（`HALL_FACADE.scale`）、門扇推開 90°，兩側是同一張格心貼圖的格扇窗；門洞後面是殿內景（同樣的相機投影：殿身裡的代理房間、離線擷取的殿內畫面，不參與烘焙），**改了殿內的樣子或神像要重拍並把 `INTERIOR_VIEW_VERSION` 加一**。蒲團陣列（`HALL_CUSHIONS`，24 個）與香爐（`CENSERS`：殿內三個由 `HALL_STATUES` 導出、加庭院大香爐，各有上香站位）定義在 `zones.ts`，挑選空位的邏輯在 `world/worship.ts`。
 - **神像**：三尊是第三方的寫實模型（來源、授權與署名見 docs/ASSETS.md，需署名的兩件列在設定面板的「素材來源」），由 `scripts/process-statues.py` 在 Blender 減面並重新烘焙底色與法線，成品在 `web/public/statues/`：每尊兩個層級（`std` 約 1.5 萬三角形＋1024 貼圖給標準畫質，`hi` 約 4 萬＋2048 給高畫質，依畫質預設的 `statueTier`），幾何是不含材質的 Draco glb（解碼器是 three 附的副本，在 `web/public/draco/`，`draco.test.ts` 檢查），貼圖是 KTX2。第一次進殿建立 `HallScene` 時才下載；到齊前與失敗時插槽顯示 `render/statues.ts` 的程序化造型（佛、觀音；媽祖沒有程序化造型，以紅布覆蓋的神座佔位）。高度在 `STATUE_HEIGHT`，殿內亮度以 `STATUE_LOOK` 的底色倍率調整。**重新處理模型後要改 `STATUE_ASSET_VERSION`**（網址帶版本）。神像是宗教聖像：處理時不可改變造型（臉色、持物、手印）。方位依傳統以神明為主體：觀音在主佛左手邊（+x，龍邊），媽祖在右手邊（-x，虎邊）；程式中的鍵是 `buddha`、`guanyin`、`mazu`，殿內香爐 id 由此導出（`hall:<鍵>`）。
 
+### 多語系
+
+- 介面語言：繁體中文（`zh-Hant`，來源）、`en`、`ja`、`vi`，不用 i18n 套件（理由見 docs/TECH_STACK.md「介面多語系」）。字典在 `web/src/i18n/`：`zh-Hant.ts` 的 key 是唯一來源（`MessageKey`），其他語言型別為 `Record<MessageKey, string>`，缺 key 時 typecheck 失敗；`t(key, { name })` 代換 `{name}`；語言是 `Settings.locale`，`App.vue` 的 settings watch 呼叫 `setLocale()`（同時改 `<html lang>` 與分頁標題）再 `core.applySettings()`。
+- 新增字串：在 `zh-Hant.ts` 加 key，補齊 en／ja／vi（`i18n.test.ts` 檢查佔位符一致、沒有空字串、en／vi 沒有漢字假名）。複數用不需要變化的句型（如 "In the temple: 3"）。
+- 新增語言：加一份字典、登記在 `i18n/index.ts` 的 `LOCALES`（自稱、CC deed 代碼）與 `DICTS`、`detectLocale()` 補規則、必要時在 `style.css` 以 `:lang()` 加字型堆疊。
+- **遊戲核心的字串在顯示當下解析**：動作定義的 `label`、`setStat()` 的標籤、`ZoneDef.name`、衣裝（`world/outfits.ts` 的 `OUTFITS`）的 `label` 存字典 key，由 `GameCore.pushUi()` 或 UI 元件以 `t()` 解析；`unavailableReason()`／`approach()` 回傳的原因在呼叫當下以 `t()` 取得，不要在定義時先算好字串。伺服器 `error` 依 `code` 對照翻譯（`SERVER_ERRORS`），不顯示伺服器的英文 `message`。toast 以發出當下的語言為準。
+- 刻意不翻譯：玩家名稱與聊天內容、場景匾額書法（寺名、殿內匾額）、動作按鈕的單字 `glyph`（「香」「經」，當印章式圖示）、`console.*` 與 `throw new Error` 的開發者訊息、程式註解、素材來源的原作品標題、`index.html` 的靜態預設（繁中，執行時由 `setLocale` 改寫標題與 lang）。
+
 ### 網路協定
 
 - `src/game/net/protocol.ts` 是前後端協定的定義來源（版本 3）。下行的 `moves`／`sync`／`action` 是 WebSocket 二進位幀（`net/binaryFrame.ts`，位元組配置見 docs/BACKEND_TASKS.md T8），其餘訊息與所有上行（含帶 `reqId` 的 `action` 與 `ack`）都是 JSON。編碼集中在 `encode()`／`decode()`；`decode()` 依收到字串或 `ArrayBuffer` 分流並負責驗證，新增伺服器訊息時同步擴充型別與驗證。改協定時前端、mock 伺服器與後端在同一個 PR 修改，共用固定資料 `server/tests/protocol-v3.json`（含二進位測試向量，由 `server/tests/protocol-v3-vectors.py` 獨立產生）兩邊的測試都要讀。版本不符時伺服器回 `unsupported_version`。
@@ -87,5 +95,5 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 ## 驗證注意
 
 - 前端變更：`npm run typecheck`、`npm test`、`npm run build`；涉及畫面或互動時以 `npm run dev`（多人加 `npm run mock`）在瀏覽器實際確認。
-- 效能數據可在遊戲設定開啟「顯示效能資訊」（FPS、CPU 時間、draw call）。目前量測都是桌面 Chromium，非手機實測；容量聲明須附負載條件（見 AGENTS.md）。
+- 效能數據可在遊戲設定開啟「顯示效能資訊」（FPS、CPU 時間、draw call、本機座標：場景 id 與場景內公尺座標）。目前量測都是桌面 Chromium，非手機實測；容量聲明須附負載條件（見 AGENTS.md）。
 - 修改同步或連線生命週期時，用 mock 伺服器驗證斷線重連與多人情境。

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { OUTFITS, type Outfit } from '../game/world/outfits'
+import { t } from '../i18n'
 
 // 衣裝選擇：點了立即生效（由父層呼叫 GameCore.setOutfit）。設定面板與進場畫面共用。
 defineProps<{ modelValue: number }>()
@@ -17,7 +18,7 @@ function swatchStyle(o: Outfit): Record<string, string> {
 </script>
 
 <template>
-  <div class="outfits" role="group" aria-label="衣裝">
+  <div class="outfits" role="group" :aria-label="t('outfit.label')">
     <button
       v-for="(o, i) in OUTFITS"
       :key="o.key"
@@ -27,7 +28,7 @@ function swatchStyle(o: Outfit): Record<string, string> {
       @click="emit('update:modelValue', i)"
     >
       <span class="swatch" :class="{ beads: !!o.beads }" :style="swatchStyle(o)" aria-hidden="true" />
-      <span class="name">{{ o.label }}</span>
+      <span class="name">{{ t(o.label) }}</span>
     </button>
   </div>
 </template>
@@ -88,7 +89,8 @@ function swatchStyle(o: Outfit): Record<string, string> {
   font-size: 0.8rem;
   line-height: 1.3;
   text-align: center;
-  overflow-wrap: anywhere;
+  /* 只在單字本身放不下時才斷字（anywhere 會把英文、越南文從字中間斷開；中日文本來就能逐字換行） */
+  overflow-wrap: break-word;
 }
 
 .outfit[aria-pressed='true'] .name {

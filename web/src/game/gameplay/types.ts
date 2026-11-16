@@ -1,6 +1,7 @@
 import type { AnimationSystem } from '../anim/AnimationSystem'
 import type { AudioManager } from '../audio/AudioManager'
 import type { Emitter } from '../core/Emitter'
+import type { MessageKey } from '../../i18n'
 import type { ActionRegistry } from './ActionRegistry'
 
 export interface GameEvents extends Record<string, unknown> {
@@ -22,8 +23,8 @@ export interface GameplayApi {
   animations: Pick<AnimationSystem, 'registerClip'>
   audio: Pick<AudioManager, 'loadSfx' | 'defineSfx' | 'play'>
   events: Pick<Emitter<GameEvents>, 'on'>
-  /** 在 HUD 顯示或更新一項數值；value 為 null 時移除。 */
-  setStat(key: string, label: string, value: string | number | null): void
+  /** 在 HUD 顯示或更新一項數值；label 是字典 key（顯示當下才翻譯）；value 為 null 時移除。 */
+  setStat(key: string, label: MessageKey, value: string | number | null): void
   /**
    * 觸發場景中的互動物件效果：庭院的鐘擺動；撞木依 startedAt（performance.now 毫秒）開始的撞鐘時間軸擺動
    * （world/bell.ts 的 strikerAngle，撞到鐘的時刻由呼叫端另外呼叫 swingBell）；在香爐（CENSERS 的 id）插一支香。
