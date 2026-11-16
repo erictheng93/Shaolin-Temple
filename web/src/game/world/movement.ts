@@ -4,12 +4,12 @@ export interface MoverState {
   x: number
   z: number
   heading: number
-  /** 點擊移動的目標點；null 表示沒有目標。 */
+  /** 尋路的目標點；null 表示沒有目標。 */
   target: { x: number; z: number } | null
 }
 
 export interface MoveInput {
-  /** 鍵盤／搖桿方向（世界座標，可不正規化）。非零時優先於點擊目標。 */
+  /** 鍵盤／搖桿方向（世界座標）。長度 <= 1 時速度乘上長度，> 1 時以全速移動。非零時優先於尋路目標。 */
   dirX: number
   dirZ: number
 }
@@ -43,7 +43,7 @@ export function resolveCollisions(x: number, z: number, cfg: MoveConfig): { x: n
 
 /**
  * 推進一步，直接修改 state。回傳本步是否有移動。
- * ponytail: 障礙物推出為逐軸處理，不做尋路；點擊到障礙物後方時角色會沿邊緣停下。需要繞路時再加 A* 或導航網格。
+ * ponytail: 障礙物推出為逐軸處理，不做尋路；目標在障礙物後方時角色會沿邊緣停下。需要繞路時再加 A* 或導航網格。
  */
 export function stepMover(state: MoverState, input: MoveInput, dt: number, cfg: MoveConfig): boolean {
   let dx = input.dirX
@@ -64,7 +64,9 @@ export function stepMover(state: MoverState, input: MoveInput, dt: number, cfg: 
     return false
   }
 
-  const step = Math.min(cfg.speed * dt, usingKeys ? Infinity : len)
+  // 方向輸入長度 <= 1（搖桿半推）時按比例減速，> 1（鍵盤對角）時正規化為全速；尋路目標一律全速。
+  const scale = usingKeys ? Math.min(1, len) : 1
+  const step = Math.min(cfg.speed * scale * dt, usingKeys ? Infinity : len)
   const nx = state.x + (dx / len) * step
   const nz = state.z + (dz / len) * step
   const p = resolveCollisions(nx, nz, cfg)
@@ -73,7 +75,7 @@ export function stepMover(state: MoverState, input: MoveInput, dt: number, cfg: 
   state.z = p.z
   state.heading = Math.atan2(dx, dz)
 
-  // 被障礙物擋住（幾乎沒前進）時放棄點擊目標，避免角色原地抖動。
+  // 被障礙物擋住（幾乎沒前進）時放棄尋路目標，避免角色原地抖動。
   if (!usingKeys && moved < step * 0.1) state.target = null
   return moved > 1e-6
 }

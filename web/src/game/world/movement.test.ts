@@ -19,11 +19,21 @@ describe('stepMover', () => {
     expect(s.target).toBeNull()
   })
 
-  it('鍵盤輸入取消點擊目標，斜向不會更快', () => {
+  it('方向輸入取消尋路目標，斜向不會更快', () => {
     const s = mover(5, 5, { x: 0, z: 0 })
     stepMover(s, { dirX: 1, dirZ: 1 }, 0.5, cfg)
     expect(s.target).toBeNull()
     expect(Math.hypot(s.x - 5, s.z - 5)).toBeCloseTo(1)
+  })
+
+  it('搖桿半推為半速，鍵盤對角為全速', () => {
+    const half = mover(5, 5)
+    stepMover(half, { dirX: 0.5, dirZ: 0 }, 1, cfg)
+    expect(half.x - 5).toBeCloseTo(1)
+    const diag = mover(5, 5)
+    stepMover(diag, { dirX: 1, dirZ: 1 }, 1, cfg)
+    expect(Math.hypot(diag.x - 5, diag.z - 5)).toBeCloseTo(2)
+    expect(stepMover(mover(5, 5), { dirX: 0, dirZ: 0 }, 1, cfg)).toBe(false)
   })
 
   it('受邊界限制，撞牆時放棄目標', () => {

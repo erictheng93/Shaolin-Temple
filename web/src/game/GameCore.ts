@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
@@ -21,7 +20,7 @@ import { resolveCollisions, stepMover, type MoveConfig } from './world/movement'
 import { findPath, type Point } from './world/pathfind'
 import { Players } from './world/Players'
 import type { SpotContext } from './world/worship'
-import { CENSERS, ZONES, entryCamera, isZoneId, portalApproach, portalAt, portalForTap, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
+import { CENSERS, ZONES, entryCamera, isZoneId, portalAt, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
 
 export interface UiAction {
   id: string
@@ -113,9 +112,9 @@ export class GameCore {
   private inPortal = false
   /** 離開各場景前的鏡頭，回來時還原（只用於 restoreCamera 的場景）。 */
   private savedCamera: Partial<Record<ZoneId, CameraPose>> = {}
-  /** 點擊移動尚未走到的轉折點（目前目標在 mover.target）。 */
+  /** 尋路尚未走到的轉折點（目前目標在 mover.target）。 */
   private path: Point[] = []
-  /** 正在走向定點、抵達後才開始的動作（approach）。玩家自己移動、點擊或切換場景時取消。 */
+  /** 正在走向定點、抵達後才開始的動作（approach）。玩家自己移動或切換場景時取消。 */
   private pending: { id: string; pose: Pose } | null = null
   /** 本機正在進行、鎖定移動的動作 id（鎖定結束後不一定清除，以 lockedUntil 為準）；用來判斷能不能提前結束（endAction）。 */
   private lockedAction: string | null = null
@@ -132,9 +131,9 @@ export class GameCore {
   private actions = new ActionRegistry()
   private uninstallers: Array<() => void> = []
   private moveCfg: MoveConfig = moveConfigFor('courtyard')
-  private raycaster = new THREE.Raycaster()
-  private marker: THREE.Mesh
-  private markerUntil = 0
+  /** 虛擬搖桿的類比向量（螢幕座標：x 右、y 下，長度 0～1）；非零時優先於鍵盤。 */
+  private stickX = 0
+  private stickY = 0
 
   private settings: Settings
   private quality: QualityLevel
@@ -200,16 +199,6 @@ export class GameCore {
     this.incense = new IncenseSystem(this.renderer.scene, this.tracker, CENSERS)
     this.striker = new BellStriker(this.renderer.scene, this.tracker)
 
-    const markerGeo = this.tracker.track(new THREE.RingGeometry(0.28, 0.4, 24))
-    markerGeo.rotateX(-Math.PI / 2)
-    const markerMat = this.tracker.trackMaterial(
-      new THREE.MeshBasicMaterial({ color: '#fff6e0', transparent: true, opacity: 0, depthWrite: false }),
-    )
-    this.marker = new THREE.Mesh(markerGeo, markerMat)
-    this.marker.position.y = 0.08
-    this.marker.visible = false
-    this.renderer.scene.add(this.marker)
-
     this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality))
     // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
     const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
@@ -217,7 +206,6 @@ export class GameCore {
     this.players.nearRadius = startLevel.nearRadius
 
     this.input = new InputController(opts.canvas, {
-      onTap: (x, y) => this.onTap(x, y),
       onRotate: (dx, dy) => {
         this.renderer.rotate(-dx * 0.006, dy * 0.004)
         this.wake()
@@ -329,7 +317,6 @@ export class GameCore {
       // 站到站位上、面向神龕或香爐；位置與面向一起送出（排在動作之前）
       Object.assign(local.mover, { x: pose.x, z: pose.z, heading: pose.heading, target: null })
       this.path = []
-      this.marker.visible = false
       this.net.sendPosition(pose.x, pose.z, pose.heading, false)
     }
     if (def.locksMovement) {
@@ -375,16 +362,13 @@ export class GameCore {
     return running
   }
 
-  /** 以尋路走向某點並顯示目標標記（直到抵達）。找不到路時回傳 false。 */
+  /** 以尋路走向某點（動作的 approach 用）。找不到路時回傳 false。 */
   private walkTo(p: Point): boolean {
     const local = this.players.local
     const path = findPath({ x: local.mover.x, z: local.mover.z }, p, this.moveCfg)
     if (!path) return false
     local.mover.target = path.shift() ?? null
     this.path = path
-    this.marker.position.set(p.x, 0.08, p.z)
-    this.marker.visible = true
-    this.markerUntil = performance.now() + 60_000
     this.wake()
     return true
   }
@@ -526,13 +510,13 @@ export class GameCore {
 
     // 可提前結束的動作（誦經）進行中按方向鍵：起身，接著照常移動
     if (now < local.lockedUntil) {
-      const k = this.input.keyDirection
+      const k = this.moveInput()
       if (k.x !== 0 || k.y !== 0) this.interruptLocal()
     }
     if (now >= local.lockedUntil) {
-      const k = this.input.keyDirection
+      const k = this.moveInput()
       if (k.x !== 0 || k.y !== 0) {
-        // 鍵盤操作取消點擊路徑與正在走向定點的動作
+        // 鍵盤／搖桿操作取消尋路路徑與正在走向定點的動作
         this.path = []
         this.pending = null
       }
@@ -585,23 +569,9 @@ export class GameCore {
     const cameraMoving = this.renderer.follow(local.mover.x, local.mover.z, dt, this.snapCamera, 1.1 + lookUp * 1.6)
     this.snapCamera = false
 
-    let markerActive = false
-    if (this.marker.visible) {
-      const left = this.markerUntil - now
-      const mat = this.marker.material as THREE.MeshBasicMaterial
-      if (left <= 0 || !local.mover.target) {
-        this.marker.visible = false
-      } else {
-        mat.opacity = Math.min(1, left / 400) * 0.8
-        const s = 1 + Math.sin(t * 6) * 0.08
-        this.marker.scale.set(s, 1, s)
-        markerActive = true
-      }
-    }
-
     const sceneMotion = this.zone === 'courtyard' && (this.temple.hasTransientMotion() || striking)
     if (moving || wantsMove) this.lastInputAt = now
-    return moving || wantsMove || playersActive || cameraMoving || markerActive || sceneMotion
+    return moving || wantsMove || playersActive || cameraMoving || sceneMotion
   }
 
   private countFrame(cpuMs: number, time: number): void {
@@ -626,27 +596,17 @@ export class GameCore {
 
   // ---------- 輸入 ----------
 
-  private onTap(ndcX: number, ndcY: number): void {
-    const local = this.players.local
-    // 鎖定中只有可提前結束的動作（誦經）能被點擊打斷：起身並走向點擊處
-    if (performance.now() < local.lockedUntil && !this.interruptLocal()) return
-    this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.renderer.camera)
-    const surface = this.zone === 'hall' && this.hall ? this.hall.walkSurface : this.temple.walkSurface
-    const hit = this.raycaster.intersectObject(surface, false)[0]
-    if (!hit) return
-    // 點到主殿建築時走向殿門，而不是被推到建築最近的邊緣。
-    const tapPortal = portalForTap(this.zone, hit.point.x, hit.point.z)
-    const want = tapPortal ? portalApproach(tapPortal) : { x: hit.point.x, z: hit.point.z }
-    const p = resolveCollisions(want.x, want.z, this.moveCfg)
-    const path = findPath({ x: local.mover.x, z: local.mover.z }, p, this.moveCfg)
-    if (!path) return
-    this.pending = null
-    local.mover.target = path.shift() ?? null
-    this.path = path
-    this.marker.position.set(p.x, 0.08, p.z)
-    this.marker.visible = true
-    this.markerUntil = performance.now() + 1600
+  /** 虛擬搖桿輸入（螢幕座標，長度 0～1）。高頻呼叫，只存值並喚醒迴圈。 */
+  setMoveStick(x: number, y: number): void {
+    if (x === this.stickX && y === this.stickY) return
+    this.stickX = x
+    this.stickY = y
     this.wake()
+  }
+
+  /** 目前的移動方向輸入：搖桿非零時優先於鍵盤。 */
+  private moveInput(): { x: number; y: number } {
+    return this.stickX !== 0 || this.stickY !== 0 ? { x: this.stickX, y: this.stickY } : this.input.keyDirection
   }
 
   // ---------- 場景切換 ----------
@@ -661,6 +621,7 @@ export class GameCore {
     this.lockedAction = null
     local.lockedUntil = performance.now() + FADE_MS * 2 + FADE_HOLD_MS
     this.input.clearKeys()
+    this.stickX = this.stickY = 0
     this.pushUi(true)
     setTimeout(() => {
       if (this.disposed) return
@@ -707,7 +668,6 @@ export class GameCore {
     this.incense.setZone(zone)
     this.striker.visible = zone === 'courtyard'
     this.inPortal = portalAt(zone, pos.x, pos.z) !== null
-    this.marker.visible = false
     this.audio.setIndoor(zone === 'hall')
     this.snapCamera = true
     this.wake()
@@ -720,7 +680,6 @@ export class GameCore {
     Object.assign(this.players.local.mover, { ...pos, target: null })
     this.path = []
     this.pending = null
-    this.marker.visible = false
     this.snapCamera = true
     this.wake()
   }
