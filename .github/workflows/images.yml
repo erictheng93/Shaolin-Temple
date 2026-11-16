@@ -1,0 +1,98 @@
+# 正式部署用的映像：在 CI 建好推到 GHCR，Dokploy 主機只拉取不編譯（見 docs/DEPLOY.md）。
+# 先跑與 server.yml／web.yml 相同的檢查，全部通過才建置並推送。
+name: images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: web
+      - run: npm test -- --run src/game/net/protocol-fixtures.test.ts
+        working-directory: web
+
+  check-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx vite build
+
+  push:
+    needs: [check-server, check-web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VITE_WS_URL: ${{ vars.VITE_WS_URL }}
+    steps:
+      - name: 確認 VITE_WS_URL 已設定
+        run: |
+          if [ -z "$VITE_WS_URL" ]; then
+            echo "::error::未設定儲存庫變數 VITE_WS_URL（Settings → Secrets and variables → Actions → Variables），例如 wss://game.example.com/ws"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      # GHCR 的映像名稱須為小寫
+      - name: 映像名稱
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: server
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER }}/temple-server:${{ github.sha }}
+            ghcr.io/${{ env.OWNER }}/temple-server:main
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: web
+          push: true
+          build-args: |
+            VITE_WS_URL=${{ env.VITE_WS_URL }}
+          tags: |
+            ghcr.io/${{ env.OWNER }}/temple-web:${{ github.sha }}
+            ghcr.io/${{ env.OWNER }}/temple-web:main
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max

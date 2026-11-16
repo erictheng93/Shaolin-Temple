@@ -1,11 +1,12 @@
 # Dokploy 的 Docker Compose 服務（Compose Path：./deploy/docker-compose.yml）。
 # 不寫 Traefik 標籤：網域在 Dokploy 的 Domains 分頁設定，部署時由 Dokploy 產生標籤與網路。
 # 步驟見 docs/DEPLOY.md。變數值在 Dokploy 的 Environment 分頁填，範本是 deploy/.env.example。
+# 映像由 CI（.github/workflows/images.yml）建好推到 GHCR，主機只拉取不編譯；
+# IMAGE_TAG 填 commit 的完整 SHA（回滾＝改成舊的 SHA）。VITE_WS_URL 在 CI 建置時編進前端映像。
 
 services:
   server:
-    build:
-      context: ../server
+    image: ghcr.io/erictheng93/temple-server:${IMAGE_TAG:?填入要部署的 commit SHA，見 docs/DEPLOY.md}
     restart: unless-stopped
     expose:
       - "8080"
@@ -33,11 +34,7 @@ services:
         max-file: "3"
 
   web:
-    build:
-      context: ../web
-      args:
-        # 建置時編進前端。與前端同網域時 wss://<網域>/ws。
-        VITE_WS_URL: ${VITE_WS_URL:?填入 WebSocket 位址，例如 wss://game.example.com/ws}
+    image: ghcr.io/erictheng93/temple-web:${IMAGE_TAG:?填入要部署的 commit SHA，見 docs/DEPLOY.md}
     restart: unless-stopped
     expose:
       - "8080"
