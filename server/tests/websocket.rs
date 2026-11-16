@@ -52,7 +52,7 @@ async fn closed(ws: &mut Ws, code: u16) {
         other => panic!("expected close, got {other:?}"),
     }
 }
-const HELLO: &str = r#"{"t":"hello","v":2,"name":"測試"}"#;
+const HELLO: &str = r#"{"t":"hello","v":3,"name":"測試"}"#;
 #[tokio::test]
 async fn origin_rejected_missing_and_foreign() {
     let server = server().await;
@@ -82,8 +82,8 @@ async fn hello_timeout() {
 #[tokio::test]
 async fn unsupported_version_then_close() {
     let server = server().await;
-    // 版本 1 的舊前端（JSON moves）連到新伺服器：明確拒絕，不會收到它解不開的二進位幀。
-    for version in ["1", "3"] {
+    // 舊前端（v1：JSON moves；v2：JSON action）連到新伺服器：明確拒絕，不會收到它解不開的二進位幀。
+    for version in ["1", "2", "4"] {
         let mut ws = connect(&server).await;
         text(
             &mut ws,

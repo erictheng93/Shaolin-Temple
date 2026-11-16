@@ -1,17 +1,24 @@
 use temple_server::protocol::{
-    BatchKind, ClientMessage, MAX_MESSAGE_BYTES, MoveTuple, Moving, ServerMessage, decode_batch,
-    encode_batch,
+    ActionFrame, BatchKind, ClientMessage, MAX_MESSAGE_BYTES, MoveTuple, Moving, PROTOCOL_VERSION,
+    ServerMessage, decode_action, decode_batch, encode_action, encode_batch, unwrap_started_at,
 };
+use temple_server::world;
 #[test]
 fn shared_frontend_fixtures_round_trip() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("protocol-v2.json")).unwrap();
+        serde_json::from_str(include_str!("protocol-v3.json")).unwrap();
     for value in fixtures["server"].as_array().unwrap() {
         let message: ServerMessage = serde_json::from_value(value.clone()).unwrap();
         let actual = serde_json::to_value(message).unwrap();
         // JSON numeric representations such as 0 and 0.0 are equivalent in JavaScript.
         assert_eq!(normalize(actual), normalize(value.clone()));
     }
+    let hello = fixtures["client"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["t"] == "hello");
+    assert_eq!(hello.unwrap()["v"].as_f64(), Some(PROTOCOL_VERSION));
     for value in fixtures["client"].as_array().unwrap() {
         let message: ClientMessage = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(
@@ -43,7 +50,7 @@ fn malformed_client_fields_rejected() {
 }
 
 fn fixtures() -> serde_json::Value {
-    serde_json::from_str(include_str!("protocol-v2.json")).unwrap()
+    serde_json::from_str(include_str!("protocol-v3.json")).unwrap()
 }
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())
@@ -119,4 +126,100 @@ fn batch_encoding_refuses_what_the_frame_cannot_carry() {
     // moves／sync 不再以 JSON 送出。
     let moves = ServerMessage::Moves { m: vec![entry] };
     assert!(serde_json::to_string(&moves).is_err());
+}
+
+/// 動作編號對照表就是 `world::ACTIONS`（同一順序），與前端 `ACTION_CODES` 共用固定資料。
+#[test]
+fn action_codes_match_shared_fixture() {
+    let fixtures = fixtures();
+    let codes: Vec<&str> = fixtures["binary"]["action"]["codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(codes, world::ACTIONS);
+    for (i, id) in world::ACTIONS.iter().enumerate() {
+        assert_eq!(world::action_code(id), Some(i as u8));
+    }
+    assert_eq!(world::action_code("dance"), None);
+}
+
+#[test]
+fn shared_action_vectors_encode_decode_and_unwrap() {
+    let fixtures = fixtures();
+    let action = &fixtures["binary"]["action"];
+    let valid = action["valid"].as_array().unwrap();
+    assert_eq!(valid.len(), world::ACTIONS.len());
+    for case in valid {
+        let name = case["name"].as_str().unwrap();
+        let bytes = hex(case["hex"].as_str().unwrap());
+        let input = &case["input"];
+        let n = input["n"].as_u64().unwrap() as u8;
+        let id = input["id"].as_str().unwrap();
+        let started_at = input["startedAt"].as_f64().unwrap();
+        let code = world::action_code(id).unwrap();
+        assert_eq!(
+            encode_action(n, code, started_at).as_deref(),
+            Some(&bytes[..]),
+            "{name}"
+        );
+        // 伺服器實際送出的路徑（ServerMessage::to_frame）也是同一個幀。
+        let message = ServerMessage::Action {
+            n,
+            code,
+            started_at,
+        };
+        assert_eq!(
+            message.to_frame(),
+            Some(temple_server::protocol::Frame::Binary(bytes.clone())),
+            "{name}"
+        );
+        let decoded = &case["decoded"];
+        assert_eq!(
+            decode_action(&bytes),
+            Ok(ActionFrame {
+                n: decoded["n"].as_u64().unwrap() as u8,
+                id: world::action(decoded["id"].as_str().unwrap()).unwrap(),
+                started_at_low: decoded["startedAtLow"].as_u64().unwrap() as u32,
+            }),
+            "{name}"
+        );
+    }
+    let invalid = action["invalid"].as_array().unwrap();
+    assert!(invalid.len() >= 6);
+    for case in invalid {
+        let bytes = hex(case["hex"].as_str().unwrap());
+        assert!(decode_action(&bytes).is_err(), "{}", case["name"]);
+        // 也不會被當成 moves／sync。
+        assert!(decode_batch(&bytes).is_err(), "{}", case["name"]);
+    }
+    let unwrap = action["unwrap"].as_array().unwrap();
+    assert!(unwrap.len() >= 8);
+    for case in unwrap {
+        let low = case["low"].as_u64().unwrap() as u32;
+        let reference = case["reference"].as_f64().unwrap();
+        assert_eq!(
+            unwrap_started_at(low, reference),
+            case["startedAt"].as_f64().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
+fn action_encoding_refuses_what_the_frame_cannot_carry() {
+    assert!(encode_action(127, 0, 0.0).is_some());
+    assert!(encode_action(128, 0, 0.0).is_none());
+    assert!(encode_action(0, world::ACTIONS.len() as u8, 0.0).is_none());
+    assert!(encode_action(0, 0, -1.0).is_none());
+    assert!(encode_action(0, 0, f64::NAN).is_none());
+    // action 不再以 JSON 送出。
+    let message = ServerMessage::Action {
+        n: 0,
+        code: 0,
+        started_at: 0.0,
+    };
+    assert!(serde_json::to_string(&message).is_err());
 }

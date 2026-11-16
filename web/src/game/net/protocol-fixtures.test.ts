@@ -1,7 +1,7 @@
-import fixtures from '../../../../server/tests/protocol-v2.json'
+import fixtures from '../../../../server/tests/protocol-v3.json'
 import { describe, expect, it } from 'vitest'
-import { encodeBatch, type BatchMessage } from './moveFrame'
-import { decode, encode, type ClientMessage } from './protocol'
+import { ACTION_CODES, decodeAction, encodeAction, encodeBatch, unwrapStartedAt, type BatchMessage } from './binaryFrame'
+import { FrameContext, PROTOCOL_VERSION, decode, encode, type ClientMessage, type DecodeContext } from './protocol'
 
 const fromHex = (hex: string): ArrayBuffer => {
   const out = new Uint8Array(hex.length / 2)
@@ -10,7 +10,8 @@ const fromHex = (hex: string): ArrayBuffer => {
 }
 const toHex = (bytes: Uint8Array): string => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 
-it('Rust 共用 v2 固定資料可由前端收發', () => {
+it('Rust 共用 v3 固定資料可由前端收發', () => {
+  expect(fixtures.client.find((m) => m.t === 'hello')?.v).toBe(PROTOCOL_VERSION)
   for (const message of fixtures.server) expect(decode(JSON.stringify(message))).toEqual(message)
   for (const message of fixtures.client) expect(JSON.parse(encode(message as ClientMessage))).toEqual(message)
 })
@@ -28,5 +29,63 @@ describe('moves／sync 二進位幀（與 Rust 共用的測試向量）', () => 
   it('長度不合、未知幀型、筆數或座標超出範圍都整則拒絕', () => {
     expect(fixtures.binary.invalid.length).toBeGreaterThanOrEqual(8)
     for (const v of fixtures.binary.invalid) expect(decode(fromHex(v.hex)), v.name).toBeNull()
+  })
+})
+
+describe('action 二進位幀（與 Rust 共用的測試向量）', () => {
+  const { action } = fixtures.binary
+
+  it('動作編號對照表與固定資料（= server/src/world.rs 的 ACTIONS）相同', () => {
+    expect([...ACTION_CODES]).toEqual(action.codes)
+  })
+
+  it('編碼結果等於 hex，解碼結果等於 decoded', () => {
+    expect(action.valid.length).toBe(action.codes.length)
+    for (const v of action.valid) {
+      expect(toHex(encodeAction(v.input)!), v.name).toBe(v.hex)
+      expect(decodeAction(fromHex(v.hex)), v.name).toEqual(v.decoded)
+    }
+  })
+
+  it('長度不符、n 超過 127、未知動作編號都整則拒絕', () => {
+    expect(action.invalid.length).toBeGreaterThanOrEqual(6)
+    const ctx: DecodeContext = { playerIdOf: () => 'p', serverNow: () => 0 }
+    for (const v of action.invalid) {
+      expect(decodeAction(fromHex(v.hex)), v.name).toBeNull()
+      expect(decode(fromHex(v.hex), ctx), v.name).toBeNull()
+    }
+  })
+
+  it('startedAt 由低 32 位元與參考時間還原（含回繞與範圍邊界）', () => {
+    expect(action.unwrap.length).toBeGreaterThanOrEqual(8)
+    for (const v of action.unwrap) expect(unwrapStartedAt(v.low, v.reference), v.name).toBe(v.startedAt)
+  })
+
+  it('decode() 以 DecodeContext 還原成與 v2 JSON 相同的形狀；沒有 ctx 或對照不到 n 時回傳 null', () => {
+    for (const v of action.valid) {
+      const ctx: DecodeContext = {
+        playerIdOf: (n) => (n === v.input.n ? `p-${n}` : undefined),
+        serverNow: () => v.input.startedAt + 80.5,
+      }
+      expect(decode(fromHex(v.hex), ctx), v.name).toEqual({
+        t: 'action',
+        playerId: `p-${v.input.n}`,
+        id: v.input.id,
+        startedAt: v.input.startedAt,
+      })
+      expect(decode(fromHex(v.hex)), v.name).toBeNull()
+      expect(decode(fromHex(v.hex), { ...ctx, playerIdOf: () => undefined }), v.name).toBeNull()
+    }
+  })
+
+  it('FrameContext 以 welcome／pong 的 serverTime 校正時鐘', () => {
+    let now = 1000
+    const ctx = new FrameContext(() => now)
+    ctx.observe({ t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 5_000_000, players: [] })
+    now = 1500
+    expect(ctx.serverNow()).toBe(5_000_500)
+    ctx.observe({ t: 'pong', ts: 0, serverTime: 6_000_000 })
+    now = 1600
+    expect(ctx.serverNow()).toBe(6_000_100)
   })
 })

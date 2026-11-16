@@ -5,7 +5,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use temple_server::{
     ServerOptions, app_with_options,
-    protocol::{BatchKind, decode_batch},
+    protocol::{
+        BatchKind, FRAME_ACTION, PROTOCOL_VERSION, decode_action, decode_batch, unwrap_started_at,
+    },
     room::RoomConfig,
 };
 use tokio::time::{Duration, Instant, sleep, timeout};
@@ -51,7 +53,8 @@ async fn send(ws: &mut Ws, value: Value) {
         .unwrap();
 }
 /// 讀下一則訊息；`wait` 內沒有訊息或連線已關閉則回 `None`。二進位的 moves／sync 幀
-/// 解碼後轉成與 v1 JSON 相同的形狀（`{"t":"moves","m":[[n,x,z,heading,moving],…]}`），測試沿用同一套斷言。
+/// 解碼後轉成與 v1 JSON 相同的形狀（`{"t":"moves","m":[[n,x,z,heading,moving],…]}`），測試沿用同一套斷言；
+/// action 幀轉成 `{"t":"action","n":n,"id":id,"startedAtLow":low}`。
 async fn recv(ws: &mut Ws, wait: Duration) -> Option<Value> {
     loop {
         match timeout(wait, ws.next()).await {
@@ -63,6 +66,10 @@ async fn recv(ws: &mut Ws, wait: Duration) -> Option<Value> {
     }
 }
 fn batch_json(raw: &[u8]) -> Value {
+    if raw.first() == Some(&FRAME_ACTION) {
+        let a = decode_action(raw).expect("valid action frame");
+        return json!({ "t": "action", "n": a.n, "id": a.id, "startedAtLow": a.started_at_low });
+    }
     let (kind, m) = decode_batch(raw).expect("valid binary frame");
     let t = match kind {
         BatchKind::Moves => "moves",
@@ -120,7 +127,7 @@ struct Me {
     welcome: Value,
 }
 async fn hello(ws: &mut Ws, resume: Option<&str>) -> Me {
-    let mut message = json!({ "t": "hello", "v": 2, "name": "測試" });
+    let mut message = json!({ "t": "hello", "v": PROTOCOL_VERSION, "name": "測試" });
     if let Some(token) = resume {
         message["resumeToken"] = json!(token);
     }
@@ -269,8 +276,19 @@ async fn duplicate_req_id_is_acked_twice_but_broadcast_once() {
     let theirs = collect(&mut b, Duration::from_millis(300)).await;
     let actions: Vec<_> = theirs.iter().filter(|m| m["t"] == "action").collect();
     assert_eq!(actions.len(), 1);
-    assert_eq!(actions[0]["playerId"], me.id.as_str());
+    // 以短編號指稱執行者；startedAt 只帶低 32 位元，以讀完訊息後的現在時間還原，落在之前幾秒內（測試中途等了約 2 秒）。
+    assert_eq!(actions[0]["n"], me.n);
     assert_eq!(actions[0]["id"], "bow");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as f64;
+    let low = actions[0]["startedAtLow"].as_u64().unwrap() as u32;
+    let started_at = unwrap_started_at(low, now);
+    assert!(
+        (0.0..5000.0).contains(&(now - started_at)),
+        "{now} vs {started_at}"
+    );
     // 空 data 物件與省略 data 一樣可接受
     sleep(Duration::from_millis(1100)).await;
     send(

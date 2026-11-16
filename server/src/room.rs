@@ -526,24 +526,23 @@ impl Room {
                     p.acks.pop_front();
                 }
                 p.acks.push_back((req_id, ack.clone()));
-                if let (None, Some(id)) = (reason, known) {
+                if let (None, Some(id), Some(code)) = (reason, known, world::action_code(&action)) {
                     let started_at = now_ms();
                     p.action = Some(PlayerAction {
                         id: id.into(),
                         started_at,
                     });
-                    started = Some((id, started_at, p.zone.id));
+                    started = Some((p.n, code, started_at, p.zone.id));
                 }
                 ack
             }
         };
         self.send_to(&who.id, ack, now);
-        if let Some((id, started_at, zone)) = started {
+        if let Some((n, code, started_at, zone)) = started {
             let message = ServerMessage::Action {
-                player_id: who.id.clone(),
-                id: id.into(),
+                n,
+                code,
                 started_at,
-                data: None,
             };
             self.broadcast(message, now, |q| q.zone.id == zone && q.id != who.id);
         }

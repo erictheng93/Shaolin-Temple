@@ -2,14 +2,14 @@
 // 不是正式伺服器，不做權限、持久化或容量設計。
 // 與正式伺服器相同的行為：房內短編號 n、moves／sync／action 只送同場景、zone／join／leave 送全房、
 // 切換場景後先廣播 zone 再對切換者送 sync、移動中超過 1 秒沒有位置就視為停止、
-// 協定版本 2：moves／sync 以二進位幀送出（與前端共用 src/game/net/moveFrame.ts 的編碼器），hello.v 不符時回 unsupported_version。
+// 協定版本 3：moves／sync／action 以二進位幀送出（與前端共用 src/game/net/binaryFrame.ts 的編碼器），hello.v 不符時回 unsupported_version。
 //
 // 用法：node scripts/mock-server.mjs [機器人數量=6] [埠=8080]（需 Node 22.18 以上，直接載入 .ts 的型別移除）
 // 前端：在 web/.env.local 設定 VITE_WS_URL=ws://localhost:8080/ws
 import { WebSocketServer } from 'ws'
-import { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeBatch } from '../src/game/net/moveFrame.ts'
+import { ACTION_CODES, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch } from '../src/game/net/binaryFrame.ts'
 
-const PROTOCOL_VERSION = 2 // 與 src/game/net/protocol.ts 一致
+const PROTOCOL_VERSION = 3 // 與 src/game/net/protocol.ts 一致
 
 const BOTS = Number(process.argv[2] ?? 6)
 const PORT = Number(process.argv[3] ?? 8080)
@@ -18,9 +18,9 @@ if (!(BOTS >= 0 && BOTS <= MAX_SHORT_ID)) {
   console.error(`機器人數量須在 0～${MAX_SHORT_ID}`)
   process.exit(1)
 }
-// 動作允許清單，與 server/src/world.rs 的 ACTIONS 一致（前端玩法模組 src/game/gameplay/modules/worship.ts）
+// 動作允許清單＝二進位幀的動作編號對照表（binaryFrame.ts 的 ACTION_CODES，測試保證與 server/src/world.rs 的 ACTIONS 相同）
 // chant_end：誦經中提前起身（客戶端送出，轉送給同場景的人）
-const ACTIONS = ['bow', 'prostrate', 'chant', 'chant_end', 'incense', 'bell']
+const ACTIONS = ACTION_CODES
 // 機器人只做該場景能做的動作（跪拜、誦經限殿內，敲鐘限庭院）；不會走到蒲團、香爐或鐘亭前，上香不會在香爐插香
 const BOT_ACTIONS = { courtyard: ['bow', 'bell'], hall: ['bow', 'prostrate', 'chant'] }
 // 機器人做這些動作時停留到動作結束再走（客戶端在動作期間不顯示走路）；誦經 24 秒、跪拜 8 秒
@@ -63,9 +63,11 @@ const send = (ws, msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg))
 const broadcast = (msg, exceptId) => {
   for (const p of players.values()) if (p.ws && p.id !== exceptId) send(p.ws, msg)
 }
-/** 只送給指定場景的玩家（action）。 */
-const broadcastZone = (zone, msg, exceptId) => {
-  for (const p of players.values()) if (p.ws && p.zone === zone && p.id !== exceptId) send(p.ws, msg)
+/** 動作廣播（二進位幀）：只送給同場景的其他玩家。 */
+const broadcastAction = (from, id) => {
+  const frame = encodeAction({ n: from.n, id, startedAt: now() })
+  if (!frame) return
+  for (const p of players.values()) if (p.ws && p.zone === from.zone && p !== from && p.ws.readyState === 1) p.ws.send(frame)
 }
 /** 把 tuple 陣列依上限拆成多則二進位幀送出（sync 即使是空的也要送）。 */
 const sendTuples = (ws, t, list) => {
@@ -118,7 +120,7 @@ setInterval(() => {
         if (id === 'bell' && now() - lastBellAt < BOT_BELL_GAP_MS) continue
         if (id === 'bell') lastBellAt = now()
         b.wait = Math.max(b.wait, BOT_HOLD_S[id] ?? 0)
-        broadcastZone(p.zone, { t: 'action', playerId: p.id, id, startedAt: now() })
+        broadcastAction(p, id)
       }
       continue
     }
@@ -210,7 +212,7 @@ wss.on('connection', (ws) => {
         seenReq.set(m.reqId, ack)
         send(ws, ack)
         if (ack.ok && m.id === 'bell') lastBellAt = now()
-        if (ack.ok) broadcastZone(me.zone, { t: 'action', playerId: me.id, id: m.id, startedAt: now() }, me.id)
+        if (ack.ok) broadcastAction(me, m.id)
         break
       }
       case 'ping':

@@ -1,12 +1,12 @@
 /**
- * moves／sync 的二進位幀（協定版本 2）。前端解碼、mock 伺服器編碼都用這一份實作；
- * Rust 端在 server/src/protocol.rs（encode_batch／decode_batch），兩邊以 server/tests/protocol-v2.json 的
- * binary 測試向量驗證一致。
+ * 伺服器下行的二進位幀（協定版本 3）：moves／sync（0x01／0x02，自 v2 起）與 action（0x03，v3 起）。
+ * 前端解碼、mock 伺服器編碼都用這一份實作；Rust 端在 server/src/protocol.rs（encode_batch／decode_batch、
+ * encode_action／decode_action），兩邊以 server/tests/protocol-v3.json 的 binary 測試向量驗證一致。
  *
  * 這個檔案不 import 任何東西、只用可被移除的型別語法，讓 `node scripts/mock-server.mjs` 能直接載入
  * （Node 22.18 起內建 TypeScript 型別移除）。
  *
- * 幀 = 1 byte 幀型 + N 筆 × 6 bytes，N = (長度 − 1) / 6，0 ≤ N ≤ MAX_MOVES_PER_MESSAGE。整數為 little-endian。
+ * moves／sync：幀 = 1 byte 幀型 + N 筆 × 6 bytes，N = (長度 − 1) / 6，0 ≤ N ≤ MAX_MOVES_PER_MESSAGE。整數為 little-endian。
  *
  * | 位移 | 型別 | 內容 |
  * | --- | --- | --- |
@@ -14,6 +14,15 @@
  * | 1 | i16 | x，公分（四捨五入，.5 遠離零），限 ±MAX_COORD_CM |
  * | 3 | i16 | z，公分，同上 |
  * | 5 | u8 | heading：q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128 ∈ (−π, π] |
+ *
+ * action：固定 7 bytes（ACTION_FRAME_BYTES）。
+ *
+ * | 位移 | 型別 | 內容 |
+ * | --- | --- | --- |
+ * | 0 | u8 | 幀型 0x03 |
+ * | 1 | u8 | 執行者的房內短編號 n（0～127；bit 7 保留，須為 0） |
+ * | 2 | u8 | 動作編號：ACTION_CODES 的索引 |
+ * | 3 | u32 | startedAt（伺服器的 Unix 毫秒）mod 2^32；由 unwrapStartedAt() 以參考時間還原 |
  */
 
 /** 批次位置的單筆：[n, x, z, heading, moving]，n 為房內短編號，moving 為 0 或 1。 */
@@ -94,4 +103,64 @@ export function decodeBatch(data: ArrayBuffer | ArrayBufferView): BatchMessage |
     m[i] = [head & MAX_SHORT_ID, x / 100, z / 100, dequantizeHeading(view.getUint8(o + 5)), head & MOVING_BIT ? 1 : 0]
   }
   return { t, m }
+}
+
+// ---- action（協定版本 3）----
+
+export const FRAME_ACTION = 0x03
+export const ACTION_FRAME_BYTES = 7
+/**
+ * 動作編號對照表：索引即線路上的編號，是協定的一部分。必須與 server/src/world.rs 的 ACTIONS（同一順序）
+ * 及固定資料 binary.action.codes 相同（兩邊測試都檢查）；mock 伺服器也以它當動作允許清單。
+ * 只能在尾端新增（舊客戶端收到不認得的編號會整則忽略，與它不認得動作 id 時相同）；改順序或刪除要升協定版本。
+ */
+export const ACTION_CODES = ['bow', 'prostrate', 'chant', 'chant_end', 'incense', 'bell'] as const
+const WRAP = 2 ** 32
+const HALF_WRAP = 2 ** 31
+
+/** 動作幀解碼後、還原玩家與時間之前的內容。 */
+export interface ActionFrame {
+  n: number
+  id: string
+  /** startedAt mod 2^32。 */
+  startedAtLow: number
+}
+
+/** 編碼一則動作幀。短編號不在 0～127、動作不在對照表、startedAt 不是有限的非負數時回傳 null。 */
+export function encodeAction(msg: { n: number; id: string; startedAt: number }): Uint8Array | null {
+  const code = (ACTION_CODES as readonly string[]).indexOf(msg.id)
+  const { n, startedAt } = msg
+  if (code < 0 || !Number.isInteger(n) || n < 0 || n > MAX_SHORT_ID) return null
+  if (!Number.isFinite(startedAt) || startedAt < 0) return null
+  const out = new Uint8Array(ACTION_FRAME_BYTES)
+  const view = new DataView(out.buffer)
+  out[0] = FRAME_ACTION
+  out[1] = n
+  out[2] = code
+  view.setUint32(3, Math.floor(startedAt) % WRAP, true)
+  return out
+}
+
+/** 解碼並驗證一則動作幀。幀型不是 0x03、長度不是 7、n 超過 127、動作編號不在對照表都回傳 null（整則丟棄）。 */
+export function decodeAction(data: ArrayBuffer | ArrayBufferView): ActionFrame | null {
+  const bytes =
+    data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+  if (bytes.length !== ACTION_FRAME_BYTES || bytes[0] !== FRAME_ACTION) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const n = view.getUint8(1)
+  const id: string | undefined = ACTION_CODES[view.getUint8(2)]
+  if (n > MAX_SHORT_ID || id === undefined) return null
+  return { n, id, startedAtLow: view.getUint32(3, true) }
+}
+
+/**
+ * 由 startedAt 的低 32 位元還原絕對毫秒：取 mod 2^32 相同、且離參考時間（客戶端估計的伺服器現在時間）最近的值。
+ * startedAt − reference 在 [−2^31, 2^31) 毫秒（約 ±24.8 天）內都正確；動作訊息是即時轉送的，
+ * 實際差距只有轉送延遲加上時鐘估計誤差（毫秒到秒），分頁凍結數小時後才收到也仍正確。
+ */
+export function unwrapStartedAt(low: number, reference: number): number {
+  const ref = Math.floor(reference)
+  let d = (((low - (ref % WRAP)) % WRAP) + WRAP) % WRAP
+  if (d >= HALF_WRAP) d -= WRAP
+  return ref + d
 }
