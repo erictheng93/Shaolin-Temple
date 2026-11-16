@@ -2,28 +2,45 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_OUTFIT, OUTFITS, normalizeOutfit, randomOutfit } from './outfits'
 
 describe('衣裝資料', () => {
-  it('恰好 6 套，順序固定（索引即編號，只能加在尾端）', () => {
-    expect(OUTFITS).toHaveLength(6)
-    expect(OUTFITS.map((o) => o.key)).toEqual(['orange', 'grey', 'brown', 'black', 'kasaya', 'beads'])
+  it('恰好 8 套，順序固定（索引即編號，只能加在尾端）', () => {
+    expect(OUTFITS).toHaveLength(8)
+    expect(OUTFITS.map((o) => o.key)).toEqual(['orange', 'grey', 'brown', 'black', 'kasaya', 'beads', 'pilgrim', 'warrior'])
     expect(DEFAULT_OUTFIT).toBe(0)
   })
 
-  it('只有袈裟有披帶、只有念珠那套有念珠；顏色都是 #rrggbb', () => {
-    expect(OUTFITS.filter((o) => o.sash).map((o) => o.key)).toEqual(['kasaya'])
-    expect(OUTFITS.filter((o) => o.beads).map((o) => o.key)).toEqual(['beads'])
-    for (const o of OUTFITS) for (const c of [o.robe, o.sash, o.beads]) if (c) expect(c).toMatch(/^#[0-9a-f]{6}$/)
+  it('既有 6 套的外觀不變', () => {
+    expect(OUTFITS.slice(0, 6)).toEqual([
+      { key: 'orange', label: 'outfit.orange', robe: '#c9853a' },
+      { key: 'grey', label: 'outfit.grey', robe: '#86837d' },
+      { key: 'brown', label: 'outfit.brown', robe: '#6e4f3a' },
+      { key: 'black', label: 'outfit.black', robe: '#363333' },
+      { key: 'kasaya', label: 'outfit.kasaya', robe: '#c99a3e', sash: '#9c2f23' },
+      { key: 'beads', label: 'outfit.beads', robe: '#56687f', beads: '#4a2e1c' },
+    ])
   })
 
-  it('normalizeOutfit：範圍內的整數照用，其餘回 0', () => {
+  it('配件：只有袈裟有披帶、念珠那套有念珠、行腳僧戴斗笠、武僧穿短褂；顏色都是 #rrggbb', () => {
+    expect(OUTFITS.filter((o) => o.sash).map((o) => o.key)).toEqual(['kasaya'])
+    expect(OUTFITS.filter((o) => o.beads).map((o) => o.key)).toEqual(['beads'])
+    expect(OUTFITS.filter((o) => o.hat).map((o) => o.key)).toEqual(['pilgrim'])
+    expect(OUTFITS.filter((o) => o.tunic).map((o) => o.key)).toEqual(['warrior'])
+    for (const o of OUTFITS) {
+      for (const c of [o.robe, o.sash, o.beads, o.hat, o.tunic?.trousers, o.tunic?.leggings, o.tunic?.belt]) {
+        if (c) expect(c).toMatch(/^#[0-9a-f]{6}$/)
+      }
+    }
+  })
+
+  it('normalizeOutfit：範圍內的整數照用，其餘（含比這個版本新的編號）回 0', () => {
     expect(normalizeOutfit(0)).toBe(0)
-    expect(normalizeOutfit(5)).toBe(5)
-    for (const bad of [6, -1, 1.5, Number.NaN, Infinity, '2', null, undefined, {}, true]) expect(normalizeOutfit(bad)).toBe(0)
+    expect(normalizeOutfit(7)).toBe(7)
+    for (const bad of [8, 200, -1, 1.5, Number.NaN, Infinity, '2', null, undefined, {}, true]) expect(normalizeOutfit(bad)).toBe(0)
   })
 
   it('randomOutfit 落在範圍內', () => {
     expect(randomOutfit(() => 0)).toBe(0)
-    expect(randomOutfit(() => 0.999999)).toBe(5)
-    expect(randomOutfit(() => 1)).toBe(5)
+    expect(randomOutfit(() => 0.999999)).toBe(7)
+    expect(randomOutfit(() => 1)).toBe(7)
   })
 })
 

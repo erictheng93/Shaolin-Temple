@@ -1,6 +1,6 @@
 {
   "_comment": "協定版本 3 的共用固定資料。server／client 為 JSON 訊息；binary 為二進位幀（hex）：valid／invalid 是 moves／sync，input 是伺服器編碼前的 tuple、decoded 是解碼後的 tuple；action 是動作廣播（codes 為動作編號對照表，索引即編號；unwrap 為由 32 位元 startedAt 還原絕對時間的案例）。outfitCount 與 server／client 內的 outfit 範例是手寫的（衣裝編號 0..outfitCount-1，兩邊測試都比對）。binary 由 server/tests/protocol-v3-vectors.py 產生（只產生 binary 一段），見 docs/BACKEND_TASKS.md T8。",
-  "outfitCount": 6,
+  "outfitCount": 8,
   "server": [
     {
       "t": "chat",

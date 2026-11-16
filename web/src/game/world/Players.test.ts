@@ -173,7 +173,7 @@ describe('Players 衣裝', () => {
     expect(p.setOutfit(null, 2)).toBe(true)
     expect(outfitOf(p.local.avatar)).toBe(2)
     expect(p.setOutfit('zzz', 1)).toBe(false)
-    expect(p.setOutfit(null, 7)).toBe(true) // 無效值當成預設
+    expect(p.setOutfit(null, 8)).toBe(true) // 無效值（含比這個版本新的編號）當成預設
     expect(p.local.outfit).toBe(0)
   })
 

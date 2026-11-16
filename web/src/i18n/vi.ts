@@ -102,6 +102,8 @@ const vi: Record<MessageKey, string> = {
   'outfit.black': 'Áo tràng đen',
   'outfit.kasaya': 'Áo vàng đắp y',
   'outfit.beads': 'Áo lam đeo tràng hạt',
+  'outfit.pilgrim': 'Tăng hành cước',
+  'outfit.warrior': 'Võ tăng áo ngắn',
 
   'perf.label': 'Thông tin hiệu năng',
   'perf.position': 'Tọa độ',

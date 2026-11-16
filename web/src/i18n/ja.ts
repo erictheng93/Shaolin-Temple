@@ -102,6 +102,8 @@ const ja: Record<MessageKey, string> = {
   'outfit.black': '黒の法衣',
   'outfit.kasaya': '黄衣に袈裟',
   'outfit.beads': '青灰の衣に数珠',
+  'outfit.pilgrim': '行脚僧',
+  'outfit.warrior': '武僧の短衣',
 
   'perf.label': 'パフォーマンス情報',
   'perf.position': '座標',

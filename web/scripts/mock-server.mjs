@@ -58,7 +58,7 @@ const takeToken = (p, key) => {
 const takeChatToken = (p) => takeToken(p, 'chat')
 // 衣裝：編號 0..OUTFIT_COUNT-1（與 src/game/net/protocol.ts 的 OUTFIT_COUNT 相同；這裡不能 import protocol.ts，見上）。
 // 缺少或無效一律當作 0（hello），或丟棄（outfit 訊息）；與目前相同不廣播。
-const OUTFIT_COUNT = 6
+const OUTFIT_COUNT = 8
 const validOutfit = (v) => Number.isInteger(v) && v >= 0 && v < OUTFIT_COUNT
 const RESUME_GRACE_MS = 30_000
 const broadcastChat = (from, raw) => {

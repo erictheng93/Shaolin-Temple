@@ -323,10 +323,12 @@ T8 報告指出 10% 移動情境剩下的超出量主要來自仍為 JSON 的 `a
 
 ### 協定增修：玩家衣裝 `outfit`（2026-11-16，向下相容，不升版號）
 
-衣裝是整數編號 `0..OUTFIT_COUNT-1`（`OUTFIT_COUNT = 6`，`protocol::OUTFIT_COUNT`；前端 `protocol.ts` 同名，固定資料 `protocol-v3.json` 的 `outfitCount` 鎖住兩邊）。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+衣裝是整數編號 `0..OUTFIT_COUNT-1`（`OUTFIT_COUNT = 8`，`protocol::OUTFIT_COUNT`；前端 `protocol.ts` 同名，固定資料 `protocol-v3.json` 的 `outfitCount` 鎖住兩邊）。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+
+**新增衣裝**（2026-11-16 由 6 套增為 8 套：行腳僧、武僧短褂）：只能加在尾端，不可改順序或刪除；同一個變更內改 `protocol::OUTFIT_COUNT`、前端 `OUTFIT_COUNT`、`web/scripts/mock-server.mjs` 與固定資料的 `outfitCount`（測試鎖住四處一致），負載工具與 mock 的機器人隨機衣裝直接用 `OUTFIT_COUNT`。伺服器對上行的範圍驗證維持嚴格；前端的下行驗證刻意寬鬆（0～255 的整數都接受），還沒重新整理的舊分頁收到不認得的編號時顯示為預設衣裝，不會因此丟掉 `welcome`／`join`。
 
 - **`hello`** 新增可選欄位 `outfit`：缺少或無效（非整數、超出範圍、型別不符）一律當作 0，不拒絕連線（`protocol::parse_outfit`）。
-- **`PlayerSnapshot`** 新增 `outfit`（伺服器一律送出），`welcome.players` 與 `join` 因此帶衣裝。前端把缺少視為合法（舊伺服器相容），有值但不是範圍內整數則整則忽略。
+- **`PlayerSnapshot`** 新增 `outfit`（伺服器一律送出），`welcome.players` 與 `join` 因此帶衣裝。前端把缺少視為合法（舊伺服器相容）；0～255 的整數都接受，不認得的編號顯示為預設衣裝；不是整數或為負則整則忽略。
 - **上行** `{ "t": "outfit", "outfit": n }`（不需 reqId／ack）：無效值丟棄（不計入無效訊息）；`rate_limit.rs` 的 outfit bucket 與 chat 同規則（突發 3、每秒補 0.5，計數各自獨立，同時算入總 bucket）；與目前相同不廣播；否則保存並廣播下行 `{ "t": "outfit", "id", "outfit" }`（JSON）給同房所有在線玩家，不分場景、含本人。連線層到房間的指令以 `send().await` 送出（是狀態，不可丟棄）。
 - **恢復連線**：衣裝留在玩家狀態裡，斷線保留期間與 `resumeToken` 恢復都保留。恢復時 `hello` 帶了有效且不同的 `outfit` 以它為準（`welcome` 已含新值），並在 `welcome` 送出後對其他人廣播一則 `outfit`；相同或沒帶則不廣播。
 - **客戶端**：`NetworkClient.setOutfit(n)` 記住衣裝（每次 `hello` 都帶，含重連），已連線時送出；客戶端限速（補充間隔多留 10%）擋下時只保留最新的一個值、額度恢復後補送，不排隊；斷線時不送。
