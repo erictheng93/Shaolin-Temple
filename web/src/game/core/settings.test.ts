@@ -38,10 +38,10 @@ describe('衣裝', () => {
 
   it('第一次造訪（沒有存過）隨機挑一套並立即存起來', () => {
     const store = stubStorage({})
-    expect(loadSettings(() => 0.7).outfit).toBe(4)
-    expect(JSON.parse(store.get(KEY)!).outfit).toBe(4)
+    expect(loadSettings(() => 0.7).outfit).toBe(5)
+    expect(JSON.parse(store.get(KEY)!).outfit).toBe(5)
     // 之後載入沿用同一套，不再隨機
-    expect(loadSettings(() => 0).outfit).toBe(4)
+    expect(loadSettings(() => 0).outfit).toBe(5)
   })
 
   it('舊版設定沒有衣裝欄位時也隨機挑一套，其他設定保留', () => {
@@ -55,7 +55,7 @@ describe('衣裝', () => {
   it('存過的有效值照用；無效值回預設 0，不隨機', () => {
     stubStorage({ [KEY]: JSON.stringify({ outfit: 3 }) })
     expect(loadSettings(() => 0.9).outfit).toBe(3)
-    for (const bad of [6, -1, 2.5, '3', null]) {
+    for (const bad of [8, -1, 2.5, '3', null]) {
       stubStorage({ [KEY]: JSON.stringify({ outfit: bad }) })
       expect(loadSettings(() => 0.9).outfit).toBe(0)
     }
@@ -71,7 +71,7 @@ describe('衣裝', () => {
       },
       removeItem: () => {},
     })
-    expect(loadSettings(() => 0.5).outfit).toBe(3)
+    expect(loadSettings(() => 0.5).outfit).toBe(4)
   })
 })
 

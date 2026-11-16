@@ -68,9 +68,10 @@ pub enum ClientMessage {
     },
 }
 
-/// 衣裝數量：編號 `0..OUTFIT_COUNT`。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+/// 衣裝數量：編號 `0..OUTFIT_COUNT`，新增衣裝只能加在尾端。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+/// 上行（`hello`、`outfit`）維持嚴格驗證；前端的下行驗證較寬鬆（0～255），舊分頁把不認得的編號顯示為預設衣裝。
 /// 與前端 `protocol.ts` 的 `OUTFIT_COUNT` 相同，由固定資料 `tests/protocol-v3.json` 的 `outfitCount` 鎖住。
-pub const OUTFIT_COUNT: u8 = 6;
+pub const OUTFIT_COUNT: u8 = 8;
 
 /// 衣裝編號驗證：必須是 `0..OUTFIT_COUNT` 內的整數（JSON 數字），否則回 `None`。
 pub fn parse_outfit(value: &Value) -> Option<u8> {

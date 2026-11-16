@@ -1,7 +1,8 @@
 import fixtures from '../../../../server/tests/protocol-v3.json'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient } from './NetworkClient'
-import { OUTFIT_COUNT, decode, encode, isOutfit, type ClientMessage } from './protocol'
+import { DEFAULT_OUTFIT, normalizeOutfit } from '../world/outfits'
+import { MAX_WIRE_OUTFIT, OUTFIT_COUNT, decode, encode, isOutfit, isOutfitWire, type ClientMessage, type ServerMessage } from './protocol'
 
 const player = { id: 'p', n: 1, name: 'n', x: 0, z: 0, heading: 0 }
 
@@ -10,9 +11,15 @@ describe('衣裝協定', () => {
     expect(OUTFIT_COUNT).toBe(fixtures.outfitCount)
   })
 
-  it('isOutfit 只接受範圍內的整數', () => {
+  it('isOutfit（上行）只接受範圍內的整數', () => {
     for (const ok of [0, 1, OUTFIT_COUNT - 1]) expect(isOutfit(ok)).toBe(true)
     for (const bad of [-1, OUTFIT_COUNT, 1.5, NaN, Infinity, '1', null, undefined, true]) expect(isOutfit(bad)).toBe(false)
+  })
+
+  it('isOutfitWire（下行）接受 0～255 的整數，含這個版本還不認得的編號', () => {
+    expect(MAX_WIRE_OUTFIT).toBe(255)
+    for (const ok of [0, OUTFIT_COUNT - 1, OUTFIT_COUNT, 200, 255]) expect(isOutfitWire(ok)).toBe(true)
+    for (const bad of [-1, 256, 1.5, NaN, Infinity, '1', null, undefined, true]) expect(isOutfitWire(bad)).toBe(false)
   })
 
   it('上行 outfit 與帶衣裝的 hello 原樣編碼', () => {
@@ -21,24 +28,37 @@ describe('衣裝協定', () => {
     expect(JSON.parse(encode(hello))).toEqual(hello)
   })
 
-  it('下行 outfit：驗證 id 與範圍', () => {
+  it('下行 outfit：驗證 id 與型別；不認得的編號照收', () => {
     const down = { t: 'outfit', id: 'p-1', outfit: 4 }
     expect(decode(JSON.stringify(down))).toEqual(down)
-    for (const outfit of [OUTFIT_COUNT, -1, 1.5, '2', null]) expect(decode(JSON.stringify({ ...down, outfit }))).toBeNull()
+    for (const outfit of [OUTFIT_COUNT, 200, 255]) expect(decode(JSON.stringify({ ...down, outfit }))).toEqual({ ...down, outfit })
+    for (const outfit of [256, -1, 1.5, '2', null]) expect(decode(JSON.stringify({ ...down, outfit }))).toBeNull()
     expect(decode(JSON.stringify({ t: 'outfit', outfit: 1 }))).toBeNull()
     expect(decode(JSON.stringify({ t: 'outfit', id: 'p-1' }))).toBeNull()
   })
 
-  it('welcome／join 的玩家：outfit 缺少視為合法（舊伺服器），有值但無效則整則忽略', () => {
+  it('welcome／join 的玩家：outfit 缺少視為合法（舊伺服器），不是 0～255 的整數則整則忽略', () => {
     const welcome = (players: unknown[]) =>
       decode(JSON.stringify({ t: 'welcome', selfId: 'p', room: 'r', resumeToken: 't', serverTime: 0, players }))
     expect(welcome([player])?.t).toBe('welcome')
     expect(welcome([{ ...player, outfit: 5 }])?.t).toBe('welcome')
-    for (const outfit of [OUTFIT_COUNT, -1, 0.5, '1', null]) {
+    for (const outfit of [256, -1, 0.5, '1', null]) {
       expect(welcome([{ ...player, outfit }]), String(outfit)).toBeNull()
       expect(decode(JSON.stringify({ t: 'join', player: { ...player, outfit } })), String(outfit)).toBeNull()
     }
     expect(decode(JSON.stringify({ t: 'join', player: { ...player, outfit: 2 } }))?.t).toBe('join')
+  })
+
+  it('舊分頁收到新衣裝（outfit: 200）的快照：welcome 不丟、其他玩家照收，顯示為預設衣裝', () => {
+    const other = { ...player, id: 'q', n: 2, outfit: 3 }
+    const m = decode(
+      JSON.stringify({ t: 'welcome', selfId: 'p', room: 'r', resumeToken: 't', serverTime: 0, players: [{ ...player, outfit: 200 }, other] }),
+    ) as Extract<ServerMessage, { t: 'welcome' }> | null
+    expect(m?.t).toBe('welcome')
+    expect(m!.players.map((p) => p.outfit)).toEqual([200, 3])
+    expect(m!.players.map((p) => normalizeOutfit(p.outfit))).toEqual([DEFAULT_OUTFIT, 3])
+    const join = decode(JSON.stringify({ t: 'join', player: { ...player, outfit: 200 } })) as Extract<ServerMessage, { t: 'join' }> | null
+    expect(normalizeOutfit(join?.player.outfit)).toBe(DEFAULT_OUTFIT)
   })
 })
 

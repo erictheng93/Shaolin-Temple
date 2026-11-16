@@ -5,13 +5,27 @@ import { OUTFITS, type Outfit } from '../game/world/outfits'
 defineProps<{ modelValue: number }>()
 const emit = defineEmits<{ 'update:modelValue': [outfit: number] }>()
 
-/** 色塊：袍色為底；袈裟畫一條從角色左肩（畫面右上）斜到右腰（畫面左下）的帶子，念珠畫一圈點。 */
+/**
+ * 色塊：袍色為底；袈裟畫一條從角色左肩（畫面右上）斜到右腰（畫面左下）的帶子，念珠畫一圈點，
+ * 斗笠畫在色塊頂上的一個三角，短褂由上到下是上衣、腰帶、褲（中間一道縫分出兩條腿）與綁腿。
+ */
 function swatchStyle(o: Outfit): Record<string, string> {
   const style: Record<string, string> = { '--robe': o.robe }
   if (o.sash) {
     style.backgroundImage = `linear-gradient(225deg, transparent 0 34%, ${o.sash} 34% 58%, transparent 58%)`
   }
+  if (o.tunic) {
+    const { trousers, leggings, belt } = o.tunic
+    style.backgroundImage = [
+      'linear-gradient(90deg, transparent 0 calc(50% - 1px), rgba(0, 0, 0, 0.45) calc(50% - 1px) calc(50% + 1px), transparent 0)',
+      `linear-gradient(180deg, transparent 0 48%, ${belt} 48% 57%, transparent 57% 64%, ${trousers} 64% 82%, ${leggings} 82%)`,
+    ].join(', ')
+    style.backgroundSize = '100% 36%, 100% 100%'
+    style.backgroundPosition = 'bottom, center'
+    style.backgroundRepeat = 'no-repeat'
+  }
   if (o.beads) style['--beads'] = o.beads
+  if (o.hat) style['--hat'] = o.hat
   return style
 }
 </script>
@@ -26,7 +40,7 @@ function swatchStyle(o: Outfit): Record<string, string> {
       :aria-pressed="modelValue === i"
       @click="emit('update:modelValue', i)"
     >
-      <span class="swatch" :class="{ beads: !!o.beads }" :style="swatchStyle(o)" aria-hidden="true" />
+      <span class="swatch" :class="{ beads: !!o.beads, hat: !!o.hat }" :style="swatchStyle(o)" aria-hidden="true" />
       <span class="name">{{ o.label }}</span>
     </button>
   </div>
@@ -35,7 +49,7 @@ function swatchStyle(o: Outfit): Record<string, string> {
 <style scoped>
 .outfits {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -74,6 +88,18 @@ function swatchStyle(o: Outfit): Record<string, string> {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
 }
 
+/* 斗笠：色塊頂上一頂寬沿的圓錐，帽沿比色塊略寬 */
+.swatch.hat::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  right: -5px;
+  top: -6px;
+  height: 14px;
+  background: var(--hat);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+
 /* 念珠：色塊上半圈的一串珠子 */
 .swatch.beads::after {
   content: '';
@@ -89,6 +115,8 @@ function swatchStyle(o: Outfit): Record<string, string> {
   line-height: 1.3;
   text-align: center;
   overflow-wrap: anywhere;
+  /* 四欄時較長的名稱會換行：平均分成兩行，不要只剩一個字在第二行 */
+  text-wrap: balance;
 }
 
 .outfit[aria-pressed='true'] .name {
