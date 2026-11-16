@@ -281,6 +281,7 @@ export class GameCore {
   async enter(playerName: string): Promise<void> {
     this.net.setName(playerName)
     this.selfName = playerName
+    this.players.local.avatar.setName(playerName)
     await this.audio.unlock()
     this.audio.startAmbient()
     this.net.connect()
