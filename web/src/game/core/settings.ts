@@ -1,4 +1,4 @@
-export type QualityLevel = 'medium' | 'high'
+export type QualityLevel = 'low' | 'medium' | 'high'
 export type QualitySetting = 'auto' | QualityLevel
 
 export interface QualityPreset {
@@ -22,7 +22,9 @@ export interface QualityPreset {
 }
 
 export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
-  medium: { maxPixelRatio: 1.5, maxPixels: 1920 * 1080, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1, statueTier: 'std' },
+  // 省電：與標準相同的材質與烘焙，只降繪製解析度；角色的近距離完整模型與臉不受畫質影響。
+  low: { maxPixelRatio: 1, maxPixels: 1280 * 720, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1, statueTier: 'std' },
+  medium: { maxPixelRatio: 1.5, maxPixels: 1600 * 900, activeFps: 30, antialias: false, shadowMapSize: 0, textureSize: 512, detailMaps: 1, statueTier: 'std' },
   high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2, statueTier: 'hi' },
 }
 
@@ -65,7 +67,7 @@ export function loadSettings(): Settings {
   const r = raw as Partial<Record<keyof Settings, unknown>>
   const d = DEFAULT_SETTINGS
   return {
-    quality: (['auto', 'medium', 'high'] as const).includes(r.quality as QualitySetting)
+    quality: (['auto', 'low', 'medium', 'high'] as const).includes(r.quality as QualitySetting)
       ? (r.quality as QualitySetting)
       : d.quality,
     masterVolume: clamp01(r.masterVolume, d.masterVolume),
@@ -86,11 +88,36 @@ export function saveSettings(s: Settings): void {
   }
 }
 
-/** 依裝置推測畫質：觸控為主或記憶體少的裝置用 medium，否則 high。 */
-export function detectQuality(): QualityLevel {
-  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
-  const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory
-  return coarse || (mem !== undefined && mem <= 2) ? 'medium' : 'high'
+export interface DeviceInfo {
+  /** 主要輸入是觸控（`(pointer: coarse)`），即手機或平板。 */
+  coarse: boolean
+  /** `navigator.deviceMemory`（GB，Chromium 才有，已粗略化）；iOS Safari 沒有，為 undefined。 */
+  deviceMemory?: number
+  /** `navigator.hardwareConcurrency`；不明時為 undefined。 */
+  cores?: number
+}
+
+/** 讀取目前裝置的資訊。 */
+export function readDeviceInfo(): DeviceInfo {
+  return {
+    coarse: typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches,
+    deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+    cores: navigator.hardwareConcurrency || undefined,
+  }
+}
+
+/**
+ * 依裝置推測畫質（純函式，不傳參數時讀取目前裝置）：
+ * - low：記憶體 ≤ 2 GB，或觸控裝置、有 deviceMemory 且核心數 ≤ 4。
+ * - medium：其他觸控裝置，或記憶體 ≤ 4 GB。
+ * - high：其餘（桌機）。
+ * iOS Safari 沒有 deviceMemory，核心數也為防指紋而不可靠，所以只看 deviceMemory 有值（Chromium）時的核心數；iPhone 落在 medium（不以 UA 猜測）。
+ */
+export function detectQuality(info: DeviceInfo = readDeviceInfo()): QualityLevel {
+  const { coarse, deviceMemory: mem, cores } = info
+  if ((mem !== undefined && mem <= 2) || (coarse && mem !== undefined && cores !== undefined && cores <= 4)) return 'low'
+  if (coarse || (mem !== undefined && mem <= 4)) return 'medium'
+  return 'high'
 }
 
 export function resolveQuality(q: QualitySetting): QualityLevel {

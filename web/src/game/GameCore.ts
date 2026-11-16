@@ -3,7 +3,7 @@ import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
-import { QUALITY_PRESETS, resolveQuality, type QualityLevel, type Settings } from './core/settings'
+import { QUALITY_PRESETS, readDeviceInfo, resolveQuality, type QualityLevel, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
 import type { GameEvents, GameplayApi } from './gameplay/types'
@@ -118,7 +118,7 @@ export class GameCore {
   private lastTime = 0
   private lastRender = 0
   private startTime = performance.now()
-  private adaptive = new AdaptiveQuality()
+  private adaptive: AdaptiveQuality
   private lastInputAt = performance.now()
   private dirty = true
   private snapCamera = true
@@ -145,6 +145,8 @@ export class GameCore {
   constructor(private readonly opts: GameCoreOptions) {
     this.settings = opts.settings
     this.quality = resolveQuality(opts.settings.quality)
+    // 自動畫質且為觸控裝置：從等級 1 起步，開頭幾秒不致超出預算（順暢後會自動升回）。
+    this.adaptive = new AdaptiveQuality(opts.settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0)
     const preset = QUALITY_PRESETS[this.quality]
 
     this.renderer = new SceneRenderer(opts.canvas, preset, {
@@ -177,6 +179,10 @@ export class GameCore {
     this.renderer.scene.add(this.marker)
 
     this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality))
+    // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
+    const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
+    this.renderer.setResolutionScale(startLevel.resolution)
+    this.players.nearRadius = startLevel.nearRadius
 
     this.input = new InputController(opts.canvas, {
       onTap: (x, y) => this.onTap(x, y),
@@ -836,7 +842,7 @@ export class GameCore {
   }
 
   private maxVisibleFor(q: QualityLevel): number {
-    return q === 'medium' ? 60 : 120
+    return q === 'low' ? 40 : q === 'medium' ? 60 : 120
   }
 }
 
