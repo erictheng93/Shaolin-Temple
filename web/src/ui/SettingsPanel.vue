@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { QUALITY_PRESETS, needsReload, resolveQuality, saveSettings, type QualityLevel, type Settings } from '../game/core/settings'
 
 // settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。
-const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedQuality: QualityLevel }>()
+const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedPreset: QualityPreset }>()
 const emit = defineEmits<{ close: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
@@ -45,7 +45,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 const s = props.settings
 
 // 貼圖、陰影與神像在載入時決定；選到的畫質與本次載入的內容不同時，提示重新載入。
-const reloadNeeded = computed(() => needsReload(QUALITY_PRESETS[props.loadedQuality], QUALITY_PRESETS[resolveQuality(s.quality)]))
+const reloadNeeded = computed(() => needsReload(props.loadedPreset, assetPresetFor(s.quality)))
 
 function reloadNow() {
   saveSettings(s) // 父層 watch 是非同步儲存，重新載入前先確實寫入
