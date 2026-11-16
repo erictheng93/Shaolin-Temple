@@ -48,6 +48,8 @@ const HELD_INCENSE = new THREE.Matrix4().compose(
 )
 
 export interface Avatar extends AvatarRig {
+  /** 設定或更換頭上的名牌；空字串則不顯示。本機玩家進場時才知道名字。 */
+  setName(name: string): void
   setLabelVisible(visible: boolean): void
   /** 頭上顯示對話泡泡直到 until（performance.now 毫秒）；新的取代舊的。文字畫在 canvas 上，不經 HTML。 */
   say(text: string, until: number): void
@@ -446,7 +448,7 @@ function makeBubbleTexture(text: string): THREE.CanvasTexture {
 
 /**
  * 角色工廠與批次繪製擁有者。
- * 所有角色以 InstancedMesh 批次繪製：身體（袍或短褂、鞋）、膚色部分（頭、手與斗笠）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個，對話泡泡每個正在說話的人 1 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
+ * 所有角色以 InstancedMesh 批次繪製：身體（袍或短褂、鞋）、膚色部分（頭、手與斗笠）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最近 12 人加上自己最多 13 個，對話泡泡每個正在說話的人 1 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
  * 臉（五官圖集）近遠都畫，各自貼在該 tier 的頭部曲面上，不投影。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
  * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
@@ -633,14 +635,25 @@ export class AvatarFactory {
     let label: THREE.Sprite | null = null
     let labelTex: THREE.Texture | null = null
     let labelMat: THREE.SpriteMaterial | null = null
-    if (opts.name) {
-      labelTex = makeLabelTexture(opts.name)
+    const clearLabel = () => {
+      label?.removeFromParent()
+      labelTex?.dispose()
+      labelMat?.dispose()
+      label = labelTex = labelMat = null
+    }
+    const setName = (name: string) => {
+      const visible = label?.visible ?? true
+      clearLabel()
+      if (!name) return
+      labelTex = makeLabelTexture(name)
       labelMat = new THREE.SpriteMaterial({ map: labelTex, depthWrite: false, transparent: true })
       label = new THREE.Sprite(labelMat)
       const img = labelTex.image as HTMLCanvasElement
       label.scale.set((img.width / img.height) * 0.28, 0.28, 1)
+      label.visible = visible
       root.add(label)
     }
+    setName(opts.name)
 
     // 對話泡泡：只在名牌顯示中的人（最近 12 人）與本機玩家頭上顯示。
     let labelOn = opts.local
@@ -658,7 +671,7 @@ export class AvatarFactory {
     const record: AvatarRecord = { rig, shadow, outfit: normalizeOutfit(opts.outfit) }
     this.records.add(record)
     /** 名牌與泡泡的高度（戴斗笠時升高）；換衣裝時重新放。 */
-    const bubbleY = () => FIGURE_HEIGHT + (opts.local ? 0.3 : 0.55) + labelLift(record.outfit)
+    const bubbleY = () => FIGURE_HEIGHT + (label ? 0.55 : 0.3) + labelLift(record.outfit)
     const placeLabels = () => {
       if (label) label.position.y = FIGURE_HEIGHT + 0.3 + labelLift(record.outfit)
       if (bubble) bubble.position.y = bubbleY()
@@ -666,6 +679,10 @@ export class AvatarFactory {
     placeLabels()
 
     return Object.assign(rig, {
+      setName: (name: string) => {
+        setName(name)
+        placeLabels()
+      },
       setLabelVisible(visible: boolean) {
         if (label) label.visible = visible
         labelOn = visible || opts.local
@@ -695,8 +712,7 @@ export class AvatarFactory {
       dispose: () => {
         this.records.delete(record)
         root.removeFromParent()
-        labelTex?.dispose()
-        labelMat?.dispose()
+        clearLabel()
         clearBubble()
       },
     })
