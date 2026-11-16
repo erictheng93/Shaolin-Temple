@@ -51,4 +51,29 @@ describe('AdaptiveQuality', () => {
     run(a, 0, 45_000, 33)
     expect(a.level).toBe(0)
   })
+
+  it('minLevel 以上不再升級（觸控裝置不升到完整解析度）', () => {
+    const a = new AdaptiveQuality(1, 1)
+    let now = run(a, 0, 20_000, 33)
+    expect(a.level).toBe(1)
+    now = run(a, now, 5_000, 60)
+    const lowered = a.level
+    expect(lowered).toBeGreaterThan(1)
+    run(a, now, 200_000, 33) // 降下去之後可以升回，但只到 minLevel
+    expect(a.level).toBe(1)
+    expect(new AdaptiveQuality(0, 2).level).toBe(2)
+  })
+
+  it('穩定很久之後才變慢視為過熱：隔 10 分鐘才升回，不是 30 秒', () => {
+    const a = new AdaptiveQuality()
+    let now = run(a, 0, 180_000, 33)
+    expect(a.level).toBe(0)
+    now = run(a, now, 3_000, 60)
+    const hot = a.level
+    expect(hot).toBeGreaterThanOrEqual(1)
+    now = run(a, now, 300_000, 33) // 順暢 5 分鐘：仍不升
+    expect(a.level).toBe(hot)
+    run(a, now, 320_000, 33)
+    expect(a.level).toBe(hot - 1)
+  })
 })
