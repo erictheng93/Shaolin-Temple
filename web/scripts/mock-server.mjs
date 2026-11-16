@@ -39,7 +39,7 @@ const pick = ([a, b]) => a + Math.random() * (b - a)
 // 這裡刻意不 import protocol.ts（它的相對匯入沒有副檔名，Node 直接載入會失敗），規則重寫一份，兩邊由測試與正式伺服器的固定資料對照。
 const CHAT_MAX_CHARS = 80
 const sanitizeChat = (text) =>
-  Array.from(String(text).replace(/\s+/gu, ' ').replace(/[\p{Cc}\p{Bidi_Control}]/gu, '').trim())
+  Array.from(String(text).replace(/[​-‏‪-‮⁦-⁩﻿]/gu, '').replace(/\s+/gu, ' ').replace(/\p{Cc}/gu, '').trim())
     .slice(0, CHAT_MAX_CHARS)
     .join('')
     .trim()
