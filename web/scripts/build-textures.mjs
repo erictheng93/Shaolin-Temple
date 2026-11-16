@@ -2,7 +2,8 @@
 //   assets/textures/*.jpg  → public/textures/*.ktx2（場景材質）
 //   assets/lightmaps/*.png → public/lightmaps/*.ktx2（庭院烘焙貼圖，RGBA 線性：RGB = AO、A = 太陽可見度）
 //   assets/statues/*.png   → public/statues/*.ktx2（殿內神像的底色 sRGB 與法線，由 process-statues 產生）
-// 用法：node scripts/build-textures.mjs [textures|lightmaps|statues]（不給參數全部都做）。
+//   assets/backdrops/*.png → public/backdrops/*.ktx2（殿門外景 sRGB，由 capture-doorway 產生）
+// 用法：node scripts/build-textures.mjs [textures|lightmaps|statues|backdrops]（不給參數全部都做）。
 // 需要 Khronos KTX-Software 的 ktx 執行檔：放在 PATH，或以環境變數 KTX 指定路徑。
 // ponytail: 全部用 ETC1S，下載量與 JPG 相近；法線若看得出色塊再改 UASTC（下載量約 4 倍）。
 import { execFileSync } from 'node:child_process'
@@ -44,6 +45,12 @@ const jobs = [
       // 但標準畫質三張就要 3.1 MB（ETC1S 0.8 MB），超出手機的下載預算。
       return ['create', '--format', 'R8G8B8_UNORM', '--assign-tf', 'linear', '--encode', 'basis-lz', '--clevel', '4', '--qlevel', '255', '--generate-mipmap']
     },
+  },
+  {
+    // 殿門外景（capture-doorway 從庭院場景擷取的全景圖，已含色調映射，sRGB）
+    name: 'backdrops',
+    ext: '.png',
+    args: () => ['create', '--format', 'R8G8B8_SRGB', '--assign-tf', 'srgb', '--assign-primaries', 'bt709', '--encode', 'basis-lz', '--clevel', '4', '--qlevel', '255', '--generate-mipmap'],
   },
 ]
 
