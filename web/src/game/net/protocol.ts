@@ -57,16 +57,32 @@ export interface PlayerSnapshot {
   action?: { id: string; startedAt: number }
   /** 所在場景（'courtyard'、'hall'…）；省略時視為 'courtyard'。 */
   zone?: string
-  /** 衣裝編號（0..OUTFIT_COUNT-1）。伺服器一律送出；省略（舊伺服器）時視為 0。 */
+  /**
+   * 衣裝編號。伺服器一律送出；省略（舊伺服器）時視為 0。下行只要是 0～255 的整數就接受（見 isOutfitWire），
+   * 不認得的編號（比這個分頁新的衣裝）顯示時經 normalizeOutfit 落回預設衣裝。
+   */
   outfit?: number
 }
 
-/** 衣裝數量：編號 0..OUTFIT_COUNT-1。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送；與 Rust 的 OUTFIT_COUNT 由固定資料鎖住。 */
-export const OUTFIT_COUNT = 6
+/**
+ * 衣裝數量：編號 0..OUTFIT_COUNT-1，新增衣裝只能加在尾端。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送；
+ * 與 Rust 的 OUTFIT_COUNT 由固定資料鎖住。
+ */
+export const OUTFIT_COUNT = 8
 
-/** 是不是合法的衣裝編號（範圍內的整數）。 */
+/** 是不是這個版本認得的衣裝編號（範圍內的整數）。上行（hello、outfit）只送這種值，伺服器同樣嚴格驗證。 */
 export const isOutfit = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < OUTFIT_COUNT
+
+/** 下行衣裝編號的上限（含）。 */
+export const MAX_WIRE_OUTFIT = 255
+
+/**
+ * 下行（快照、outfit 廣播）的衣裝編號是否有效：0～MAX_WIRE_OUTFIT 的整數即可。
+ * 刻意比 isOutfit 寬鬆：伺服器新增衣裝後，還沒重新整理的舊分頁仍收得到 welcome／join，不認得的編號顯示為預設衣裝。
+ */
+export const isOutfitWire = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_WIRE_OUTFIT
 
 export type ClientMessage =
   /** outfit：目前衣裝；缺少或無效時伺服器當作 0（恢復連線時缺少則沿用保存的衣裝）。 */
@@ -174,7 +190,7 @@ function isPlayer(v: unknown): v is PlayerSnapshot {
   if (!isObj(v)) return false
   if (!isStr(v.id) || !isShortId(v.n) || !isStr(v.name) || !isNum(v.x) || !isNum(v.z) || !isNum(v.heading)) return false
   if (v.zone !== undefined && !isStr(v.zone)) return false
-  if (v.outfit !== undefined && !isOutfit(v.outfit)) return false
+  if (v.outfit !== undefined && !isOutfitWire(v.outfit)) return false
   if (v.action === undefined) return true
   return isObj(v.action) && isStr(v.action.id) && isNum(v.action.startedAt)
 }
@@ -282,7 +298,7 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
     case 'chat':
       return isStr(m.id) && isStr(m.text) && isNum(m.at) ? (m as ServerMessage) : null
     case 'outfit':
-      return isStr(m.id) && isOutfit(m.outfit) ? (m as ServerMessage) : null
+      return isStr(m.id) && isOutfitWire(m.outfit) ? (m as ServerMessage) : null
     case 'error':
       return isStr(m.code) && isStr(m.message) ? (m as ServerMessage) : null
     default:

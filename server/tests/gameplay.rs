@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use temple_server::{
     ServerOptions, app_with_options,
     protocol::{
-        BatchKind, FRAME_ACTION, PROTOCOL_VERSION, decode_action, decode_batch, unwrap_started_at,
+        BatchKind, FRAME_ACTION, OUTFIT_COUNT, PROTOCOL_VERSION, decode_action, decode_batch,
+        unwrap_started_at,
     },
     room::RoomConfig,
 };
@@ -439,9 +440,15 @@ async fn hello_outfit_defaults_to_zero_when_missing_or_invalid_and_never_rejects
     let server = server_with(options()).await;
     let mut a = connect(&server).await;
     assert_eq!(hello_with(&mut a, None, Some(json!(4))).await.outfit, 4);
-    for (i, bad) in [json!(6), json!(-1), json!(1.5), json!("2"), json!(null)]
-        .into_iter()
-        .enumerate()
+    for (i, bad) in [
+        json!(OUTFIT_COUNT),
+        json!(-1),
+        json!(1.5),
+        json!("2"),
+        json!(null),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let mut ws = connect(&server).await;
         let me = hello_with(&mut ws, None, Some(bad.clone())).await;
