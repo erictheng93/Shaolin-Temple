@@ -10,6 +10,9 @@ const POSITION_PER_SEC: f64 = 15.0;
 const ACTION_PER_SEC: f64 = 2.0;
 /// 位置訊息只容許很小的突發量，持續每秒 30 則時才會被壓到約 15 則。
 const POSITION_BURST: f64 = 3.0;
+/// action 的突發量：正常操作最多連續 3 則（誦經剛開始就按別的動作＝chant → chant_end → 新動作），
+/// 各動作的冷卻讓第 4 則不會緊接著出現。每秒補充仍是 ACTION_PER_SEC。
+const ACTION_BURST: f64 = 3.0;
 /// 兩次丟棄相隔不超過這段時間，才算「連續」超出。
 const STREAK_GAP: Duration = Duration::from_secs(1);
 /// 連續超出多久就關閉連線。
@@ -64,7 +67,7 @@ impl RateLimiter {
         Self {
             all: Bucket::new(ALL_PER_SEC, ALL_PER_SEC, now),
             position: Bucket::new(POSITION_BURST, POSITION_PER_SEC, now),
-            action: Bucket::new(ACTION_PER_SEC, ACTION_PER_SEC, now),
+            action: Bucket::new(ACTION_BURST, ACTION_PER_SEC, now),
             close_after,
             streak: None,
             dropped: 0,
@@ -166,12 +169,18 @@ mod tests {
     async fn action_and_total_limits() {
         let t0 = Instant::now();
         let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
-        let verdicts: Vec<_> = (0..4).map(|_| limiter.admit(&act(), t0)).collect();
+        let verdicts: Vec<_> = (0..5).map(|_| limiter.admit(&act(), t0)).collect();
         assert_eq!(
             verdicts,
-            [Verdict::Pass, Verdict::Pass, Verdict::Drop, Verdict::Drop]
+            [
+                Verdict::Pass,
+                Verdict::Pass,
+                Verdict::Pass,
+                Verdict::Drop,
+                Verdict::Drop
+            ]
         );
-        // 全部訊息：30 則通過（其中 2 則 action 已用掉），第 31 則被丟棄
+        // 全部訊息：30 則通過，第 31 則被丟棄
         let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
         let passed = (0..31)
             .filter(|_| limiter.admit(&ping(), t0) == Verdict::Pass)
