@@ -48,7 +48,7 @@
    ALLOWED_ORIGINS=https://game.example.com
    IMAGE_TAG=<要部署的 commit 完整 SHA>
    ```
-   缺一時 compose 會直接報錯，不會以錯誤設定啟動。`VITE_WS_URL` 不在這裡：它在 CI 建置時編進前端映像，要先到 GitHub 儲存庫 Settings → Secrets and variables → Actions → **Variables** 新增 `VITE_WS_URL=wss://game.example.com/ws`（未設定時 images 工作流程會失敗並說明）。
+   缺一時 compose 會直接報錯，不會以錯誤設定啟動。`VITE_WS_URL` 不在這裡：它在 CI 建置時編進前端映像，要先到 GitHub 儲存庫 Settings → Secrets and variables → Actions → **Variables** 新增 `VITE_WS_URL=wss://game.example.com/ws`（未設定時 images 工作流程只推送伺服器映像，不建置前端映像）。
 6. **Domains 分頁**新增兩筆（HTTPS 開、Certificate 選 letsencrypt）：
 
    | Host | Service Name | Container Port | Path | Strip Path |
@@ -103,6 +103,56 @@
 
 壓縮：只有 nginx 內建的 gzip（文字、wasm、glb）；`.ktx2` 已是 Basis 超壓縮，不壓。沒有 brotli（需要額外模組，收益有限；若開 Cloudflare 代理會由它提供）。
 
+## POC：Cloudflare Pages ＋ 本機後端（Cloudflare Tunnel）
+
+2026-11-16 起的試行做法，正式主機到位前使用。Dokploy 的流程（以上各節）保留不變。
+
+```
+瀏覽器 ──https──▶ Cloudflare Pages          temple.wishly.tw（靜態檔）
+瀏覽器 ──wss────▶ Cloudflare ──Tunnel──▶ 開發機 localhost:8080（temple-server）
+                                         temple-ws.wishly.tw，只開放 /ws
+```
+
+- 前後端是兩個主機名（Pages 與 Tunnel 不能共用同一個主機名的不同路徑）：`VITE_WS_URL=wss://temple-ws.wishly.tw/ws`、`ALLOWED_ORIGINS=https://temple.wishly.tw`。
+- 快取標頭在 [web/public/_headers](../web/public/_headers)，規則與 `nginx.conf` 相同；改其中一份要同步另一份。SPA 回退是 Pages 的預設行為（沒有 `404.html` 時）。
+- 限制：開發機睡眠或關機就斷線；延遲多一段家用線路；這個環境的量測不可當作容量聲明。
+
+### 前端部署（Direct Upload，在 `web/` 執行）
+
+```
+VITE_WS_URL=wss://temple-ws.wishly.tw/ws npx vite build      # PowerShell：$env:VITE_WS_URL = '...'; npx vite build
+npx wrangler pages deploy dist --project-name shaolin-temple --branch main
+```
+
+第一次要先 `npx wrangler login` 與 `npx wrangler pages project create shaolin-temple --production-branch main`，並在 Cloudflare 後台 Workers & Pages → shaolin-temple → Custom domains 加上 `temple.wishly.tw`。目前是手動部署，推 `main` 不會自動更新。
+
+### 後端與 Tunnel（開發機上）
+
+1. 一次性設定（需要 `cloudflared`）：
+   ```
+   cloudflared tunnel login                                  # 瀏覽器授權，選 wishly.tw
+   cloudflared tunnel create temple                          # 記下輸出的 Tunnel ID
+   cloudflared tunnel route dns temple temple-ws.wishly.tw   # 建立 CNAME
+   ```
+2. 設定檔 `~/.cloudflared/temple.yml`（Windows 是 `%USERPROFILE%\.cloudflared	emple.yml`）。只放行 `/ws`，`/metrics` 與 `/healthz` 不對外：
+   ```yaml
+   tunnel: <Tunnel ID>
+   credentials-file: <家目錄>/.cloudflared/<Tunnel ID>.json
+   ingress:
+     - hostname: temple-ws.wishly.tw
+       path: ^/ws$
+       service: http://localhost:8080
+     - service: http_status:404
+   ```
+3. 每次開服兩個終端機：
+   ```
+   cd server && ALLOWED_ORIGINS=https://temple.wishly.tw cargo run --release --bin temple-server
+   cloudflared tunnel --config ~/.cloudflared/temple.yml run
+   ```
+   PowerShell 的環境變數寫法是 `$env:ALLOWED_ORIGINS = 'https://temple.wishly.tw'`。
+
+驗證沿用「上線後驗證清單」，把網址換成上面兩個主機名；`curl https://temple-ws.wishly.tw/metrics` 應為 404。
+
 ## 正式環境壓測
 
 目的：在 1 vCPU／2 GiB 上重跑 T7／T8 情境，並判斷餘裕。
@@ -133,7 +183,7 @@
 
 - **映像曾在本機實際建置並驗證**（Docker Desktop）：`temple-server`（27.8 MB）與 `temple-web`（70.9 MB）；但**沒有在 Dokploy 與真實主機上部署**，Traefik 路由、Preview Compose 輸出、Let's Encrypt、wss 全部未實測。
 - Dokploy 的 Domains 分頁對 compose 的 `Path` 欄位實際產生的規則、`IMAGE_TAG` 是否能插值到 compose 的 `image:`，只有官方文件的概述，需在第一次部署時核對 Preview Compose。若環境變數沒插值，退而求其次：在 Dokploy 設定 `.env` 檔。
-- 建置已移到 CI（`images.yml`），主機不再編譯；images 工作流程與 GHCR 推送、主機拉取映像都**尚未實際跑過**。
+- 建置已移到 CI（`images.yml`），主機不再編譯；主機拉取映像**尚未實際跑過**。前端映像只在設定了儲存庫變數 `VITE_WS_URL` 時建置。
 - `loadtest` 不支援 `wss://`，TLS 的 CPU 成本不在壓測內；要量需替工具加 TLS 功能（新增依賴，未做）。
 - Traefik 升級後 WebSocket 閒置逾時的行為未實測；以心跳間隔（20 秒）規避。
 - 沒有監控與告警（Prometheus 抓取、磁碟與記憶體警示），也沒有備份需求（目前無持久化，T10 才有）。
