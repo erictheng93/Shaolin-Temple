@@ -159,8 +159,3 @@ export function effectivePreset(level: QualityLevel, net?: NetworkInfo): Quality
   const slow = net?.saveData === true || ['slow-2g', '2g', '3g'].includes(net?.effectiveType ?? '')
   return slow ? { ...preset, textureSize: 512, statueTier: 'std' } : preset
 }
-
-/** 某個畫質設定實際會載入的資產預設：只有 `auto` 才依網路狀況降級。GameCore 與設定面板共用，兩邊判斷一致。 */
-export function assetPresetFor(setting: QualitySetting): QualityPreset {
-  return effectivePreset(resolveQuality(setting), setting === 'auto' ? readNetworkInfo() : undefined)
-}
