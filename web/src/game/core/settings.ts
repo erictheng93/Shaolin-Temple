@@ -1,3 +1,4 @@
+import { detectLocale, isLocale, type Locale } from '../../i18n'
 import { DEFAULT_OUTFIT, normalizeOutfit, randomOutfit } from '../world/outfits'
 
 export type QualityLevel = 'low' | 'medium' | 'high'
@@ -49,6 +50,8 @@ export interface Settings {
   muted: boolean
   playerName: string
   showStats: boolean
+  /** 介面語言。舊存檔沒有這欄時依瀏覽器語言推測（detectLocale）。 */
+  locale: Locale
   /** 衣裝編號（world/outfits.ts 的 OUTFITS 索引）。 */
   outfit: number
 }
@@ -61,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   muted: false,
   playerName: '',
   showStats: false,
+  locale: 'zh-Hant',
   outfit: DEFAULT_OUTFIT,
 }
 
@@ -95,6 +99,7 @@ export function loadSettings(random: () => number = Math.random): Settings {
     muted: typeof r.muted === 'boolean' ? r.muted : d.muted,
     playerName: typeof r.playerName === 'string' ? r.playerName.slice(0, 16) : d.playerName,
     showStats: typeof r.showStats === 'boolean' ? r.showStats : d.showStats,
+    locale: isLocale(r.locale) ? r.locale : detectLocale(),
     outfit: r.outfit === undefined ? randomOutfit(random) : normalizeOutfit(r.outfit),
   }
   if (r.outfit === undefined) saveSettings(s)

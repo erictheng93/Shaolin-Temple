@@ -1,3 +1,4 @@
+import type { MessageKey } from '../../i18n'
 import { CENSER, HALL, OBSTACLES, PLAYER_RADIUS, SPAWN, WORLD_BOUNDS, type Rect } from './layout'
 
 /**
@@ -25,8 +26,8 @@ export interface Portal {
 
 export interface ZoneDef {
   id: ZoneId
-  /** 顯示名稱（進入時提示）。 */
-  name: string
+  /** 顯示名稱的字典 key（進入時提示，顯示當下才翻譯）。 */
+  name: MessageKey
   bounds: Rect
   obstacles: ReadonlyArray<Rect>
   spawn: Pose
@@ -160,7 +161,7 @@ const HALL_DOOR: Rect = { minX: -1.4, maxX: 1.4, minZ: 8.15, maxZ: 9 }
 export const ZONES: Record<ZoneId, ZoneDef> = {
   courtyard: {
     id: 'courtyard',
-    name: '庭院',
+    name: 'zone.courtyard',
     bounds: WORLD_BOUNDS,
     obstacles: OBSTACLES,
     spawn: SPAWN,
@@ -172,7 +173,7 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
   },
   hall: {
     id: 'hall',
-    name: '少林寺',
+    name: 'zone.hall',
     bounds: { minX: -7.4, maxX: 7.4, minZ: -5.2, maxZ: 8.6 },
     obstacles: [
       HALL_ALTAR,

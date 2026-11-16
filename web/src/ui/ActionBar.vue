@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { UiAction } from '../game/GameCore'
+import { t } from '../i18n'
 
 const props = defineProps<{ actions: UiAction[] }>()
 defineEmits<{ perform: [id: string] }>()
@@ -62,7 +63,7 @@ const progress = (a: UiAction) => (a.readyAt > now.value ? (a.readyAt - now.valu
     ref="nav"
     class="bar"
     :class="{ 'fade-left': fadeLeft, 'fade-right': fadeRight }"
-    aria-label="動作"
+    :aria-label="t('actions.label')"
     @scroll.passive="updateFade"
   >
     <button
@@ -176,6 +177,20 @@ const progress = (a: UiAction) => (a.readyAt > now.value ? (a.readyAt - now.valu
 .label {
   font-size: 0.75rem;
   letter-spacing: 0.1em;
+}
+
+/* 英文、越南文的標籤較長：縮小字級、取消字距，最多兩行置中（按鈕是圓形，寬度約 50px） */
+.label:is(:lang(en), :lang(vi)) {
+  max-width: 54px;
+  font-size: 0.64rem;
+  line-height: 1.1;
+  letter-spacing: 0;
+  text-align: center;
+}
+
+.label:lang(ja) {
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
 }
 
 /* 手機直式：五個按鈕在 390 寬（含 360 寬）排得下；更窄時可橫向捲動 */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ActionRegistry, type GameActionDef } from './ActionRegistry'
 
-const def: GameActionDef = { id: 'bow', label: '合十', cooldownMs: 1000, animation: 'bow', durationMs: 500 }
+const def: GameActionDef = { id: 'bow', label: 'action.bow', cooldownMs: 1000, animation: 'bow', durationMs: 500 }
 
 describe('ActionRegistry', () => {
   it('冷卻期間拒絕重複執行', () => {

@@ -10,6 +10,7 @@ import {
   bellQuietLeft,
   pickBellStation,
 } from '../../world/bell'
+import { t } from '../../../i18n'
 import type { GameplayApi } from '../types'
 
 /** 往後拉繩時身體後仰、往前推時前傾的角度（弧度），與撞木的擺動同步（world/bell.ts 的時間軸）。 */
@@ -62,16 +63,16 @@ export function installBell(api: GameplayApi): () => void {
     api.animations.registerClip('bellStrike', bellStrikeClip),
     api.actions.register({
       id: 'bell',
-      label: '敲鐘',
+      label: 'action.bell',
       glyph: '🔔',
       cooldownMs: BELL_COOLDOWN_MS,
       animation: 'bellStrike',
       durationMs: BELL_MS,
       locksMovement: true,
-      unavailableReason: (zone) => (zone === 'courtyard' ? null : '鐘亭在庭院，出殿後再敲'),
+      unavailableReason: (zone) => (zone === 'courtyard' ? null : t('reason.bellInCourtyard')),
       approach: (ctx) => {
         const wait = bellQuietLeft(lastHitAt, performance.now())
-        if (wait > 0) return `鐘聲未歇，約 ${Math.ceil(wait / 1000)} 秒後再敲`
+        if (wait > 0) return t('reason.bellRinging', { seconds: Math.ceil(wait / 1000) })
         return pickBellStation(ctx)
       },
     }),

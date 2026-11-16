@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { GameCore, type UiState } from './game/GameCore'
 import { assetPresetFor, loadSettings, saveSettings } from './game/core/settings'
+import { setLocale, t } from './i18n'
 import EntryScreen from './ui/EntryScreen.vue'
 import TopBar from './ui/TopBar.vue'
 import ActionBar from './ui/ActionBar.vue'
@@ -13,6 +14,7 @@ import ToastHost from './ui/ToastHost.vue'
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const settings = reactive(loadSettings())
+setLocale(settings.locale)
 // 本次載入時實際採用的資產預設（含自動畫質的網路降級，與 GameCore 建構時相同）；之後切換畫質，部分項目要重新載入才生效。
 const loadedPreset = assetPresetFor(settings.quality)
 // UI 狀態整包替換，用 shallowRef 避免深層響應式追蹤。
@@ -20,7 +22,7 @@ const ui = shallowRef<UiState | null>(null)
 const entered = ref(false)
 const entering = ref(false)
 const settingsOpen = ref(false)
-const fatal = ref<string | null>(null)
+const fatal = ref(false)
 const toasts = ref<Array<{ id: number; text: string }>>([])
 let toastId = 0
 
@@ -48,7 +50,7 @@ onMounted(() => {
     if (import.meta.env.DEV) (window as unknown as { __game: GameCore }).__game = core
   } catch (err) {
     console.error(err)
-    fatal.value = '此裝置或瀏覽器無法啟用 WebGL，請更新瀏覽器或改用其他裝置。'
+    fatal.value = true
   }
 })
 
@@ -69,6 +71,8 @@ watch(
   settings,
   (s) => {
     saveSettings(s)
+    // 先切換語言再套用：applySettings 會強制推送 UiState，動作列與 HUD 的字串在推送當下以新語言解析。
+    setLocale(s.locale)
     core?.applySettings({ ...s })
   },
   { deep: true },
@@ -79,7 +83,7 @@ async function enter(name: string) {
   entering.value = true
   settings.playerName = name
   try {
-    await core.enter(name || '訪客')
+    await core.enter(name || t('player.visitor'))
     entered.value = true
   } finally {
     entering.value = false
@@ -93,7 +97,7 @@ function toggleMute() {
 
 <template>
   <main class="stage">
-    <canvas ref="canvas" class="scene" aria-label="寺院場景，以方向鍵、虛擬搖桿或滑鼠點擊地面移動，拖曳旋轉視角" tabindex="0" />
+    <canvas ref="canvas" class="scene" :aria-label="t('app.sceneLabel')" tabindex="0" />
     <!-- 場景切換黑幕；淡出時間需與 GameCore 的 FADE_MS 一致 -->
     <div class="fade" :class="{ on: ui?.fading }" aria-hidden="true" />
 
@@ -115,6 +119,7 @@ function toggleMute() {
     <Transition name="fade">
       <EntryScreen
         v-if="!entered && !fatal"
+        v-model:locale="settings.locale"
         :initial-name="settings.playerName"
         :outfit="settings.outfit"
         :busy="entering"
@@ -124,8 +129,8 @@ function toggleMute() {
       />
     </Transition>
 
-    <div v-if="ui?.contextLost" class="notice panel" role="status">畫面暫時中斷，正在恢復…</div>
-    <div v-if="fatal" class="notice panel" role="alert">{{ fatal }}</div>
+    <div v-if="ui?.contextLost" class="notice panel" role="status">{{ t('app.contextLost') }}</div>
+    <div v-if="fatal" class="notice panel" role="alert">{{ t('app.webglFailed') }}</div>
 
     <ToastHost :toasts="toasts" />
   </main>
