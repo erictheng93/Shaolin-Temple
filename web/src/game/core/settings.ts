@@ -123,3 +123,28 @@ export function detectQuality(info: DeviceInfo = readDeviceInfo()): QualityLevel
 export function resolveQuality(q: QualitySetting): QualityLevel {
   return q === 'auto' ? detectQuality() : q
 }
+
+export interface NetworkInfo {
+  /** `navigator.connection.saveData`：使用者開啟了資料節省模式。 */
+  saveData?: boolean
+  /** `navigator.connection.effectiveType`：'slow-2g' | '2g' | '3g' | '4g'。 */
+  effectiveType?: string
+}
+
+/** 讀取目前網路狀況。Safari、Firefox 沒有 `navigator.connection`，回傳空物件（視為不受限）。 */
+export function readNetworkInfo(): NetworkInfo {
+  const c = (navigator as Navigator & { connection?: NetworkInfo }).connection
+  return { saveData: c?.saveData, effectiveType: c?.effectiveType }
+}
+
+/**
+ * 依網路狀況取得實際用來載入資產的預設（純函式，不修改 `QUALITY_PRESETS`）：
+ * 資料節省模式或 slow-2g／2g／3g 時，把下載量大的欄位降到最小（貼圖 512、神像 std），
+ * 幀率、解析度與陰影與網路無關，維持不變。
+ * 呼叫端只在畫質設定為 `auto` 時傳入 `net`；使用者明確選了某個畫質就不傳，照選擇載入。
+ */
+export function effectivePreset(level: QualityLevel, net?: NetworkInfo): QualityPreset {
+  const preset = QUALITY_PRESETS[level]
+  const slow = net?.saveData === true || ['slow-2g', '2g', '3g'].includes(net?.effectiveType ?? '')
+  return slow ? { ...preset, textureSize: 512, statueTier: 'std' } : preset
+}
