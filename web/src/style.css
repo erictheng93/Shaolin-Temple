@@ -82,6 +82,21 @@ button {
   -webkit-backdrop-filter: blur(10px);
 }
 
+/*
+ * 觸控裝置不用毛玻璃：底下的 canvas 每幀都在變，合成器每幀都得重新模糊，手機上是持續的 GPU 負擔（發熱），
+ * 而且不在 rAF 的幀時間裡，動態畫質看不到。改以較不透明的底色維持文字對比。
+ */
+@media (pointer: coarse) {
+  :root {
+    --panel: rgba(24, 26, 32, 0.78);
+  }
+
+  * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
 .icon-btn {
   display: inline-grid;
   place-items: center;
