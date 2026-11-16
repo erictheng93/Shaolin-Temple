@@ -28,6 +28,17 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
   high: { maxPixelRatio: 2, maxPixels: 2560 * 1440, activeFps: 60, antialias: true, shadowMapSize: 2048, textureSize: 1024, detailMaps: 2, statueTier: 'hi' },
 }
 
+/** 兩個畫質預設在「載入時決定」的欄位是否不同：不同的話，切換後要重新載入才會完整套用。 */
+export function needsReload(a: QualityPreset, b: QualityPreset): boolean {
+  return (
+    a.antialias !== b.antialias ||
+    a.shadowMapSize !== b.shadowMapSize ||
+    a.textureSize !== b.textureSize ||
+    a.detailMaps !== b.detailMaps ||
+    a.statueTier !== b.statueTier
+  )
+}
+
 export interface Settings {
   quality: QualitySetting
   masterVolume: number

@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import type { QualityLevel, Settings } from '../game/core/settings'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { QUALITY_PRESETS, needsReload, resolveQuality, saveSettings, type QualityLevel, type Settings } from '../game/core/settings'
 
 // settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。
-const props = defineProps<{ settings: Settings; activeQuality: QualityLevel }>()
+const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedQuality: QualityLevel }>()
 const emit = defineEmits<{ close: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
@@ -43,6 +43,14 @@ onMounted(() => {
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 const s = props.settings
+
+// 貼圖、陰影與神像在載入時決定；選到的畫質與本次載入的內容不同時，提示重新載入。
+const reloadNeeded = computed(() => needsReload(QUALITY_PRESETS[props.loadedQuality], QUALITY_PRESETS[resolveQuality(s.quality)]))
+
+function reloadNow() {
+  saveSettings(s) // 父層 watch 是非同步儲存，重新載入前先確實寫入
+  location.reload()
+}
 </script>
 
 <template>
@@ -61,7 +69,13 @@ const s = props.settings
             <span>{{ q === 'auto' ? `自動（${qualityLabels[activeQuality]}）` : qualityLabels[q] }}</span>
           </label>
         </div>
-        <p class="note">畫面變慢時會自動降低解析度與遠處角色的細節，順暢後再恢復。畫質變更於重新整理後完整生效。</p>
+        <p class="note">畫面變慢時會自動降低解析度與遠處角色的細節，順暢後再恢復。</p>
+        <div role="status" aria-live="polite">
+          <template v-if="reloadNeeded">
+            <p class="note">貼圖、陰影與神像要重新載入後才會套用。</p>
+            <button class="reload-btn" type="button" @click="reloadNow">重新載入並套用</button>
+          </template>
+        </div>
       </fieldset>
 
       <fieldset>
@@ -238,6 +252,24 @@ legend {
   font-size: 0.78rem;
   line-height: 1.6;
   color: var(--ink-faint);
+}
+
+.reload-btn {
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 6px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.reload-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .slider {
