@@ -31,13 +31,18 @@ const PAUSE_MS = 1000
 const GRACE_MS = 3000
 
 export class AdaptiveQuality {
-  level = 0
+  level: number
   private graceUntil = -1
   private windowStart = -1
   private frames = 0
   private goodSince = -1
   private recoverMs = RECOVER_MS
   private raisedAt = -Infinity
+
+  /** startLevel：起始等級（觸控裝置自動畫質時從 1 開始，頭幾秒不致超出預算；順暢約 30 秒後會升回）。 */
+  constructor(startLevel = 0) {
+    this.level = Math.min(Math.max(0, Math.floor(startLevel)), ADAPTIVE_LEVELS.length - 1)
+  }
 
   /** 每畫一幀呼叫一次。now 與 intervalMs（與上一幀的間隔）單位為毫秒；回傳等級是否改變。 */
   sample(now: number, intervalMs: number, targetMs: number): boolean {
