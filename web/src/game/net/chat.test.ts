@@ -21,6 +21,8 @@ describe('聊天協定', () => {
     // U+202E 覆寫、U+202C 結束、U+200F 標記、U+2066 隔離
     expect(sanitizeChat(`x${c(0x202e)}evil${c(0x202c)}${c(0x200f)}${c(0x2066)}y`)).toBe('xevily')
     expect(sanitizeChat(` ${c(10)}${c(0)} `)).toBe('')
+    // 零寬字元與 BOM 也移除，且不會在兩個空白之間留下雙空格（與伺服器 clean_chat 一致）
+    expect(sanitizeChat(`a ${c(0x200b)} b${c(0xfeff)}${c(0x200d)}c`)).toBe('a bc')
     expect(Array.from(sanitizeChat('字'.repeat(200)))).toHaveLength(CHAT_MAX_CHARS)
     // 代理對（emoji）算一個字元，不會被截成半個
     const emoji = sanitizeChat('😀'.repeat(100))
