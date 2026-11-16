@@ -124,7 +124,11 @@ VITE_WS_URL=wss://temple-ws.wishly.tw/ws npx vite build      # PowerShell：$env
 npx wrangler pages deploy dist --project-name shaolin-temple --branch main
 ```
 
-第一次要先 `npx wrangler login` 與 `npx wrangler pages project create shaolin-temple --production-branch main`，並在 Cloudflare 後台 Workers & Pages → shaolin-temple → Custom domains 加上 `temple.wishly.tw`。目前是手動部署，推 `main` 不會自動更新。
+第一次要先 `npx wrangler login`（用擁有 `wishly.tw` 的 Cloudflare 帳號）與 `npx wrangler pages project create shaolin-temple --production-branch main --force`（wrangler 4.156 起不加 `--force` 會改走 Workers 而失敗），並在 Cloudflare 後台 Workers & Pages → shaolin-temple → Custom domains 加上 `temple.wishly.tw`。目前是手動部署，推 `main` 不會自動更新。
+
+換過 wrangler 登入帳號後若出現 `Authentication error [code: 10000]`：刪除 `web/node_modules/.cache/wrangler/` 裡的 `wrangler-account.json` 與 `pages.json`（它們記著前一個帳號）。
+
+2026-11-16 已實際部署並驗證：快取標頭、`.ktx2`／`.glb` 的 Content-Type、SPA 回退、wss 連線（101）、錯誤來源 403、`/metrics` 與 `/healthz` 經 Tunnel 為 404、瀏覽器進場顯示「已連線」。
 
 ### 後端與 Tunnel（開發機上）
 
@@ -149,7 +153,7 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
    cd server && ALLOWED_ORIGINS=https://temple.wishly.tw cargo run --release --bin temple-server
    cloudflared tunnel --config ~/.cloudflared/temple.yml run
    ```
-   PowerShell 的環境變數寫法是 `$env:ALLOWED_ORIGINS = 'https://temple.wishly.tw'`。
+   PowerShell 的環境變數寫法是 `$env:ALLOWED_ORIGINS = 'https://temple.wishly.tw'`。 8080 被占用（例如同時開著 `npm run mock`）時加 `PORT=8081`，並把 `temple.yml` 的 `service` 改成同一個埠。
 
 驗證沿用「上線後驗證清單」，把網址換成上面兩個主機名；`curl https://temple-ws.wishly.tw/metrics` 應為 404。
 
