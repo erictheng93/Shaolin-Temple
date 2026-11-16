@@ -1,3 +1,4 @@
+import { t } from '../../i18n'
 import { CENSERS, HALL_CUSHIONS, type CenserDef, type Pose, type ZoneId } from './zones'
 
 /**
@@ -51,25 +52,25 @@ export function pickFreeSpot(spots: ReadonlyArray<Pose>, ctx: SpotContext, salt:
 
 /** 跪拜：殿內最近的空蒲團。不在殿內或全部有人時回傳原因。 */
 export function pickCushion(ctx: SpotContext): Pose | string {
-  if (ctx.zone !== 'hall') return '跪拜要在殿內的蒲團上進行'
-  return pickFreeSpot(HALL_CUSHIONS, ctx, 'cushion') ?? '蒲團都有人了，請稍候再試'
+  if (ctx.zone !== 'hall') return t('reason.prostrateInHall')
+  return pickFreeSpot(HALL_CUSHIONS, ctx, 'cushion') ?? t('reason.cushionsTaken')
 }
 
 /** 誦經：與跪拜相同，走到殿內最近的空蒲團（同樣的偏移，選法一致）。 */
 export function pickChantCushion(ctx: SpotContext): Pose | string {
-  if (ctx.zone !== 'hall') return '誦經要在殿內的蒲團上進行，請先進殿'
-  return pickFreeSpot(HALL_CUSHIONS, ctx, 'cushion') ?? '蒲團都有人了，請稍候再試'
+  if (ctx.zone !== 'hall') return t('reason.chantInHall')
+  return pickFreeSpot(HALL_CUSHIONS, ctx, 'cushion') ?? t('reason.cushionsTaken')
 }
 
 /** 上香：依香爐由近到遠，找第一個還有空站位的香爐。 */
 export function pickCenserSpot(ctx: SpotContext): Pose | string {
   const censers = CENSERS.filter((c) => c.zone === ctx.zone).sort((a, b) => dist(ctx, a) - dist(ctx, b))
-  if (censers.length === 0) return '這裡沒有香爐'
+  if (censers.length === 0) return t('reason.noCenser')
   for (const c of censers) {
     const spot = pickFreeSpot(c.spots, ctx, c.id)
     if (spot) return spot
   }
-  return '香爐前都有人，請稍候再試'
+  return t('reason.censersTaken')
 }
 
 /** 上香的人插香時，由他的位置推出是哪個香爐：同場景中站位離他最近、且在 maxDistance 內的香爐。 */

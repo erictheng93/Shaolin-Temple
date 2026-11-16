@@ -1,35 +1,42 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { assetPresetFor, needsReload, saveSettings, type QualityLevel, type QualityPreset, type Settings } from '../game/core/settings'
+import { assetPresetFor, needsReload, saveSettings, type QualityLevel, type QualityPreset, type QualitySetting, type Settings } from '../game/core/settings'
+import { LOCALES, t, type MessageKey } from '../i18n'
+import LocaleSelect from './LocaleSelect.vue'
 
 // settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。
 const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedPreset: QualityPreset }>()
 const emit = defineEmits<{ close: [] }>()
 
 const dialog = ref<HTMLElement | null>(null)
-const qualityLabels: Record<QualityLevel, string> = { low: '省電', medium: '標準', high: '高畫質' }
+const qualityLabel = (q: QualityLevel) => t(`quality.${q}`)
+const qualityText = (q: QualitySetting) => (q === 'auto' ? t('quality.auto', { level: qualityLabel(props.activeQuality) }) : qualityLabel(q))
 
-/** 需要署名的素材（CC BY 4.0）；來源與授權的完整紀錄在 docs/ASSETS.md。 */
-const credits = [
+/** 需要署名的素材（CC BY 4.0）；來源與授權的完整紀錄在 docs/ASSETS.md。title 是原作品標題，不翻譯。 */
+const credits: ReadonlyArray<{ use: MessageKey; title: string; author: string; url: string }> = [
   {
-    use: '觀世音菩薩像',
+    use: 'credits.guanyin',
     title: '中国白瓷菩萨像 Chinese bodhisattva statue',
     author: 'efyilin',
     url: 'https://sketchfab.com/3d-models/chinese-bodhisattva-statue-3aa3accdebb0454a9eee5fd4fced0d19',
   },
   {
-    use: '媽祖像',
+    use: 'credits.mazu',
     title: '9.拜殿神像 媽祖',
     author: 'cadyunlin2021',
     url: 'https://sketchfab.com/3d-models/9-2d5c1af855934957928e4e09bdde72e6',
   },
-] as const
-const CC_BY = 'https://creativecommons.org/licenses/by/4.0/deed.zh-hant'
+]
+/** CC BY 授權頁面依目前語言指向對應的 deed。 */
+const ccBy = computed(() => `https://creativecommons.org/licenses/by/4.0/deed.${LOCALES.find((l) => l.id === s.locale)?.ccDeed ?? 'en'}`)
+
+/** 致謝句：字典裡以 {buddha}、{polyhaven} 標出連結的位置（各語言語序不同），拆成文字與連結依序繪製。 */
+const thanksParts = computed(() => t('credits.thanks').split(/(\{buddha\}|\{polyhaven\})/).filter(Boolean))
 
 const volumeFields = [
-  { key: 'masterVolume', label: '總音量' },
-  { key: 'musicVolume', label: '環境與音樂' },
-  { key: 'sfxVolume', label: '音效' },
+  { key: 'masterVolume', label: 'volume.master' },
+  { key: 'musicVolume', label: 'volume.music' },
+  { key: 'sfxVolume', label: 'volume.sfx' },
 ] as const
 
 function onKey(e: KeyboardEvent) {
@@ -57,65 +64,72 @@ function reloadNow() {
   <div class="backdrop" @click.self="emit('close')">
     <section ref="dialog" class="sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
       <header>
-        <h2 id="settings-title">設定</h2>
-        <button class="icon-btn" type="button" aria-label="關閉設定" @click="emit('close')">✕</button>
+        <h2 id="settings-title">{{ t('settings.title') }}</h2>
+        <button class="icon-btn" type="button" :aria-label="t('settings.close')" @click="emit('close')">✕</button>
       </header>
 
       <fieldset>
-        <legend>畫質</legend>
-        <div class="segmented" role="radiogroup" aria-label="畫質">
+        <legend class="sr-only">{{ t('locale.label') }}</legend>
+        <LocaleSelect v-model="s.locale" />
+      </fieldset>
+
+      <fieldset>
+        <legend>{{ t('settings.quality') }}</legend>
+        <div class="segmented" role="radiogroup" :aria-label="t('settings.quality')">
           <label v-for="q in (['auto', 'low', 'medium', 'high'] as const)" :key="q">
             <input v-model="s.quality" type="radio" name="quality" :value="q" />
-            <span>{{ q === 'auto' ? `自動（${qualityLabels[activeQuality]}）` : qualityLabels[q] }}</span>
+            <span>{{ qualityText(q) }}</span>
           </label>
         </div>
-        <p class="note">畫面變慢時會自動降低解析度與遠處角色的細節，順暢後再恢復。</p>
+        <p class="note">{{ t('settings.adaptiveNote') }}</p>
         <div role="status" aria-live="polite">
           <template v-if="reloadNeeded">
-            <p class="note">貼圖、陰影與神像要重新載入後才會套用。</p>
-            <button class="reload-btn" type="button" @click="reloadNow">重新載入並套用</button>
+            <p class="note">{{ t('settings.reloadNote') }}</p>
+            <button class="reload-btn" type="button" @click="reloadNow">{{ t('settings.reloadNow') }}</button>
           </template>
         </div>
       </fieldset>
 
       <fieldset>
-        <legend>聲音</legend>
+        <legend>{{ t('settings.sound') }}</legend>
         <label v-for="f in volumeFields" :key="f.key" class="slider">
-          <span>{{ f.label }}</span>
+          <span>{{ t(f.label) }}</span>
           <input v-model.number="s[f.key]" type="range" min="0" max="1" step="0.05" />
           <output>{{ Math.round(s[f.key] * 100) }}</output>
         </label>
         <label class="toggle">
           <input v-model="s.muted" type="checkbox" />
-          <span>靜音</span>
+          <span>{{ t('settings.mute') }}</span>
         </label>
       </fieldset>
 
       <fieldset>
-        <legend>其他</legend>
+        <legend>{{ t('settings.other') }}</legend>
         <label class="toggle">
           <input v-model="s.showStats" type="checkbox" />
-          <span>顯示效能資訊</span>
+          <span>{{ t('settings.showStats') }}</span>
         </label>
       </fieldset>
 
       <fieldset class="credits">
-        <legend>素材來源</legend>
+        <legend>{{ t('settings.credits') }}</legend>
         <ul>
           <li v-for="c in credits" :key="c.url">
-            <span class="use">{{ c.use }}</span>
-            <a :href="c.url" target="_blank" rel="noopener noreferrer">{{ c.title }}</a>
+            <span class="use">{{ t(c.use) }}</span>
+            <a :href="c.url" target="_blank" rel="noopener noreferrer" lang="zh">{{ c.title }}</a>
             <span class="meta">
-              作者 {{ c.author }} ·
-              <a :href="CC_BY" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>
-              · 已減面並重新烘焙貼圖
+              {{ t('credits.author', { author: c.author }) }} ·
+              <a :href="ccBy" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>
+              · {{ t('credits.processed') }}
             </span>
           </li>
         </ul>
         <p class="note">
-          致謝：釋迦牟尼佛像取自
-          <a href="https://sketchfab.com/3d-models/197385-seated-buddha-d86bda08fa92458397596d2a42b30f46" target="_blank" rel="noopener noreferrer">Cleveland Museum of Art「1973.85 Seated Buddha」</a>（CC0）；場景貼圖取自
-          <a href="https://polyhaven.com/" target="_blank" rel="noopener noreferrer">Poly Haven</a>（CC0）。
+          <template v-for="(part, i) in thanksParts" :key="i">
+            <a v-if="part === '{buddha}'" href="https://sketchfab.com/3d-models/197385-seated-buddha-d86bda08fa92458397596d2a42b30f46" target="_blank" rel="noopener noreferrer">{{ t('credits.buddhaTitle') }}</a>
+            <a v-else-if="part === '{polyhaven}'" href="https://polyhaven.com/" target="_blank" rel="noopener noreferrer">Poly Haven</a>
+            <template v-else>{{ part }}</template>
+          </template>
         </p>
       </fieldset>
     </section>
@@ -207,6 +221,17 @@ legend {
   font-size: 0.8rem;
   letter-spacing: 0.2em;
   color: var(--accent);
+}
+
+/* 拉丁文字（英文、越南文）：中文用的寬字距改小 */
+h2:is(:lang(en), :lang(vi)) {
+  letter-spacing: 0.02em;
+}
+
+legend:is(:lang(en), :lang(vi)) {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.74rem;
 }
 
 .segmented {

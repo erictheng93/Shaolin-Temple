@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { t, type MessageKey } from '../i18n'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
@@ -54,7 +55,22 @@ export type ChatSendResult = 'sent' | 'empty' | 'rate' | 'offline'
 const CHAT_LOG_MAX = 30
 const CHAT_BUBBLE_MS = 6000
 
-/** 給 Vue 的低頻狀態摘要。遊戲核心只在內容改變時推送。 */
+/**
+ * 伺服器 error 的 code 對應的訊息；未列出的 code 顯示通用訊息（不顯示伺服器的英文 message）。
+ * code 來源：server/src（connection.rs、room.rs）與 web/scripts/mock-server.mjs。
+ */
+const SERVER_ERRORS = new Map<string, MessageKey>([
+  ['unsupported_version', 'server.unsupportedVersion'],
+  ['invalid_zone', 'server.invalidZone'],
+])
+
+/** 動作 ack 失敗的提示：timeout（本機逾時）有專屬訊息，其餘（unknown_action、unsupported_data…）通用訊息附上原始 code。 */
+export function actionFailedMessage(reason?: string): string {
+  if (reason === 'timeout') return t('action.timeout')
+  return reason ? t('action.failed', { code: reason }) : t('action.failedUnknown')
+}
+
+/** 給 Vue 的低頻狀態摘要。遊戲核心只在內容改變時推送；字串在推送當下以目前語言解析。 */
 export interface UiState {
   status: ConnectionStatus
   networkEnabled: boolean
@@ -162,12 +178,13 @@ export class GameCore {
   private selfId: string | null = null
   /** 自己的房內短編號；sync 中出現它代表伺服器校正了自己的位置。 */
   private selfN = -1
-  private selfName = '訪客'
+  /** 進場時的名字（未填時由 App 以進場當下語言的「訪客」代入）。 */
+  private selfName = ''
   private chatLog: ChatEntry[] = []
   private chatSeq = 0
   private serverOffset = 0
   private rtt: number | null = null
-  private stats = new Map<string, { label: string; value: string | number }>()
+  private stats = new Map<string, { label: MessageKey; value: string | number }>()
   private uiTimer: ReturnType<typeof setInterval>
   private lastUiJson = ''
   private frames = 0
@@ -255,7 +272,7 @@ export class GameCore {
   /** 進入遊戲：必須在使用者點擊事件中呼叫，才能啟用音訊。 */
   async enter(playerName: string): Promise<void> {
     this.net.setName(playerName)
-    this.selfName = playerName || '訪客'
+    this.selfName = playerName
     await this.audio.unlock()
     this.audio.startAmbient()
     this.net.connect()
@@ -316,7 +333,7 @@ export class GameCore {
       return
     }
     if (!this.walkTo(spot)) {
-      this.opts.onToast('走不過去，請換個位置再試')
+      this.toast('move.unreachable')
       return
     }
     this.pending = { id, pose: spot }
@@ -358,7 +375,7 @@ export class GameCore {
     void this.net.sendAction(id).then((res) => {
       if (this.disposed) return
       if (res.ok) def.onConfirmed?.()
-      else this.opts.onToast(res.reason === 'timeout' ? '連線不穩，動作未送達' : `動作未完成：${res.reason ?? '未知原因'}`)
+      else this.opts.onToast(actionFailedMessage(res.reason))
     })
   }
 
@@ -560,7 +577,7 @@ export class GameCore {
           this.beginAction(id, pose)
           moving = false
         } else {
-          this.opts.onToast('被擋住了，沒有走到')
+          this.toast('move.blocked')
         }
       }
     }
@@ -675,7 +692,7 @@ export class GameCore {
       if (this.disposed) return
       this.applyZone(portal.to, portal.spawn)
       this.net.sendZone(portal.to, portal.spawn.x, portal.spawn.z, portal.spawn.heading)
-      this.opts.onToast(portal.to === 'hall' ? `進入 ${ZONES.hall.name}` : `回到${ZONES.courtyard.name}`)
+      this.toast(portal.to === 'hall' ? 'zone.entered' : 'zone.returned', { zone: t(ZONES[portal.to].name) })
       setTimeout(() => {
         if (this.disposed) return
         this.fading = false
@@ -823,7 +840,7 @@ export class GameCore {
         this.serverOffset = m.serverTime - performance.now()
         break
       case 'error':
-        this.opts.onToast(m.code === 'unsupported_version' ? '遊戲已更新，請重新整理頁面' : m.message)
+        this.toast(SERVER_ERRORS.get(m.code) ?? 'server.error')
         break
     }
     if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave') this.pushUi(true)
@@ -833,7 +850,7 @@ export class GameCore {
   private onChat(m: Extract<ServerMessage, { t: 'chat' }>): void {
     const self = m.id === (this.selfId ?? 'local')
     const now = performance.now()
-    const name = self ? this.selfName : (this.players.remotes.get(m.id)?.name ?? '訪客')
+    const name = (self ? this.selfName : this.players.remotes.get(m.id)?.name) || t('player.visitor')
     this.chatLog = [...this.chatLog, { seq: ++this.chatSeq, id: m.id, name, text: m.text, at: m.at, seen: now, self }].slice(-CHAT_LOG_MAX)
     this.players.say(self ? null : m.id, m.text, now + CHAT_BUBBLE_MS)
     this.pushUi(true)
@@ -925,7 +942,7 @@ export class GameCore {
         const unavailable = a.unavailableReason?.(this.zone)
         return {
           id: a.id,
-          label: a.label,
+          label: t(a.label),
           glyph: a.glyph,
           cooldownMs: a.cooldownMs,
           readyAt: this.actions.readyAt(a.id),
@@ -933,7 +950,7 @@ export class GameCore {
         }
       }),
       chat: this.chatLog,
-      stats: [...this.stats].map(([key, s]) => ({ key, ...s })),
+      stats: [...this.stats].map(([key, s]) => ({ key, label: t(s.label), value: s.value })),
       // 迴圈停止時不再計幀，顯示 0 而非最後一次的數值。
       perf: { fps: performance.now() - this.lastRender > 1500 ? 0 : this.fps, frameMs: this.frameMs, calls: r.calls, triangles: r.triangles, rttMs: this.rtt },
     }
@@ -941,6 +958,11 @@ export class GameCore {
     if (!force && json === this.lastUiJson) return
     this.lastUiJson = json
     this.opts.onUi(state)
+  }
+
+  /** 以目前語言提示（toast 以發出當下的語言為準，已顯示的不回頭改）。 */
+  private toast(key: MessageKey, params?: Record<string, string | number>): void {
+    this.opts.onToast(t(key, params))
   }
 
   private volumes() {

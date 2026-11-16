@@ -1,0 +1,107 @@
+/**
+ * 介面字串的來源字典（繁體中文）。key 型別由這份導出，其他語言的字典型別是 Record<MessageKey, string>，缺 key 時 typecheck 失敗。
+ * `{name}` 是代換用的佔位符，各語言的佔位符集合須與這裡一致（i18n.test.ts 檢查）。
+ * 新增字串：在這裡加 key，再補齊 en、ja、vi。
+ */
+const zhHant = {
+  'app.title': '少林寺',
+  'app.webglFailed': '此裝置或瀏覽器無法啟用 WebGL，請更新瀏覽器或改用其他裝置。',
+  'app.sceneLabel': '寺院場景，以方向鍵、虛擬搖桿或滑鼠點擊地面移動，拖曳旋轉視角',
+  'app.contextLost': '畫面暫時中斷，正在恢復…',
+  'player.visitor': '訪客',
+  'locale.label': '語言',
+
+  'entry.eyebrow': '線上靜心空間',
+  'entry.lead': '放慢腳步，與其他人安靜地共處片刻。',
+  'entry.headphones': '建議戴上耳機。',
+  'entry.nameLabel': '你的名字（選填）',
+  'entry.entering': '進入中…',
+  'entry.enter': '入寺',
+  'entry.preparing': '準備場景…',
+  'entry.hintPointer': '點擊地面行走・拖曳轉動視角・雙指或滾輪縮放',
+  'entry.hintKeys': '鍵盤可用 WASD／方向鍵',
+
+  'top.solo': '單人模式',
+  'top.online': '已連線',
+  'top.connecting': '連線中',
+  'top.reconnecting': '重新連線中',
+  'top.offline': '未連線',
+  'top.inTemple': '{count} 人在寺中',
+  'top.unmute': '開啟聲音',
+  'top.mute': '關閉聲音',
+  'top.settings': '設定',
+
+  'actions.label': '動作',
+  'action.bow': '合十',
+  'action.prostrate': '跪拜',
+  'action.chant': '誦經',
+  'action.chantEnd': '起身',
+  'action.incense': '上香',
+  'action.bell': '敲鐘',
+  'stat.worship': '禮敬',
+
+  'reason.prostrateInHall': '跪拜要在殿內的蒲團上進行',
+  'reason.chantInHall': '誦經要在殿內的蒲團上進行，請先進殿',
+  'reason.cushionsTaken': '蒲團都有人了，請稍候再試',
+  'reason.noCenser': '這裡沒有香爐',
+  'reason.censersTaken': '香爐前都有人，請稍候再試',
+  'reason.bellInCourtyard': '鐘亭在庭院，出殿後再敲',
+  'reason.bellTaken': '鐘亭前都有人，請稍候再試',
+  'reason.bellRinging': '鐘聲未歇，約 {seconds} 秒後再敲',
+
+  'move.unreachable': '走不過去，請換個位置再試',
+  'move.blocked': '被擋住了，沒有走到',
+  'zone.courtyard': '庭院',
+  'zone.hall': '少林寺',
+  'zone.entered': '進入 {zone}',
+  'zone.returned': '回到{zone}',
+
+  'action.timeout': '連線不穩，動作未送達',
+  'action.failed': '動作未完成（{code}）',
+  'action.failedUnknown': '動作未完成',
+  'server.unsupportedVersion': '遊戲已更新，請重新整理頁面',
+  'server.invalidZone': '這裡無法切換場景，請走到門口再試',
+  'server.error': '伺服器發生問題，請稍後再試',
+
+  'chat.label': '聊天',
+  'chat.placeholder': '說點什麼…',
+  'chat.inputLabel': '聊天訊息',
+  'chat.send': '送出',
+  'chat.close': '關閉聊天輸入',
+  'chat.talk': '說話',
+  'chat.who': '{name}：',
+  'chat.rate': '說得太快了，請稍候',
+  'chat.offline': '尚未連線，訊息未送出',
+
+  'settings.title': '設定',
+  'settings.close': '關閉設定',
+  'settings.quality': '畫質',
+  'quality.auto': '自動（{level}）',
+  'quality.low': '省電',
+  'quality.medium': '標準',
+  'quality.high': '高畫質',
+  'settings.adaptiveNote': '畫面變慢時會自動降低解析度與遠處角色的細節，順暢後再恢復。',
+  'settings.reloadNote': '貼圖、陰影與神像要重新載入後才會套用。',
+  'settings.reloadNow': '重新載入並套用',
+  'settings.sound': '聲音',
+  'volume.master': '總音量',
+  'volume.music': '環境與音樂',
+  'volume.sfx': '音效',
+  'settings.mute': '靜音',
+  'settings.other': '其他',
+  'settings.showStats': '顯示效能資訊',
+  'settings.credits': '素材來源',
+  'credits.guanyin': '觀世音菩薩像',
+  'credits.mazu': '媽祖像',
+  'credits.author': '作者 {author}',
+  'credits.processed': '已減面並重新烘焙貼圖',
+  'credits.thanks': '致謝：釋迦牟尼佛像取自{buddha}（CC0）；場景貼圖取自{polyhaven}（CC0）。',
+  'credits.buddhaTitle': 'Cleveland Museum of Art「1973.85 Seated Buddha」',
+
+  'perf.label': '效能資訊',
+  'perf.quality': '畫質 {quality} · 省電 {level}/{max}',
+}
+
+export type MessageKey = keyof typeof zhHant
+
+export default zhHant satisfies Record<string, string>

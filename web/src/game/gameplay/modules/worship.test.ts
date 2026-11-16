@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PIVOT_HEIGHT, PROP_INCENSE, PROP_NONE } from '../../render/AvatarFactory'
+import { t } from '../../../i18n'
 import { HALL_CENSERS } from '../../world/zones'
 import { pose, setup } from './testHarness'
 import { INCENSE_MS, PLANT_AT, PROSTRATE_MS, PROSTRATE_STRIKES } from './worship'
@@ -12,7 +13,7 @@ describe('worship 模組', () => {
   it('註冊合十、跪拜、誦經（與不顯示的起身）、上香、敲鐘；uninstall 清除全部註冊', () => {
     const { anim, actions, sfx, uninstall } = setup()
     expect(actions.list().map((a) => a.id)).toEqual(['bow', 'prostrate', 'chant', 'chant_end', 'incense', 'bell'])
-    expect(actions.list().filter((a) => !a.hidden).map((a) => a.label)).toEqual(['合十', '跪拜', '誦經', '上香', '敲鐘'])
+    expect(actions.list().filter((a) => !a.hidden).map((a) => t(a.label))).toEqual(['合十', '跪拜', '誦經', '上香', '敲鐘'])
     expect(actions.get('chant')!.endAction).toBe('chant_end')
     const clips = ['prostrate', 'incense', 'chant', 'chantEnd', 'bellStrike']
     expect(clips.every((c) => anim.hasClip(c))).toBe(true)
