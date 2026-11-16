@@ -1,4 +1,4 @@
-import { HALL, OBSTACLES, PLAYER_RADIUS, SPAWN, WORLD_BOUNDS, type Rect } from './layout'
+import { CENSER, HALL, OBSTACLES, PLAYER_RADIUS, SPAWN, WORLD_BOUNDS, type Rect } from './layout'
 
 /**
  * 場景（zone）定義：每個場景有自己的可走範圍、障礙物、出生點、鏡頭範圍與出入口。
@@ -59,19 +59,93 @@ export const HALL_ALTAR: Rect = { minX: -7.6, maxX: 7.6, minZ: -9, maxZ: -5.2 }
 export const HALL_TABLE: Rect = { minX: -4.6, maxX: 4.6, minZ: -4.8, maxZ: -4.0 }
 /**
  * 三尊神像的位置（神像面向 +z，也就是面向參拜者）。
- * 依傳統以神明為主體：主佛左手邊（龍邊，+x）為觀世音菩薩，右手邊（虎邊，-x）為關聖帝君。
+ * 依傳統以神明為主體：主佛左手邊（龍邊，+x）為觀世音菩薩，右手邊（虎邊，-x）為媽祖。
  */
 export const HALL_STATUES = {
   buddha: { x: 0, z: -7.3 },
   guanyin: { x: 4.3, z: -6.9 },
-  guangong: { x: -4.3, z: -6.9 },
+  mazu: { x: -4.3, z: -6.9 },
 } as const
-/** 拜墊（不阻擋行走）。 */
-export const HALL_CUSHIONS: ReadonlyArray<{ x: number; z: number }> = [
-  { x: HALL_STATUES.guangong.x, z: -3.3 },
-  { x: 0, z: -3.3 },
-  { x: HALL_STATUES.guanyin.x, z: -3.3 },
-]
+/** 神像插槽的鍵（依 HALL_STATUES 迭代，不寫死名稱）。 */
+export type HallStatueId = keyof typeof HALL_STATUES
+export const HALL_STATUE_IDS = Object.keys(HALL_STATUES) as HallStatueId[]
+
+/** 面向神龕（-z）的朝向。 */
+const FACE_ALTAR = Math.PI
+
+/** 中軸紅地毯（走道）的半寬，HallScene 依此鋪地毯。 */
+export const HALL_AISLE_HALF_WIDTH = 1.1
+/**
+ * 蒲團陣列：以中軸紅地毯為走道，左右各 3 欄 × 4 排，面向神龕，不阻擋行走。
+ *
+ * 間距依角色實際尺寸（scripts/build-avatar.mjs）定出：跪下時身體壓扁、兩側略寬，袍寬約 0.5 公尺（含耳朵約 0.6）；
+ * 叩拜時整尊繞腳底前傾約 1 弧度，頭頂最遠到腳前約 0.8 公尺，背後約 0.22 公尺，前後共佔約 1.0 公尺。
+ * - 欄距 1.25：相鄰兩人跪拜時袍與袍之間留約 0.75 公尺（站著的角色寬約 0.43），中間還能走人。
+ * - 排距 1.6：前一排叩拜的頭與後一排的背之間留約 0.6 公尺。
+ * - 最內欄 |x| = 1.8：蒲團邊緣離地毯走道 0.34 公尺；最外欄 |x| = 4.3（與兩側神像對齊），蒲團邊緣離柱礎約 0.12 公尺。
+ * - 第一排 z = -1.7：叩拜的頭到 -2.5，與供桌前上香的人（站在 -3.35、背後到 -3.1）之間留約 0.6 公尺。
+ * - 最後一排 z = 3.1：離殿門出入口（z ≥ 8.15）與進殿落點（z 7.4）都很遠。
+ */
+export const HALL_CUSHION_COLUMNS_X: readonly number[] = [1.8, 3.05, 4.3]
+export const HALL_CUSHION_ROWS_Z: readonly number[] = [-1.7, -0.1, 1.5, 3.1]
+/** 蒲團半徑（公尺）。 */
+export const CUSHION_RADIUS = 0.36
+export const HALL_CUSHIONS: ReadonlyArray<Pose> = HALL_CUSHION_ROWS_Z.flatMap((z) =>
+  HALL_CUSHION_COLUMNS_X.flatMap((x) => [-x, x]).map((x) => ({ x, z, heading: FACE_ALTAR })),
+)
+
+/**
+ * 香爐：每尊神像正前方的供桌上一個，加上庭院中央的大香爐。上香時站在 spots 其中一點、面向香爐。
+ * ashY 是爐內香灰面的高度，sticks 是插香的範圍（以爐心為圓心的環，內徑避開常駐的香）、香的長度與粗細，cap 是同時顯示的上限。
+ * 高度取自 HallScene（供桌面 1.0、爐內灰面在爐底上 0.22）與 TempleScene（爐座 0.3、灰面在爐底上 0.6）。
+ */
+export interface CenserDef {
+  id: string
+  zone: ZoneId
+  x: number
+  z: number
+  ashY: number
+  sticks: { innerRadius: number; outerRadius: number; length: number; radius: number; cap: number }
+  /** 常駐的香（不會燒完，不計入上限），只有主佛前那一爐有。 */
+  permanent: number
+  spots: ReadonlyArray<Pose>
+}
+
+const HALL_TABLE_Z = (HALL_TABLE.minZ + HALL_TABLE.maxZ) / 2
+/** 上香站位：供桌（含角色半徑）前方 0.3 公尺。 */
+const HALL_CENSER_SPOT_Z = HALL_TABLE.maxZ + PLAYER_RADIUS + 0.3
+/** 站位左右間距；兩側香爐靠柱子，只往內側多一個站位。 */
+const CENSER_SPOT_GAP = 0.65
+
+export const HALL_CENSERS: ReadonlyArray<CenserDef> = HALL_STATUE_IDS.map((id) => {
+  const { x } = HALL_STATUES[id]
+  const offsets = x === 0 ? [-CENSER_SPOT_GAP, 0, CENSER_SPOT_GAP] : [0, -Math.sign(x) * CENSER_SPOT_GAP]
+  return {
+    id: `hall:${id}`,
+    zone: 'hall' as const,
+    x,
+    z: HALL_TABLE_Z,
+    ashY: 1.22,
+    sticks: { innerRadius: x === 0 ? 0.09 : 0, outerRadius: 0.17, length: 0.42, radius: 0.006, cap: 8 },
+    permanent: x === 0 ? 3 : 0,
+    spots: offsets.map((dx) => ({ x: x + dx, z: HALL_CENSER_SPOT_Z, heading: FACE_ALTAR })),
+  }
+})
+
+/** 庭院大香爐：站在面向主殿的一側（+z），香爐障礙物（含角色半徑）前 0.1 公尺。 */
+export const COURTYARD_CENSER: CenserDef = {
+  id: 'courtyard',
+  zone: 'courtyard',
+  x: CENSER.x,
+  z: CENSER.z,
+  ashY: 0.9,
+  // 中央三支常駐的大香（TempleScene 靜態幾何）佔 |dx| ≤ 0.15，玩家的香插在外圈
+  sticks: { innerRadius: 0.24, outerRadius: 0.5, length: 0.62, radius: 0.011, cap: 16 },
+  permanent: 0,
+  spots: [-0.9, 0, 0.9].map((dx) => ({ x: CENSER.x + dx, z: CENSER.z + CENSER.radius + PLAYER_RADIUS + 0.1, heading: FACE_ALTAR })),
+}
+
+export const CENSERS: ReadonlyArray<CenserDef> = [COURTYARD_CENSER, ...HALL_CENSERS]
 
 /** 庭院：殿門前的階梯即入口（主殿障礙物邊緣 z≈-5.85），往前延伸到階梯前方約 0.85 公尺。 */
 const COURTYARD_DOOR: Rect = { minX: -1.6, maxX: 1.6, minZ: -6.2, maxZ: -5.0 }

@@ -1,15 +1,33 @@
 // 開發用 mock 遊戲伺服器：實作 src/game/net/protocol.ts 的協定草案，供 Rust 後端完成前測試前端。
 // 不是正式伺服器，不做權限、持久化或容量設計。
 // 與正式伺服器相同的行為：房內短編號 n、moves／sync／action 只送同場景、zone／join／leave 送全房、
-// 切換場景後先廣播 zone 再對切換者送 sync、移動中超過 1 秒沒有位置就視為停止。
+// 切換場景後先廣播 zone 再對切換者送 sync、移動中超過 1 秒沒有位置就視為停止、
+// 協定版本 2：moves／sync 以二進位幀送出（與前端共用 src/game/net/moveFrame.ts 的編碼器），hello.v 不符時回 unsupported_version。
 //
-// 用法：node scripts/mock-server.mjs [機器人數量=6] [埠=8080]
+// 用法：node scripts/mock-server.mjs [機器人數量=6] [埠=8080]（需 Node 22.18 以上，直接載入 .ts 的型別移除）
 // 前端：在 web/.env.local 設定 VITE_WS_URL=ws://localhost:8080/ws
 import { WebSocketServer } from 'ws'
+import { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeBatch } from '../src/game/net/moveFrame.ts'
+
+const PROTOCOL_VERSION = 2 // 與 src/game/net/protocol.ts 一致
 
 const BOTS = Number(process.argv[2] ?? 6)
 const PORT = Number(process.argv[3] ?? 8080)
-const ACTIONS = ['bow', 'bowl', 'bell']
+if (!(BOTS >= 0 && BOTS <= MAX_SHORT_ID)) {
+  // 二進位幀的短編號只有 0～127，mock 只有一個房間，機器人與真人共用。
+  console.error(`機器人數量須在 0～${MAX_SHORT_ID}`)
+  process.exit(1)
+}
+// 動作允許清單，與 server/src/world.rs 的 ACTIONS 一致（前端玩法模組 src/game/gameplay/modules/worship.ts）
+// chant_end：誦經中提前起身（客戶端送出，轉送給同場景的人）
+const ACTIONS = ['bow', 'prostrate', 'chant', 'chant_end', 'incense', 'bell']
+// 機器人只做該場景能做的動作（跪拜、誦經限殿內，敲鐘限庭院）；不會走到蒲團、香爐或鐘亭前，上香不會在香爐插香
+const BOT_ACTIONS = { courtyard: ['bow', 'bell'], hall: ['bow', 'prostrate', 'chant'] }
+// 機器人做這些動作時停留到動作結束再走（客戶端在動作期間不顯示走路）；誦經 24 秒、跪拜 8 秒
+const BOT_HOLD_S = { chant: 25, prostrate: 9 }
+// 機器人敲鐘時遵守與客戶端相同的「鐘聲未歇」：任何人敲鐘後 7 秒內不再敲
+const BOT_BELL_GAP_MS = 7000
+let lastBellAt = 0
 const ZONES = ['courtyard', 'hall']
 // 機器人隨機走動的範圍（未避開障礙物，僅供測試）
 const ROAM = {
@@ -20,7 +38,6 @@ const pick = ([a, b]) => a + Math.random() * (b - a)
 const NAMES = ['靜心', '晨鐘', '松風', '雲水', '明月', '竹影', '清泉', '山嵐']
 
 const wss = new WebSocketServer({ port: PORT, path: '/ws', maxPayload: 16 * 1024 })
-const MAX_MOVES = 200 // 與 protocol.ts 的 MAX_MOVES_PER_MESSAGE 一致
 const STOP_WATCHDOG_MS = 1000
 const players = new Map() // id -> { id, n, name, x, z, heading, zone, moving, lastPosAt, ws?, bot? }
 const seenReq = new Map() // reqId -> ack（模擬伺服器去重）
@@ -32,12 +49,12 @@ const queueMove = (p, moving) => {
 }
 const tuple = (p) => [p.n, r2(p.x), r2(p.z), r2(p.heading), p.moving ? 1 : 0]
 let nextId = 1
-/** 房內短編號：取目前未使用的最小值，玩家離開後回收。 */
+/** 房內短編號：取目前未使用的最小值，玩家離開後回收。超過 MAX_SHORT_ID（二進位幀只有 7 位元）時回傳 null。 */
 const allocN = () => {
   const used = new Set([...players.values()].map((p) => p.n))
   let n = 0
   while (used.has(n)) n++
-  return n
+  return n <= MAX_SHORT_ID ? n : null
 }
 
 const now = () => Date.now()
@@ -50,9 +67,12 @@ const broadcast = (msg, exceptId) => {
 const broadcastZone = (zone, msg, exceptId) => {
   for (const p of players.values()) if (p.ws && p.zone === zone && p.id !== exceptId) send(p.ws, msg)
 }
-/** 把 tuple 陣列依上限拆成多則送出。 */
+/** 把 tuple 陣列依上限拆成多則二進位幀送出（sync 即使是空的也要送）。 */
 const sendTuples = (ws, t, list) => {
-  for (let i = 0; i < list.length; i += MAX_MOVES) send(ws, { t, m: list.slice(i, i + MAX_MOVES) })
+  for (let i = 0; i === 0 || i < list.length; i += MAX_MOVES_PER_MESSAGE) {
+    const frame = encodeBatch({ t, m: list.slice(i, i + MAX_MOVES_PER_MESSAGE) })
+    if (frame && ws.readyState === 1) ws.send(frame)
+  }
 }
 const snapshot = (p) => ({ id: p.id, n: p.n, name: p.name, x: p.x, z: p.z, heading: p.heading, zone: p.zone })
 
@@ -94,7 +114,11 @@ setInterval(() => {
       b.wait = 2 + Math.random() * 6
       queueMove(p, false)
       if (Math.random() < 0.6) {
-        broadcastZone(p.zone, { t: 'action', playerId: p.id, id: ACTIONS[Math.floor(Math.random() * ACTIONS.length)], startedAt: now() })
+        const id = BOT_ACTIONS[p.zone][Math.floor(Math.random() * BOT_ACTIONS[p.zone].length)]
+        if (id === 'bell' && now() - lastBellAt < BOT_BELL_GAP_MS) continue
+        if (id === 'bell') lastBellAt = now()
+        b.wait = Math.max(b.wait, BOT_HOLD_S[id] ?? 0)
+        broadcastZone(p.zone, { t: 'action', playerId: p.id, id, startedAt: now() })
       }
       continue
     }
@@ -129,10 +153,18 @@ wss.on('connection', (ws) => {
       return
     }
     if (m.t === 'hello') {
+      if (me) return
+      if (m.v !== PROTOCOL_VERSION) {
+        send(ws, { t: 'error', code: 'unsupported_version', message: `Protocol version ${PROTOCOL_VERSION} required` })
+        ws.close(1008, 'unsupported version')
+        return
+      }
+      const n = allocN()
+      if (n === null) return ws.close(1013, 'server busy')
       const id = `p-${nextId++}`
       me = {
         id,
-        n: allocN(),
+        n,
         name: String(m.name || '訪客').slice(0, 16),
         x: (Math.random() - 0.5) * 4,
         z: 11,
@@ -177,6 +209,7 @@ wss.on('connection', (ws) => {
         const ack = { t: 'ack', reqId: m.reqId, ok: ACTIONS.includes(m.id), reason: ACTIONS.includes(m.id) ? undefined : 'unknown_action' }
         seenReq.set(m.reqId, ack)
         send(ws, ack)
+        if (ack.ok && m.id === 'bell') lastBellAt = now()
         if (ack.ok) broadcastZone(me.zone, { t: 'action', playerId: me.id, id: m.id, startedAt: now() }, me.id)
         break
       }

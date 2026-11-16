@@ -5,7 +5,7 @@
 //! - 殿內邊界、出入口與落點：`web/src/game/world/zones.ts`
 //!   （`COURTYARD_DOOR` 第 77 行、`HALL_DOOR` 第 84 行、`ZONES` 第 86～112 行）
 //! - 移動速度 3.2 m/s：`web/src/game/GameCore.ts` 的 `MOVE_SPEED`（第 57 行）
-//! - 動作允許清單：`web/scripts/mock-server.mjs` 的 `ACTIONS`（前端示範模組 `gameplay/modules/demo.ts`）
+//! - 動作允許清單：`web/scripts/mock-server.mjs` 的 `ACTIONS`（前端玩法模組 `gameplay/modules/worship.ts`）
 //!
 //! - 障礙物：`layout.ts` 的 `OBSTACLES`（主殿、鐘亭、香爐、石燈籠、樹）與 `zones.ts` 殿內的神龕、供桌、柱子，
 //!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。
@@ -213,8 +213,10 @@ pub fn zone(id: &str) -> Option<&'static Zone> {
     ZONES.iter().copied().find(|z| z.id == id)
 }
 
-/// 動作允許清單（示範用）。快照與廣播中的動作 id 只會來自這份清單。
-pub const ACTIONS: [&str; 3] = ["bow", "bowl", "bell"];
+/// 動作允許清單（參拜玩法：合十、跪拜、誦經、上香、敲鐘），`chant_end` 是提前結束誦經（起身），
+/// 由客戶端在誦經中點地面或按其他動作時送出，轉送給同場景的人讓他們看到的也停止。
+/// 快照與廣播中的動作 id 只會來自這份清單。
+pub const ACTIONS: [&str; 6] = ["bow", "prostrate", "chant", "chant_end", "incense", "bell"];
 
 /// 回傳清單中的同名動作；不在清單內為 `None`。
 pub fn action(id: &str) -> Option<&'static str> {

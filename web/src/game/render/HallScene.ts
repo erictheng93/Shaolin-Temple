@@ -1,20 +1,27 @@
 import * as THREE from 'three'
-import { HALL_ALTAR, HALL_CUSHIONS, HALL_PILLARS, HALL_ROOM, HALL_STATUES, HALL_TABLE } from '../world/zones'
+import { CUSHION_RADIUS, HALL_AISLE_HALF_WIDTH, HALL_ALTAR, HALL_CENSERS, HALL_CUSHIONS, HALL_PILLARS, HALL_ROOM, HALL_STATUES, HALL_TABLE } from '../world/zones'
+import type { QualityPreset } from '../core/settings'
 import type { ResourceTracker } from './ResourceTracker'
 import { mergeStatic } from './mergeStatic'
-import { buildStatue, createStatueKit, type StatueId } from './statues'
+import { buildStatue, createStatueKit, createStatueLoaders, loadStatueModel, type StatueId } from './statues'
 
 /**
- * 殿內場景（少林寺）：紅柱、藻井、彩繪樑、光明燈牆、宮燈、三座神龕與神像、供桌與拜墊。
+ * 殿內場景（少林寺）：紅柱、藻井、彩繪樑、光明燈牆、宮燈、三座神龕與神像、供桌與三個香爐、蒲團陣列。
+ * 神像的寫實模型在建立場景時才開始下載（第一次進殿），到齊前顯示程序化造型（見 statues.ts）。
+ * 香爐裡的香與香煙是動態物件，由 GameCore 擁有的 IncenseSystem 繪製，不在這裡。
  * 殿門在 +z，神龕在 -z；玩家進殿後面向 -z。
  */
 
 export interface HallScene {
   root: THREE.Group
   walkSurface: THREE.Object3D
-  /** 三尊神像的插槽；以 loadStatueModel() 換成寫實模型。 */
+  /** 三尊神像的插槽：先放程序化造型，寫實模型下載完成後替換。 */
   statueSlots: Record<StatueId, THREE.Group>
+  /** 寫實模型全部載入（或失敗）後 resolve；失敗的那尊維持程序化造型。 */
+  statuesReady: Promise<void>
   update(t: number, dt: number): void
+  /** 停止尚未完成的下載（之後到的模型不再加入場景）。資源仍由 tracker 釋放。 */
+  dispose(): void
 }
 
 const PALETTE = {
@@ -76,7 +83,10 @@ function glowTexture(): THREE.CanvasTexture {
   })
 }
 
-export function buildHallScene(tracker: ResourceTracker): HallScene {
+/**
+ * @param onChange 神像換成寫實模型時呼叫（喚醒渲染迴圈）。
+ */
+export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceTracker, preset: QualityPreset, onChange: () => void): HallScene {
   const root = new THREE.Group()
   root.name = 'hall'
   const R = HALL_ROOM
@@ -165,7 +175,7 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
   floor.name = 'hall-floor'
   root.add(floor)
   // 中央紅色走道毯
-  add(box, m.cloth, [0, 0.01, 2.6], [2.2, 0.02, 11.4])
+  add(box, m.cloth, [0, 0.01, 2.6], [HALL_AISLE_HALF_WIDTH * 2, 0.02, 11.4])
 
   // ---------- 牆：下段深紅木作、上段米色 ----------
   const dado = 1.3
@@ -261,13 +271,12 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
   const S = HALL_STATUES
   shrine(S.buddha.x, S.buddha.z, 3, 4.1, '佛光普照')
   shrine(S.guanyin.x, S.guanyin.z, 2.2, 3.2, '慈航普渡')
-  // 關聖帝君持刀站立，刀刃向外伸出約 0.9 公尺，神龕加寬避免柱子擋到
-  shrine(S.guangong.x, S.guangong.z, 2.8, 3.4, '義薄雲天')
+  shrine(S.mazu.x, S.mazu.z, 2.2, 3.2, '海國慈航')
 
   // 神像插槽
   const kit = createStatueKit(tracker)
   const statueSlots = {} as Record<StatueId, THREE.Group>
-  for (const id of ['buddha', 'guanyin', 'guangong'] as const) {
+  for (const id of ['buddha', 'guanyin', 'mazu'] as const) {
     const slot = new THREE.Group()
     slot.name = `slot:${id}`
     slot.position.set(S[id].x, altarTop, S[id].z)
@@ -287,12 +296,10 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
   for (const sx of [-1, 1]) add(box, m.altar, [sx * (tableW / 2 - 0.08), 0.45, tableZ], [0.12, 0.9, tableD - 0.05])
 
   const top = 1.0
-  // 香爐與香
+  // 香爐：每尊神像正前方一個（位置來自 HALL_CENSERS）。香與煙由 IncenseSystem 繪製。
   const censerProfile = [[0, 0], [0.12, 0], [0.1, 0.06], [0.24, 0.12], [0.27, 0.3], [0.24, 0.32], [0.2, 0.22], [0, 0.22]] as const
-  const censer = new THREE.Mesh(geo(new THREE.LatheGeometry(censerProfile.map(([r, y]) => new THREE.Vector2(r, y)), 16)), m.bronze)
-  censer.position.set(0, top, tableZ)
-  root.add(censer)
-  instanced(cyl, m.candle, [-0.06, 0, 0.06].map((dx) => ({ pos: [dx, top + 0.48, tableZ] as [number, number, number], scale: [0.008, 0.36, 0.008] as [number, number, number] })))
+  const censerGeo = geo(new THREE.LatheGeometry(censerProfile.map(([r, y]) => new THREE.Vector2(r, y)), 16))
+  for (const c of HALL_CENSERS) add(censerGeo, m.bronze, [c.x, top, c.z], [1, 1, 1])
 
   // 燭台與紅燭
   const candles = [-3.6, -1.6, 1.6, 3.6].map((x) => ({ x, z: tableZ }))
@@ -325,48 +332,53 @@ export function buildHallScene(tracker: ResourceTracker): HallScene {
     })))
   }
 
-  // 香煙
-  const smokeTex = tracker.track(
-    canvasTexture(64, 64, (ctx) => {
-      const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32)
-      g.addColorStop(0, 'rgba(255,255,255,0.9)')
-      g.addColorStop(1, 'rgba(255,255,255,0)')
-      ctx.fillStyle = g
-      ctx.fillRect(0, 0, 64, 64)
-    }),
-  )
-  const smoke = Array.from({ length: 4 }, (_, i) => {
-    const material = tracker.track(new THREE.SpriteMaterial({ map: smokeTex, color: '#e6e2dc', transparent: true, depthWrite: false, opacity: 0 }))
-    const sprite = new THREE.Sprite(material)
-    root.add(sprite)
-    return { sprite, material, phase: i / 4 }
-  })
-
-  // ---------- 拜墊 ----------
-  instanced(cyl, m.cushion, HALL_CUSHIONS.map((c) => ({ pos: [c.x, 0.08, c.z], scale: [0.36, 0.16, 0.36] })))
+  // ---------- 蒲團陣列 ----------
+  // 圓鼓的蒲團：側面外凸、頂面微隆（半徑 1、高 1，依 CUSHION_RADIUS 縮放）
+  const cushionProfile = [[0, 0], [0.9, 0], [1, 0.35], [0.94, 0.8], [0.6, 1], [0, 1.04]] as const
+  const cushionGeo = geo(new THREE.LatheGeometry(cushionProfile.map(([r, y]) => new THREE.Vector2(r, y)), 14))
+  instanced(cushionGeo, m.cushion, HALL_CUSHIONS.map((c) => ({ pos: [c.x, 0, c.z], scale: [CUSHION_RADIUS, 0.15, CUSHION_RADIUS] })))
 
   // 靜態物件依材質合併以減少 draw call。神像各自合併、不跨插槽，才能單獨換成寫實模型；
   // 地板（點擊射線目標）不合併。
   for (const slot of Object.values(statueSlots)) for (const statue of slot.children) mergeStatic(statue, tracker)
   mergeStatic(root, tracker, (o) => o === floor || o.name.startsWith('slot:'))
 
+  // 寫實神像：三尊同時下載，各自到齊就替換；失敗的維持程序化造型（媽祖是紅布覆蓋的佔位）。
+  let disposed = false
+  const statuesReady = createStatueLoaders(renderer).then(async (loaders) => {
+    await Promise.all(
+      (Object.keys(statueSlots) as StatueId[]).map(async (id) => {
+        try {
+          // 先載入到暫存的 Group，確認場景還在才換進插槽
+          const staging = new THREE.Group()
+          await loadStatueModel(staging, id, preset.statueTier, loaders, tracker)
+          if (disposed) return
+          const slot = statueSlots[id]
+          slot.clear()
+          slot.add(...staging.children)
+          onChange()
+        } catch (err) {
+          console.warn('神像模型載入失敗，維持替代造型', id, err)
+        }
+      }),
+    )
+    loaders.dispose()
+  }).catch((err) => console.warn('神像 loader 建立失敗', err))
+
   return {
     root,
     walkSurface: floor,
     statueSlots,
+    statuesReady,
+    dispose() {
+      disposed = true
+    },
     update(t) {
       flames.forEach((f, i) => {
         const k = 1 + Math.sin(t * 11 + i * 1.7) * 0.08 + Math.sin(t * 23 + i) * 0.05
         f.scale.set(0.16 * k, 0.24 * k, 1)
       })
       m.lantern.emissiveIntensity = 0.5 + Math.sin(t * 1.7) * 0.04
-      for (const s of smoke) {
-        const p = (t * 0.1 + s.phase) % 1
-        s.sprite.position.set(Math.sin(t * 0.5 + s.phase * 6) * 0.15 * p, top + 0.7 + p * 2.2, tableZ)
-        const size = 0.25 + p * 0.9
-        s.sprite.scale.set(size, size, 1)
-        s.material.opacity = Math.sin(p * Math.PI) * 0.3
-      }
     },
   }
 }

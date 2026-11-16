@@ -44,6 +44,17 @@ async fn loadtest_smoke_against_local_server() {
     assert_eq!(result["connect_failed"], 0);
     assert_eq!(result["closed_by_server"], 0);
     assert!(result["recv_bytes_per_conn_s"].as_f64().unwrap() > 100.0);
+    // moves 是二進位幀，負載工具能逐則解碼，且歸類在 moves 而不是 other。
+    assert_eq!(result["invalid_frames"], 0);
+    assert!(
+        result["recv_by_kind"]["moves"]["bytes_per_conn_s"]
+            .as_f64()
+            .unwrap()
+            > 50.0
+    );
+    assert!(result["recv_by_kind"].get("other").is_none(), "{result}");
+    let ws_bytes = result["recv_ws_bytes_per_conn_s"].as_f64().unwrap();
+    assert!(ws_bytes > result["recv_bytes_per_conn_s"].as_f64().unwrap());
     assert!(result["sent_bytes_per_conn_s"].as_f64().unwrap() > 50.0);
     assert!(result["moves_interval_ms"]["samples"].as_u64().unwrap() > 20);
     let p50 = result["moves_interval_ms"]["p50"].as_f64().unwrap();
