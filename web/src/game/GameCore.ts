@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
@@ -20,7 +21,7 @@ import { resolveCollisions, stepMover, type MoveConfig } from './world/movement'
 import { findPath, type Point } from './world/pathfind'
 import { Players } from './world/Players'
 import type { SpotContext } from './world/worship'
-import { CENSERS, ZONES, entryCamera, isZoneId, portalAt, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
+import { CENSERS, ZONES, entryCamera, isZoneId, portalApproach, portalAt, portalForTap, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
 
 export interface UiAction {
   id: string
@@ -134,6 +135,9 @@ export class GameCore {
   /** 虛擬搖桿的類比向量（螢幕座標：x 右、y 下，長度 0～1）；非零時優先於鍵盤。 */
   private stickX = 0
   private stickY = 0
+  private raycaster = new THREE.Raycaster()
+  private marker: THREE.Mesh
+  private markerUntil = 0
 
   private settings: Settings
   private quality: QualityLevel
@@ -199,6 +203,16 @@ export class GameCore {
     this.incense = new IncenseSystem(this.renderer.scene, this.tracker, CENSERS)
     this.striker = new BellStriker(this.renderer.scene, this.tracker)
 
+    const markerGeo = this.tracker.track(new THREE.RingGeometry(0.28, 0.4, 24))
+    markerGeo.rotateX(-Math.PI / 2)
+    const markerMat = this.tracker.trackMaterial(
+      new THREE.MeshBasicMaterial({ color: '#fff6e0', transparent: true, opacity: 0, depthWrite: false }),
+    )
+    this.marker = new THREE.Mesh(markerGeo, markerMat)
+    this.marker.position.y = 0.08
+    this.marker.visible = false
+    this.renderer.scene.add(this.marker)
+
     this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality))
     // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
     const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
@@ -206,6 +220,7 @@ export class GameCore {
     this.players.nearRadius = startLevel.nearRadius
 
     this.input = new InputController(opts.canvas, {
+      onTap: (x, y) => this.onTap(x, y),
       onRotate: (dx, dy) => {
         this.renderer.rotate(-dx * 0.006, dy * 0.004)
         this.wake()
@@ -317,6 +332,7 @@ export class GameCore {
       // 站到站位上、面向神龕或香爐；位置與面向一起送出（排在動作之前）
       Object.assign(local.mover, { x: pose.x, z: pose.z, heading: pose.heading, target: null })
       this.path = []
+      this.marker.visible = false
       this.net.sendPosition(pose.x, pose.z, pose.heading, false)
     }
     if (def.locksMovement) {
@@ -362,13 +378,16 @@ export class GameCore {
     return running
   }
 
-  /** 以尋路走向某點（動作的 approach 用）。找不到路時回傳 false。 */
-  private walkTo(p: Point): boolean {
+  /** 以尋路走向某點並顯示目標標記（直到抵達或 markerMs 過後）。找不到路時回傳 false。 */
+  private walkTo(p: Point, markerMs = 60_000): boolean {
     const local = this.players.local
     const path = findPath({ x: local.mover.x, z: local.mover.z }, p, this.moveCfg)
     if (!path) return false
     local.mover.target = path.shift() ?? null
     this.path = path
+    this.marker.position.set(p.x, 0.08, p.z)
+    this.marker.visible = true
+    this.markerUntil = performance.now() + markerMs
     this.wake()
     return true
   }
@@ -569,9 +588,23 @@ export class GameCore {
     const cameraMoving = this.renderer.follow(local.mover.x, local.mover.z, dt, this.snapCamera, 1.1 + lookUp * 1.6)
     this.snapCamera = false
 
+    let markerActive = false
+    if (this.marker.visible) {
+      const left = this.markerUntil - now
+      const mat = this.marker.material as THREE.MeshBasicMaterial
+      if (left <= 0 || !local.mover.target) {
+        this.marker.visible = false
+      } else {
+        mat.opacity = Math.min(1, left / 400) * 0.8
+        const s = 1 + Math.sin(t * 6) * 0.08
+        this.marker.scale.set(s, 1, s)
+        markerActive = true
+      }
+    }
+
     const sceneMotion = this.zone === 'courtyard' && (this.temple.hasTransientMotion() || striking)
     if (moving || wantsMove) this.lastInputAt = now
-    return moving || wantsMove || playersActive || cameraMoving || sceneMotion
+    return moving || wantsMove || playersActive || cameraMoving || markerActive || sceneMotion
   }
 
   private countFrame(cpuMs: number, time: number): void {
@@ -595,6 +628,21 @@ export class GameCore {
   }
 
   // ---------- 輸入 ----------
+
+  /** 滑鼠點擊地面：尋路走過去（桌機；觸控裝置用搖桿，InputController 不會送出手指點擊）。 */
+  private onTap(ndcX: number, ndcY: number): void {
+    // 鎖定中只有可提前結束的動作（誦經）能被點擊打斷：起身並走向點擊處
+    if (performance.now() < this.players.local.lockedUntil && !this.interruptLocal()) return
+    this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.renderer.camera)
+    const surface = this.zone === 'hall' && this.hall ? this.hall.walkSurface : this.temple.walkSurface
+    const hit = this.raycaster.intersectObject(surface, false)[0]
+    if (!hit) return
+    // 點到主殿建築時走向殿門，而不是被推到建築最近的邊緣。
+    const tapPortal = portalForTap(this.zone, hit.point.x, hit.point.z)
+    const want = tapPortal ? portalApproach(tapPortal) : { x: hit.point.x, z: hit.point.z }
+    this.pending = null
+    this.walkTo(resolveCollisions(want.x, want.z, this.moveCfg), 1600)
+  }
 
   /** 虛擬搖桿輸入（螢幕座標，長度 0～1）。高頻呼叫，只存值並喚醒迴圈。 */
   setMoveStick(x: number, y: number): void {
@@ -668,6 +716,7 @@ export class GameCore {
     this.incense.setZone(zone)
     this.striker.visible = zone === 'courtyard'
     this.inPortal = portalAt(zone, pos.x, pos.z) !== null
+    this.marker.visible = false
     this.audio.setIndoor(zone === 'hall')
     this.snapCamera = true
     this.wake()
@@ -680,6 +729,7 @@ export class GameCore {
     Object.assign(this.players.local.mover, { ...pos, target: null })
     this.path = []
     this.pending = null
+    this.marker.visible = false
     this.snapCamera = true
     this.wake()
   }
