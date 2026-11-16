@@ -142,14 +142,20 @@ function makeFaceAtlas(): THREE.CanvasTexture {
  * 從膚色網格取出臉部正面的三角形，貼圖座標由 x、y 平面投影而來；臉因此貼合頭的實際曲面。
  * 近處與遠處的膚色幾何各呼叫一次。實測遠處（monk-lod.glb）取到 24 個三角形，UV 涵蓋 u 0.07～0.93、v 0.095～0.895，
  * 五官所在的中央 70% 範圍有 99% 被涵蓋，只缺四個角落，所以兩者用同一個「三個頂點都在範圍內」的條件即可。
+ * 只取皮膚（skinPart 為 SKIN_PART.skin）的三角形：斗笠的帽沿也落在這個範圍裡，不可算進臉。
  */
-function makeFaceGeometry(skin: THREE.BufferGeometry): THREE.BufferGeometry {
+export function makeFaceGeometry(skin: THREE.BufferGeometry): THREE.BufferGeometry {
   const pos = skin.getAttribute('position')
   const nor = skin.getAttribute('normal')
+  const part = skin.getAttribute('skinPart') as THREE.BufferAttribute | undefined
   const index = skin.getIndex()!
   const R = FACE_RECT
   const inside = (i: number) =>
-    Math.abs(pos.getX(i)) <= R.x && pos.getY(i) >= R.yMin && pos.getY(i) <= R.yMax && pos.getZ(i) >= R.zMin
+    (!part || part.getX(i) === SKIN_PART.skin) &&
+    Math.abs(pos.getX(i)) <= R.x &&
+    pos.getY(i) >= R.yMin &&
+    pos.getY(i) <= R.yMax &&
+    pos.getZ(i) >= R.zMin
   const p: number[] = []
   const n: number[] = []
   const uv: number[] = []
@@ -173,46 +179,87 @@ function makeFaceGeometry(skin: THREE.BufferGeometry): THREE.BufferGeometry {
 const SASH_HALF_WIDTH = 0.058
 /** 披帶兩側略深的細邊寬度（公尺）。 */
 const SASH_HEM = 0.012
-/** 不戴念珠時，念珠的頂點縮到這一點（藏在袍裡），三角形退化成不繪製。 */
-const BEAD_HIDE_POINT = '0.0, 0.5, 0.0'
 /** 替代用圓柱的 robeField.x：遠離披帶中線，不畫披帶。 */
 const NO_SASH = 9
 
 /**
- * 修補身體（袍、鞋、念珠）的 MeshStandardMaterial：依實例的衣裝編號（outfitId）查 uniform 色表上色。
- * - 袍色乘在頂點色上（袖口略深、鞋近黑）。
+ * 身體的部位（模型屬性 _OUTFIT.y，與 scripts/build-avatar.mjs 的 BODY_PART 相同）。
+ * shared 永遠顯示（袖子、鞋）；bead 只在有念珠的衣裝；robe（鐘形的袍與寬袖口）與 tunic 以後的部位（短褂）依衣裝的輪廓二選一。
+ */
+export const BODY_PART = { shared: 0, bead: 1, robe: 2, tunic: 3, trousers: 4, leggings: 5, belt: 6 } as const
+/** 膚色網格的部位（模型屬性 _PART）：皮膚（頭、耳朵、手）與斗笠。 */
+export const SKIN_PART = { skin: 0, hat: 1 } as const
+/** 不顯示的身體部位縮到這一點（藏在袍裡），三角形退化成不繪製。 */
+const BODY_HIDE_POINT = '0.0, 0.5, 0.0'
+/** 不戴斗笠時，斗笠的頂點縮到頭的中心。 */
+const HAT_HIDE_POINT = '0.0, 0.86, 0.0'
+/** 戴斗笠時名牌與對話泡泡升高的量（公尺）：鏡頭抬到俯角約 0.8 弧度時，名牌仍在帽沿之上。 */
+const HAT_LABEL_LIFT = 0.08
+
+const linearRgba = (hex: string, a: number) => {
+  const c = new THREE.Color(hex) // 轉成線性色彩空間
+  return new THREE.Vector4(c.r, c.g, c.b, a)
+}
+
+/**
+ * 身體的衣裝 uniform 色表（主材質與深度材質共用同一份物件）。
+ * outfitRobe：袍（或短褂上衣）色，a = 1 表示輪廓是短褂；outfitSash／outfitBeads：a = 1 表示有披帶／念珠；
+ * outfitTunic：每套 3 格（褲、綁腿、腰帶），沒有短褂的衣裝填袍色（不會用到）。
+ */
+function bodyOutfitUniforms() {
+  return {
+    outfitRobe: { value: OUTFITS.map((o) => linearRgba(o.robe, o.tunic ? 1 : 0)) },
+    outfitSash: { value: OUTFITS.map((o) => linearRgba(o.sash ?? o.robe, o.sash ? 1 : 0)) },
+    outfitBeads: { value: OUTFITS.map((o) => linearRgba(o.beads ?? o.robe, o.beads ? 1 : 0)) },
+    outfitTunic: {
+      value: OUTFITS.flatMap((o) =>
+        [o.tunic?.trousers, o.tunic?.leggings, o.tunic?.belt].map((hex) => new THREE.Color(hex ?? o.robe)),
+      ),
+    },
+  }
+}
+type BodyOutfitUniforms = ReturnType<typeof bodyOutfitUniforms>
+
+/** 身體頂點著色器的共用部分：宣告與「依衣裝收合不顯示的部位」，主材質與陰影的深度材質都用，影子才會跟著衣裝。 */
+const BODY_VERTEX_HEAD = (n: number) =>
+  `attribute float outfitId;\nattribute vec2 robeField;\nuniform vec4 outfitRobe[${n}];\nuniform vec4 outfitBeads[${n}];\n`
+const BODY_VERTEX_HIDE = `
+        int outfitK = int(outfitId + 0.5);
+        int outfitPart = int(robeField.y + 0.5);
+        bool outfitIsTunic = outfitRobe[outfitK].a > 0.5;
+        if ((outfitPart == ${BODY_PART.bead} && outfitBeads[outfitK].a < 0.5) ||
+            (outfitPart == ${BODY_PART.robe} && outfitIsTunic) ||
+            (outfitPart >= ${BODY_PART.tunic} && !outfitIsTunic)) transformed = vec3(${BODY_HIDE_POINT});`
+
+/**
+ * 修補身體（袍、鞋、念珠、短褂）的 MeshStandardMaterial：依實例的衣裝編號（outfitId）查 uniform 色表上色。
+ * - 部位的底色在頂點著色器決定（袍與袖子、鞋用袍色，念珠、褲、綁腿、腰帶各用自己的色），乘在頂點色上（袖口略深、鞋近黑、綁腿的條紋）。
  * - 袈裟：robeField.x 是到披帶中線的有號距離，片段著色器以 smoothstep（寬度取 fwidth）做門檻，低面數模型邊緣一樣俐落。
- * - 念珠：robeField.y = 1 的頂點；不戴念珠的衣裝在頂點著色器把它縮到一點。念珠的影子不另外處理（深度材質沒有修補）。
+ *   只有袍、袖子與鞋（shared、robe）會有披帶；鞋與念珠的 x 遠離中線。
+ * - 不顯示的部位（不戴的念珠、另一種輪廓）在頂點著色器縮到一點；陰影用 makeBodyDepthMaterial() 做同樣的事。
  * 近、遠兩個 tier 共用這個材質，程式只有一份。
  */
-function patchOutfitMaterial(mat: THREE.MeshStandardMaterial): void {
+function patchOutfitMaterial(mat: THREE.MeshStandardMaterial, uniforms: BodyOutfitUniforms): void {
   const n = OUTFITS.length
-  const rgba = (hex: string, on: boolean) => {
-    const c = new THREE.Color(hex) // 轉成線性色彩空間
-    return new THREE.Vector4(c.r, c.g, c.b, on ? 1 : 0)
-  }
-  const uniforms = {
-    outfitRobe: { value: OUTFITS.map((o) => new THREE.Color(o.robe)) },
-    outfitSash: { value: OUTFITS.map((o) => rgba(o.sash ?? o.robe, !!o.sash)) },
-    outfitBeads: { value: OUTFITS.map((o) => rgba(o.beads ?? o.robe, !!o.beads)) },
-  }
-  const varyings = 'varying vec3 vOutfitRobe;\nvarying vec4 vOutfitSash;\nvarying vec3 vOutfitBeads;\nvarying vec2 vRobeField;\n'
+  const varyings = 'varying vec3 vOutfitBase;\nvarying vec4 vOutfitSash;\nvarying float vOutfitGloss;\nvarying float vSashD;\n'
   const edge = SASH_HALF_WIDTH.toFixed(4)
   const hemEdge = (SASH_HALF_WIDTH - SASH_HEM).toFixed(4)
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
     shader.vertexShader =
-      `attribute float outfitId;\nattribute vec2 robeField;\nuniform vec3 outfitRobe[${n}];\nuniform vec4 outfitSash[${n}];\nuniform vec4 outfitBeads[${n}];\n` +
+      BODY_VERTEX_HEAD(n) +
+      `uniform vec4 outfitSash[${n}];\nuniform vec3 outfitTunic[${n * 3}];\n` +
       varyings +
       shader.vertexShader.replace(
         '#include <begin_vertex>',
         `#include <begin_vertex>
-        int outfitK = int(outfitId + 0.5);
-        vOutfitRobe = outfitRobe[outfitK];
-        vOutfitSash = outfitSash[outfitK];
-        vOutfitBeads = outfitBeads[outfitK].rgb;
-        vRobeField = robeField;
-        if (robeField.y > 0.5 && outfitBeads[outfitK].a < 0.5) transformed = vec3(${BEAD_HIDE_POINT});`,
+        ${BODY_VERTEX_HIDE}
+        vOutfitBase = outfitPart == ${BODY_PART.bead} ? outfitBeads[outfitK].rgb
+          : outfitPart >= ${BODY_PART.trousers} ? outfitTunic[outfitK * 3 + outfitPart - ${BODY_PART.trousers}]
+          : outfitRobe[outfitK].rgb;
+        vOutfitSash = outfitPart <= ${BODY_PART.robe} ? outfitSash[outfitK] : vec4(0.0);
+        vOutfitGloss = outfitPart == ${BODY_PART.bead} ? 1.0 : 0.0;
+        vSashD = robeField.x;`,
       )
     shader.fragmentShader =
       varyings +
@@ -221,33 +268,119 @@ function patchOutfitMaterial(mat: THREE.MeshStandardMaterial): void {
           '#include <color_fragment>',
           `#include <color_fragment>
           {
-            float sashD = abs(vRobeField.x);
-            float sashAa = max(fwidth(vRobeField.x), 1e-4);
+            float sashD = abs(vSashD);
+            float sashAa = max(fwidth(vSashD), 1e-4);
             float band = vOutfitSash.a * (1.0 - smoothstep(${edge} - sashAa, ${edge} + sashAa, sashD));
             float hem = smoothstep(${hemEdge} - sashAa, ${hemEdge} + sashAa, sashD);
-            vec3 cloth = mix(vOutfitRobe, vOutfitSash.rgb * mix(1.0, 0.7, hem), band);
-            diffuseColor.rgb *= mix(cloth, vOutfitBeads, step(0.5, vRobeField.y));
+            diffuseColor.rgb *= mix(vOutfitBase, vOutfitSash.rgb * mix(1.0, 0.7, hem), band);
           }`,
         )
         .replace(
           '#include <roughnessmap_fragment>',
-          '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.4, step(0.5, vRobeField.y));',
+          '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.4, vOutfitGloss);',
         )
   }
-  mat.customProgramCacheKey = () => 'avatar-outfit-v1'
+  mat.customProgramCacheKey = () => 'avatar-outfit-v2'
 }
 
-/** 替代用的袍（圓柱）：補上與模型相同的頂點色（全白）與衣裝屬性（不在披帶上、不是念珠）。 */
+/** 身體投影用的深度材質：與主材質相同的收合規則，不顯示的部位不投影。 */
+function makeBodyDepthMaterial(uniforms: BodyOutfitUniforms): THREE.MeshDepthMaterial {
+  const mat = new THREE.MeshDepthMaterial()
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.outfitRobe = uniforms.outfitRobe
+    shader.uniforms.outfitBeads = uniforms.outfitBeads
+    shader.vertexShader =
+      BODY_VERTEX_HEAD(OUTFITS.length) +
+      shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\n${BODY_VERTEX_HIDE}`)
+  }
+  mat.customProgramCacheKey = () => 'avatar-outfit-depth-v1'
+  return mat
+}
+
+/** 斗笠的 uniform 色表：a = 1 表示戴斗笠。主材質與深度材質共用。 */
+function skinOutfitUniforms() {
+  return { outfitHat: { value: OUTFITS.map((o) => linearRgba(o.hat ?? '#ffffff', o.hat ? 1 : 0)) } }
+}
+type SkinOutfitUniforms = ReturnType<typeof skinOutfitUniforms>
+const SKIN_VERTEX_HEAD = (n: number) => `attribute float outfitId;\nattribute float skinPart;\nuniform vec4 outfitHat[${n}];\n`
+const SKIN_VERTEX_HIDE = `
+        int outfitK = int(outfitId + 0.5);
+        if (skinPart > 0.5 && outfitHat[outfitK].a < 0.5) transformed = vec3(${HAT_HIDE_POINT});`
+
+/**
+ * 修補膚色網格（頭、耳朵、手、斗笠）的 MeshStandardMaterial。皮膚的頂點色是 1，外觀與單色材質相同；
+ * 斗笠的顏色取衣裝的 hat 色乘上頂點色（竹編的明暗），不戴的衣裝在頂點著色器縮到一點（陰影見 makeSkinDepthMaterial）。
+ */
+function patchSkinMaterial(mat: THREE.MeshStandardMaterial, uniforms: SkinOutfitUniforms): void {
+  const varyings = 'varying vec3 vHatColor;\nvarying float vHat;\n'
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms)
+    shader.vertexShader =
+      SKIN_VERTEX_HEAD(OUTFITS.length) +
+      varyings +
+      shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>\n${SKIN_VERTEX_HIDE}\n vHatColor = outfitHat[outfitK].rgb;\n vHat = skinPart;`,
+      )
+    shader.fragmentShader =
+      varyings +
+      shader.fragmentShader
+        .replace(
+          '#include <color_fragment>',
+          '#include <color_fragment>\n diffuseColor.rgb = mix(diffuseColor.rgb, vHatColor * vColor.rgb, step(0.5, vHat));',
+        )
+        .replace(
+          '#include <roughnessmap_fragment>',
+          '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.85, step(0.5, vHat));',
+        )
+  }
+  mat.customProgramCacheKey = () => 'avatar-skin-v1'
+}
+
+/** 膚色網格投影用的深度材質：不戴斗笠的人沒有帽子的影子。 */
+function makeSkinDepthMaterial(uniforms: SkinOutfitUniforms): THREE.MeshDepthMaterial {
+  const mat = new THREE.MeshDepthMaterial()
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.outfitHat = uniforms.outfitHat
+    shader.vertexShader =
+      SKIN_VERTEX_HEAD(OUTFITS.length) +
+      shader.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>\n${SKIN_VERTEX_HIDE}`)
+  }
+  mat.customProgramCacheKey = () => 'avatar-skin-depth-v1'
+  return mat
+}
+
+/** 每個頂點填同一個值的屬性（替代用幾何補上模型才有的頂點色與部位）。 */
+const constantAttribute = (count: number, itemSize: number, value: number) =>
+  new THREE.Float32BufferAttribute(new Float32Array(count * itemSize).fill(value), itemSize)
+
+/** 替代用的袍（圓柱）：補上與模型相同的頂點色（全白）與衣裝屬性（不在披帶上、兩種輪廓都顯示）。 */
 function makePlaceholderRobe(): THREE.BufferGeometry {
   const geo = new THREE.CylinderGeometry(0.2, 0.36, 1.05, 8)
   geo.translate(0, 0.525, 0)
   const count = geo.getAttribute('position').count
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(count * 3).fill(1), 3))
+  geo.setAttribute('color', constantAttribute(count, 3, 1))
   const field = new Float32Array(count * 2)
-  for (let i = 0; i < count; i++) field[i * 2] = NO_SASH
+  for (let i = 0; i < count; i++) {
+    field[i * 2] = NO_SASH
+    field[i * 2 + 1] = BODY_PART.shared
+  }
   geo.setAttribute('robeField', new THREE.Float32BufferAttribute(field, 2))
   return geo
 }
+
+/** 替代用的頭（球）：頂點色全白、全部是皮膚（沒有斗笠）。 */
+function makePlaceholderHead(): THREE.BufferGeometry {
+  const geo = new THREE.IcosahedronGeometry(0.17, 1)
+  geo.translate(0, 1.2, 0)
+  const count = geo.getAttribute('position').count
+  geo.setAttribute('color', constantAttribute(count, 3, 1))
+  geo.setAttribute('skinPart', constantAttribute(count, 1, SKIN_PART.skin))
+  return geo
+}
+
+/** 名牌與對話泡泡的額外高度：戴斗笠的衣裝升高。 */
+const labelLift = (outfit: number) => (OUTFITS[outfit]?.hat ? HAT_LABEL_LIFT : 0)
 
 const ORIGIN = new THREE.Vector3()
 export const PIVOT_HEIGHT = 0.55
@@ -313,7 +446,7 @@ function makeBubbleTexture(text: string): THREE.CanvasTexture {
 
 /**
  * 角色工廠與批次繪製擁有者。
- * 所有角色以 InstancedMesh 批次繪製：身體（袍與鞋）、膚色部分（頭與手）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個，對話泡泡每個正在說話的人 1 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
+ * 所有角色以 InstancedMesh 批次繪製：身體（袍或短褂、鞋）、膚色部分（頭、手與斗笠）與臉各分近、遠兩批，加上影子，不論人數多少都是 7 個 draw call（名牌另計，最多 12 個，對話泡泡每個正在說話的人 1 個；有人手上拿著香時另加 1 個，有人誦經時木魚與槌另加 1 個）。
  * 臉（五官圖集）近遠都畫，各自貼在該 tier 的頭部曲面上，不投影。
  * 近處用完整模型並投射即時陰影；遠處用低面數模型（monk-lod.glb）且不投影，只留腳下的假影子。
  * 模型是 Q 版小沙彌公仔（public/models/monk.glb，由 scripts/build-avatar.mjs 以程式產生），沒有骨架：
@@ -328,7 +461,7 @@ export class AvatarFactory {
    */
   private tiers: Array<{
     body: THREE.InstancedMesh
-    /** 每個實例的衣裝編號（身體的實例屬性 outfitId）。 */
+    /** 每個實例的衣裝編號（身體與膚色共用的實例屬性 outfitId）。 */
     outfit: THREE.InstancedBufferAttribute
     skin: THREE.InstancedMesh
     face: THREE.InstancedMesh
@@ -356,15 +489,20 @@ export class AvatarFactory {
 
   constructor(parent: THREE.Object3D) {
     const t = this.tracker
-    const headGeo = t.track(new THREE.IcosahedronGeometry(0.17, 1))
-    headGeo.translate(0, 1.2, 0)
     const shadowGeo = t.track(new THREE.CircleGeometry(0.45, 16))
     shadowGeo.rotateX(-Math.PI / 2)
 
     // 袍色與配件由實例的衣裝編號決定（patchOutfitMaterial），材質本身用白色；模型的頂點色把袖口與鞋子壓暗。
+    const bodyUniforms = bodyOutfitUniforms()
     const robeMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.85 }))
-    patchOutfitMaterial(robeMat)
-    const skinMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#d2a07c', roughness: 0.7 }))
+    patchOutfitMaterial(robeMat, bodyUniforms)
+    // 皮膚的頂點色是 1（與單色材質相同）；斗笠的顏色與收合同樣依實例的衣裝編號（patchSkinMaterial）
+    const skinUniforms = skinOutfitUniforms()
+    const skinMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#d2a07c', vertexColors: true, roughness: 0.7 }))
+    patchSkinMaterial(skinMat, skinUniforms)
+    // 陰影那一趟用同樣收合的深度材質：不戴的念珠、斗笠與另一種輪廓不投影
+    const bodyDepthMat = t.trackMaterial(makeBodyDepthMaterial(bodyUniforms))
+    const skinDepthMat = t.trackMaterial(makeSkinDepthMaterial(skinUniforms))
 
     const c = document.createElement('canvas')
     c.width = c.height = 64
@@ -408,13 +546,17 @@ export class AvatarFactory {
         )
     }
     this.tiers = [true, false].map((near) => {
-      // 衣裝編號是實例屬性，掛在各 tier 自己的幾何上，所以替代用的圓柱每個 tier 各一份
+      // 衣裝編號是實例屬性，同一份掛在該 tier 的身體與膚色幾何上，所以替代用的圓柱與球每個 tier 各一份
       const outfit = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY), 1)
       outfit.setUsage(THREE.DynamicDrawUsage)
       const robeGeo = t.track(makePlaceholderRobe())
       robeGeo.setAttribute('outfitId', outfit)
+      const headGeo = t.track(makePlaceholderHead())
+      headGeo.setAttribute('outfitId', outfit)
       const body = make(robeGeo, robeMat)
       const skin = make(headGeo, skinMat)
+      body.customDepthMaterial = bodyDepthMat
+      skin.customDepthMaterial = skinDepthMat
       body.castShadow = skin.castShadow = near
       // 臉不投影（兩個 tier 都一樣）；幾何在模型載入後才有
       const face = make(t.track(new THREE.BufferGeometry()), faceMat)
@@ -451,16 +593,20 @@ export class AvatarFactory {
           const body = geometryOf('body')
           const skin = geometryOf('skin')
           if (!body || !skin) return
-          // build-avatar.mjs 的自訂屬性 _OUTFIT（GLTFLoader 轉成小寫 _outfit）改名為著色器用的 robeField
+          // build-avatar.mjs 的自訂屬性 _OUTFIT、_PART（GLTFLoader 轉成小寫）改名為著色器用的 robeField、skinPart
           const field = body.getAttribute('_outfit')
-          if (!field) {
-            console.warn(`${file} 缺少 _OUTFIT 屬性，請重新執行 npm run build:avatar`)
+          const skinPart = skin.getAttribute('_part')
+          if (!field || !skinPart || !body.getAttribute('color') || !skin.getAttribute('color')) {
+            console.warn(`${file} 缺少衣裝屬性，請重新執行 npm run build:avatar`)
             return
           }
           body.setAttribute('robeField', field)
           body.deleteAttribute('_outfit')
+          skin.setAttribute('skinPart', skinPart)
+          skin.deleteAttribute('_part')
           const tier = this.tiers[i]!
           body.setAttribute('outfitId', tier.outfit)
+          skin.setAttribute('outfitId', tier.outfit)
           tier.body.geometry = t.track(body)
           tier.skin.geometry = t.track(skin)
           // 臉取自該 tier 自己的膚色幾何，才會貼合各自的頭部曲面
@@ -493,7 +639,6 @@ export class AvatarFactory {
       label = new THREE.Sprite(labelMat)
       const img = labelTex.image as HTMLCanvasElement
       label.scale.set((img.width / img.height) * 0.28, 0.28, 1)
-      label.position.y = FIGURE_HEIGHT + 0.3
       root.add(label)
     }
 
@@ -512,6 +657,13 @@ export class AvatarFactory {
     const rig: AvatarRig = { root, pivot, head, face: FACE_CALM, prop: PROP_NONE, propAngle: 0 }
     const record: AvatarRecord = { rig, shadow, outfit: normalizeOutfit(opts.outfit) }
     this.records.add(record)
+    /** 名牌與泡泡的高度（戴斗笠時升高）；換衣裝時重新放。 */
+    const bubbleY = () => FIGURE_HEIGHT + (opts.local ? 0.3 : 0.55) + labelLift(record.outfit)
+    const placeLabels = () => {
+      if (label) label.position.y = FIGURE_HEIGHT + 0.3 + labelLift(record.outfit)
+      if (bubble) bubble.position.y = bubbleY()
+    }
+    placeLabels()
 
     return Object.assign(rig, {
       setLabelVisible(visible: boolean) {
@@ -526,7 +678,7 @@ export class AvatarFactory {
         const img = tex.image as HTMLCanvasElement
         bubble.scale.set((img.width / img.height) * 0.24 * (img.height / 44), 0.24 * (img.height / 44), 1)
         bubble.center.set(0.5, 0)
-        bubble.position.y = FIGURE_HEIGHT + (opts.local ? 0.3 : 0.55)
+        bubble.position.y = bubbleY()
         bubble.renderOrder = 10
         bubble.visible = labelOn
         root.add(bubble)
@@ -538,6 +690,7 @@ export class AvatarFactory {
       },
       setOutfit: (outfit: number) => {
         record.outfit = normalizeOutfit(outfit)
+        placeLabels()
       },
       dispose: () => {
         this.records.delete(record)

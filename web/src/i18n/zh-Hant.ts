@@ -105,6 +105,8 @@ const zhHant = {
   'outfit.black': '黑色海青',
   'outfit.kasaya': '黃袍披袈裟',
   'outfit.beads': '灰藍袍掛念珠',
+  'outfit.pilgrim': '行腳僧',
+  'outfit.warrior': '武僧短褂',
 
   'perf.label': '效能資訊',
   'perf.position': '座標',
