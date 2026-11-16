@@ -149,11 +149,11 @@ export function planChantSounds(chanters: readonly ChanterInfo[], fromS: number,
 
   const qings = audible
     .flatMap((a) => [a.c.startS + QING_START_MS, a.c.startS + QING_END_MS].map((atS) => ({ atS, gain: a.gain * QING_GAIN })))
-    .filter((q) => q.atS > fromS && q.atS <= toS)
-    .sort((a, b) => b.gain - a.gain)
+    .sort((a, b) => b.gain - a.gain || a.atS - b.atS)
+  // 先在全部候選上合併、再切視窗：tick 每次只排一小段，若先切視窗，相近的兩聲落在不同呼叫就合併不到。
   const kept: typeof qings = []
   for (const q of qings) if (kept.every((k) => Math.abs(k.atS - q.atS) >= QING_MERGE_MS)) kept.push(q)
-  out.push(...kept.map((q) => ({ atS: q.atS, sound: 'qing' as const, gain: q.gain })))
+  for (const q of kept) if (q.atS > fromS && q.atS <= toS) out.push({ atS: q.atS, sound: 'qing', gain: q.gain })
   return out.sort((a, b) => a.atS - b.atS)
 }
 
