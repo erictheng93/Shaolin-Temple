@@ -104,6 +104,7 @@ const ja: Record<MessageKey, string> = {
   'outfit.beads': '青灰の衣に数珠',
 
   'perf.label': 'パフォーマンス情報',
+  'perf.position': '座標',
   'perf.quality': '画質 {quality} · 省電力 {level}/{max}',
 }
 

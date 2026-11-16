@@ -4,6 +4,7 @@ import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
 import { frameCap, isLowBattery } from './core/frameCap'
+import { debugPosition, type DebugPosition } from './core/position'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
 import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, saveSettings, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
@@ -89,7 +90,11 @@ export interface UiState {
   actions: UiAction[]
   chat: ChatEntry[]
   stats: Array<{ key: string; label: string; value: string | number }>
-  perf: { fps: number; frameMs: number; calls: number; triangles: number; rttMs: number | null }
+  /**
+   * pos：本機玩家的場景與座標（取整到 0.1 公尺），只在開啟「顯示效能資訊」時帶出；
+   * 沒開時為 null，走路不會讓 UiState 的內容改變而多推送。
+   */
+  perf: { fps: number; frameMs: number; calls: number; triangles: number; rttMs: number | null; pos: DebugPosition | null }
 }
 
 export interface GameCoreOptions {
@@ -979,7 +984,7 @@ export class GameCore {
       chat: this.chatLog,
       stats: [...this.stats].map(([key, s]) => ({ key, label: t(s.label), value: s.value })),
       // 迴圈停止時不再計幀，顯示 0 而非最後一次的數值。
-      perf: { fps: performance.now() - this.lastRender > 1500 ? 0 : this.fps, frameMs: this.frameMs, calls: r.calls, triangles: r.triangles, rttMs: this.rtt },
+      perf: { fps: performance.now() - this.lastRender > 1500 ? 0 : this.fps, frameMs: this.frameMs, calls: r.calls, triangles: r.triangles, rttMs: this.rtt, pos: this.debugPos() },
     }
     const json = JSON.stringify(state)
     if (!force && json === this.lastUiJson) return
@@ -990,6 +995,13 @@ export class GameCore {
   /** 以目前語言提示（toast 以發出當下的語言為準，已顯示的不回頭改）。 */
   private toast(key: MessageKey, params?: Record<string, string | number>): void {
     this.opts.onToast(t(key, params))
+  }
+
+  /** 效能資訊面板的本機座標；沒開效能資訊時為 null。 */
+  private debugPos(): DebugPosition | null {
+    if (!this.settings.showStats) return null
+    const m = this.players.local.mover
+    return debugPosition(this.zone, m.x, m.z, m.heading)
   }
 
   private volumes() {
