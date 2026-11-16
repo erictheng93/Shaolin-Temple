@@ -370,6 +370,60 @@ async fn zone_switch_requires_the_portal_and_uses_server_landing_point() {
     );
 }
 
+// ---- 聊天 ----
+
+#[tokio::test]
+async fn chat_is_cleaned_and_reaches_everyone_in_the_room_across_zones() {
+    let server = server_with(options()).await;
+    let mut a = connect(&server).await;
+    let me = hello(&mut a, None).await;
+    let mut b = connect(&server).await;
+    hello(&mut b, None).await;
+    // A 走進殿內，B 留在庭院
+    for (x, z, wait) in [(2.0, 5.0, 1500), (2.0, -4.0, 2000), (0.0, -5.6, 600)] {
+        sleep(Duration::from_millis(wait)).await;
+        send(&mut a, position("stop", x, z)).await;
+    }
+    send(
+        &mut a,
+        json!({ "t": "zone", "zone": "hall", "x": 0, "z": 0, "heading": 0 }),
+    )
+    .await;
+    recv_kind(&mut a, "sync").await;
+    send(
+        &mut a,
+        json!({ "t": "chat", "text": " 阿彌陀佛 \n\u{202E}  南無\u{0} " }),
+    )
+    .await;
+    // 清理後為空：不廣播
+    send(&mut a, json!({ "t": "chat", "text": " \n\u{200B} " })).await;
+    for ws in [&mut a, &mut b] {
+        let chat = recv_kind(ws, "chat").await;
+        assert_eq!(chat["id"], me.id.as_str());
+        assert_eq!(chat["text"], "阿彌陀佛 南無");
+        assert!(chat["at"].as_f64().unwrap() > 1.0e12);
+        let rest = collect(ws, Duration::from_millis(200)).await;
+        assert!(!rest.iter().any(|m| m["t"] == "chat"));
+    }
+}
+
+#[tokio::test]
+async fn chat_over_the_rate_limit_is_dropped() {
+    let server = server_with(options()).await;
+    let mut a = connect(&server).await;
+    hello(&mut a, None).await;
+    for i in 0..5 {
+        send(&mut a, json!({ "t": "chat", "text": format!("訊息{i}") })).await;
+    }
+    let seen = collect(&mut a, Duration::from_millis(500)).await;
+    let texts: Vec<_> = seen
+        .iter()
+        .filter(|m| m["t"] == "chat")
+        .map(|m| m["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["訊息0", "訊息1", "訊息2"]);
+}
+
 // ---- T5：停止 ----
 
 #[tokio::test]

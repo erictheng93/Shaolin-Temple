@@ -13,6 +13,9 @@ const POSITION_BURST: f64 = 3.0;
 /// action 的突發量：正常操作最多連續 3 則（誦經剛開始就按別的動作＝chant → chant_end → 新動作），
 /// 各動作的冷卻讓第 4 則不會緊接著出現。每秒補充仍是 ACTION_PER_SEC。
 const ACTION_BURST: f64 = 3.0;
+/// 聊天：突發 3 則，每秒補充 0.5 則。
+const CHAT_BURST: f64 = 3.0;
+const CHAT_PER_SEC: f64 = 0.5;
 /// 兩次丟棄相隔不超過這段時間，才算「連續」超出。
 const STREAK_GAP: Duration = Duration::from_secs(1);
 /// 連續超出多久就關閉連線。
@@ -56,6 +59,7 @@ pub struct RateLimiter {
     all: Bucket,
     position: Bucket,
     action: Bucket,
+    chat: Bucket,
     close_after: Duration,
     /// 目前這一段連續超出的起點與最近一次丟棄的時間。
     streak: Option<(Instant, Instant)>,
@@ -68,6 +72,7 @@ impl RateLimiter {
             all: Bucket::new(ALL_PER_SEC, ALL_PER_SEC, now),
             position: Bucket::new(POSITION_BURST, POSITION_PER_SEC, now),
             action: Bucket::new(ACTION_BURST, ACTION_PER_SEC, now),
+            chat: Bucket::new(CHAT_BURST, CHAT_PER_SEC, now),
             close_after,
             streak: None,
             dropped: 0,
@@ -78,6 +83,7 @@ impl RateLimiter {
         let mut specific = match message {
             ClientMessage::Move { .. } | ClientMessage::Stop { .. } => Some(&mut self.position),
             ClientMessage::Action { .. } => Some(&mut self.action),
+            ClientMessage::Chat { .. } => Some(&mut self.chat),
             _ => None,
         };
         let allowed = self.all.has_token(now) && specific.as_mut().is_none_or(|b| b.has_token(now));
@@ -189,6 +195,25 @@ mod tests {
         // 一秒後補滿
         assert_eq!(
             limiter.admit(&ping(), t0 + Duration::from_secs(1)),
+            Verdict::Pass
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn chat_burst_three_then_one_per_two_seconds() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
+        let chat = ClientMessage::Chat { text: "a".into() };
+        let passed = (0..5)
+            .filter(|_| limiter.admit(&chat, t0) == Verdict::Pass)
+            .count();
+        assert_eq!(passed, 3);
+        assert_eq!(
+            limiter.admit(&chat, t0 + Duration::from_secs(1)),
+            Verdict::Drop
+        );
+        assert_eq!(
+            limiter.admit(&chat, t0 + Duration::from_secs(2)),
             Verdict::Pass
         );
     }
