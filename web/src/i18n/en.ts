@@ -95,6 +95,14 @@ const en: Record<MessageKey, string> = {
   'credits.thanks': 'With thanks: the Shakyamuni Buddha statue is from {buddha} (CC0); scene textures are from {polyhaven} (CC0).',
   'credits.buddhaTitle': 'Cleveland Museum of Art, “1973.85 Seated Buddha”',
 
+  'outfit.label': 'Robes',
+  'outfit.orange': 'Saffron robe',
+  'outfit.grey': 'Grey daywear',
+  'outfit.brown': 'Brown long robe',
+  'outfit.black': 'Black long robe',
+  'outfit.kasaya': 'Yellow robe & kasaya',
+  'outfit.beads': 'Blue-grey robe & mala',
+
   'perf.label': 'Performance',
   'perf.quality': 'Quality {quality} · Saver {level}/{max}',
 }

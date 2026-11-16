@@ -16,6 +16,9 @@ const ACTION_BURST: f64 = 3.0;
 /// 聊天：突發 3 則，每秒補充 0.5 則。
 const CHAT_BURST: f64 = 3.0;
 const CHAT_PER_SEC: f64 = 0.5;
+/// 更換衣裝：與聊天相同的規則（突發 3 則，每 2 秒補 1 則），計數各自獨立。
+const OUTFIT_BURST: f64 = 3.0;
+const OUTFIT_PER_SEC: f64 = 0.5;
 /// 兩次丟棄相隔不超過這段時間，才算「連續」超出。
 const STREAK_GAP: Duration = Duration::from_secs(1);
 /// 連續超出多久就關閉連線。
@@ -60,6 +63,7 @@ pub struct RateLimiter {
     position: Bucket,
     action: Bucket,
     chat: Bucket,
+    outfit: Bucket,
     close_after: Duration,
     /// 目前這一段連續超出的起點與最近一次丟棄的時間。
     streak: Option<(Instant, Instant)>,
@@ -73,6 +77,7 @@ impl RateLimiter {
             position: Bucket::new(POSITION_BURST, POSITION_PER_SEC, now),
             action: Bucket::new(ACTION_BURST, ACTION_PER_SEC, now),
             chat: Bucket::new(CHAT_BURST, CHAT_PER_SEC, now),
+            outfit: Bucket::new(OUTFIT_BURST, OUTFIT_PER_SEC, now),
             close_after,
             streak: None,
             dropped: 0,
@@ -84,6 +89,7 @@ impl RateLimiter {
             ClientMessage::Move { .. } | ClientMessage::Stop { .. } => Some(&mut self.position),
             ClientMessage::Action { .. } => Some(&mut self.action),
             ClientMessage::Chat { .. } => Some(&mut self.chat),
+            ClientMessage::Outfit { .. } => Some(&mut self.outfit),
             _ => None,
         };
         let allowed = self.all.has_token(now) && specific.as_mut().is_none_or(|b| b.has_token(now));
@@ -195,6 +201,29 @@ mod tests {
         // 一秒後補滿
         assert_eq!(
             limiter.admit(&ping(), t0 + Duration::from_secs(1)),
+            Verdict::Pass
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn outfit_has_its_own_burst_of_three_independent_of_chat() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
+        let outfit = ClientMessage::Outfit {
+            outfit: serde_json::json!(1),
+        };
+        let chat = ClientMessage::Chat { text: "a".into() };
+        let passed = (0..5)
+            .filter(|_| limiter.admit(&outfit, t0) == Verdict::Pass)
+            .count();
+        assert_eq!(passed, 3);
+        assert_eq!(limiter.admit(&chat, t0), Verdict::Pass);
+        assert_eq!(
+            limiter.admit(&outfit, t0 + Duration::from_secs(1)),
+            Verdict::Drop
+        );
+        assert_eq!(
+            limiter.admit(&outfit, t0 + Duration::from_secs(2)),
             Verdict::Pass
         );
     }

@@ -95,6 +95,14 @@ const vi: Record<MessageKey, string> = {
   'credits.thanks': 'Tri ân: tượng Phật Thích Ca Mâu Ni lấy từ {buddha} (CC0); kết cấu khung cảnh lấy từ {polyhaven} (CC0).',
   'credits.buddhaTitle': 'Cleveland Museum of Art, “1973.85 Seated Buddha”',
 
+  'outfit.label': 'Y phục',
+  'outfit.orange': 'Pháp phục vàng cam',
+  'outfit.grey': 'Áo nhật bình xám',
+  'outfit.brown': 'Áo tràng nâu',
+  'outfit.black': 'Áo tràng đen',
+  'outfit.kasaya': 'Áo vàng đắp y',
+  'outfit.beads': 'Áo lam đeo tràng hạt',
+
   'perf.label': 'Thông tin hiệu năng',
   'perf.quality': 'Đồ họa {quality} · Tiết kiệm pin {level}/{max}',
 }

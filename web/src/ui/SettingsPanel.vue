@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { assetPresetFor, needsReload, saveSettings, type QualityLevel, type QualityPreset, type QualitySetting, type Settings } from '../game/core/settings'
 import { LOCALES, t, type MessageKey } from '../i18n'
 import LocaleSelect from './LocaleSelect.vue'
+import OutfitPicker from './OutfitPicker.vue'
 
 // settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。
 const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedPreset: QualityPreset }>()
@@ -71,6 +72,11 @@ function reloadNow() {
       <fieldset>
         <legend class="sr-only">{{ t('locale.label') }}</legend>
         <LocaleSelect v-model="s.locale" />
+      </fieldset>
+
+      <fieldset>
+        <legend>{{ t('outfit.label') }}</legend>
+        <OutfitPicker v-model="s.outfit" />
       </fieldset>
 
       <fieldset>

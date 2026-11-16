@@ -32,6 +32,49 @@ describe('settings 舊 key 遷移', () => {
   })
 })
 
+describe('衣裝', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const KEY = 'shaolin-temple:settings:v1'
+
+  it('第一次造訪（沒有存過）隨機挑一套並立即存起來', () => {
+    const store = stubStorage({})
+    expect(loadSettings(() => 0.7).outfit).toBe(4)
+    expect(JSON.parse(store.get(KEY)!).outfit).toBe(4)
+    // 之後載入沿用同一套，不再隨機
+    expect(loadSettings(() => 0).outfit).toBe(4)
+  })
+
+  it('舊版設定沒有衣裝欄位時也隨機挑一套，其他設定保留', () => {
+    const store = stubStorage({ [KEY]: JSON.stringify({ musicVolume: 0.3 }) })
+    const s = loadSettings(() => 0.2)
+    expect(s.outfit).toBe(1)
+    expect(s.musicVolume).toBe(0.3)
+    expect(JSON.parse(store.get(KEY)!).outfit).toBe(1)
+  })
+
+  it('存過的有效值照用；無效值回預設 0，不隨機', () => {
+    stubStorage({ [KEY]: JSON.stringify({ outfit: 3 }) })
+    expect(loadSettings(() => 0.9).outfit).toBe(3)
+    for (const bad of [6, -1, 2.5, '3', null]) {
+      stubStorage({ [KEY]: JSON.stringify({ outfit: bad }) })
+      expect(loadSettings(() => 0.9).outfit).toBe(0)
+    }
+  })
+
+  it('儲存被封鎖時仍回傳一套衣裝', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      setItem: () => {
+        throw new Error('blocked')
+      },
+      removeItem: () => {},
+    })
+    expect(loadSettings(() => 0.5).outfit).toBe(3)
+  })
+})
+
 describe('畫質', () => {
   afterEach(() => vi.unstubAllGlobals())
 

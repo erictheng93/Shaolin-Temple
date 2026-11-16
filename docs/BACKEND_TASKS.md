@@ -321,6 +321,17 @@ T8 報告指出 10% 移動情境剩下的超出量主要來自仍為 JSON 的 `a
 - **下行** `{ "t": "chat", "id", "text", "at" }`（JSON；`at` 為伺服器 Unix 毫秒）：由房間 actor 廣播給同房所有在線玩家，不分場景，含發話者本人；斷線保留中的玩家不送。連線層到房間的指令以 `try_send` 送出（佇列滿時丟棄）。
 - 固定資料 `protocol-v3.json` 的 `client`／`server` 各加一筆；缺 `text`、`text` 非字串的案例在 `tests/protocol.rs`。
 
+### 協定增修：玩家衣裝 `outfit`（2026-11-16，向下相容，不升版號）
+
+衣裝是整數編號 `0..OUTFIT_COUNT-1`（`OUTFIT_COUNT = 6`，`protocol::OUTFIT_COUNT`；前端 `protocol.ts` 同名，固定資料 `protocol-v3.json` 的 `outfitCount` 鎖住兩邊）。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
+
+- **`hello`** 新增可選欄位 `outfit`：缺少或無效（非整數、超出範圍、型別不符）一律當作 0，不拒絕連線（`protocol::parse_outfit`）。
+- **`PlayerSnapshot`** 新增 `outfit`（伺服器一律送出），`welcome.players` 與 `join` 因此帶衣裝。前端把缺少視為合法（舊伺服器相容），有值但不是範圍內整數則整則忽略。
+- **上行** `{ "t": "outfit", "outfit": n }`（不需 reqId／ack）：無效值丟棄（不計入無效訊息）；`rate_limit.rs` 的 outfit bucket 與 chat 同規則（突發 3、每秒補 0.5，計數各自獨立，同時算入總 bucket）；與目前相同不廣播；否則保存並廣播下行 `{ "t": "outfit", "id", "outfit" }`（JSON）給同房所有在線玩家，不分場景、含本人。連線層到房間的指令以 `send().await` 送出（是狀態，不可丟棄）。
+- **恢復連線**：衣裝留在玩家狀態裡，斷線保留期間與 `resumeToken` 恢復都保留。恢復時 `hello` 帶了有效且不同的 `outfit` 以它為準（`welcome` 已含新值），並在 `welcome` 送出後對其他人廣播一則 `outfit`；相同或沒帶則不廣播。
+- **客戶端**：`NetworkClient.setOutfit(n)` 記住衣裝（每次 `hello` 都帶，含重連），已連線時送出；客戶端限速（補充間隔多留 10%）擋下時只保留最新的一個值、額度恢復後補送，不排隊；斷線時不送。
+- 固定資料 `protocol-v3.json` 加入 `outfitCount`、帶衣裝的 `hello`／`welcome`／`join`、上行與下行 `outfit`（手寫，`protocol-v3-vectors.py` 只產生 `binary` 一段，不會覆蓋）；測試在 `tests/protocol.rs`、`tests/gameplay.rs`、`src/room/tests.rs`、`src/rate_limit.rs` 與前端 `net/outfit.test.ts`。負載工具的機器人 `hello` 帶隨機衣裝。
+
 ## T9 部署與正式環境壓測（P1）
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。

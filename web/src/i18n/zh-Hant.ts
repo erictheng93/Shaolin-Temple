@@ -98,6 +98,14 @@ const zhHant = {
   'credits.thanks': '致謝：釋迦牟尼佛像取自{buddha}（CC0）；場景貼圖取自{polyhaven}（CC0）。',
   'credits.buddhaTitle': 'Cleveland Museum of Art「1973.85 Seated Buddha」',
 
+  'outfit.label': '衣裝',
+  'outfit.orange': '橘黃僧袍',
+  'outfit.grey': '灰色常服',
+  'outfit.brown': '褐色海青',
+  'outfit.black': '黑色海青',
+  'outfit.kasaya': '黃袍披袈裟',
+  'outfit.beads': '灰藍袍掛念珠',
+
   'perf.label': '效能資訊',
   'perf.quality': '畫質 {quality} · 省電 {level}/{max}',
 }

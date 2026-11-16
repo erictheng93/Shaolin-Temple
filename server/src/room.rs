@@ -76,11 +76,14 @@ type Reply = oneshot::Sender<Option<Who>>;
 enum RoomCommand {
     Join {
         name: String,
+        outfit: u8,
         outbound: mpsc::Sender<ServerMessage>,
         reply: Reply,
     },
     Resume {
         token: String,
+        /// `hello` 帶的有效衣裝；沒有或無效為 `None`（沿用保存的衣裝）。
+        outfit: Option<u8>,
         outbound: mpsc::Sender<ServerMessage>,
         reply: Reply,
     },
@@ -107,6 +110,10 @@ enum RoomCommand {
         who: Who,
         text: String,
     },
+    Outfit {
+        who: Who,
+        outfit: u8,
+    },
 }
 
 struct Link {
@@ -117,6 +124,8 @@ struct Player {
     id: String,
     n: u8,
     name: String,
+    /// 衣裝編號（0..OUTFIT_COUNT），斷線保留期間與恢復連線時都保留。
+    outfit: u8,
     token: String,
     zone: &'static Zone,
     x: f64,
@@ -144,6 +153,7 @@ struct Player {
 
 struct Admission {
     name: String,
+    outfit: Option<u8>,
     resume_token: Option<String>,
     reply: oneshot::Sender<Membership>,
 }
@@ -186,6 +196,16 @@ impl Membership {
             text,
         });
     }
+    /// 更換衣裝（值已驗證）。是狀態而不是可丟棄的資料，所以等房間指令佇列有空位。
+    pub async fn outfit(&self, outfit: u8) {
+        let _ = self
+            .room
+            .send(RoomCommand::Outfit {
+                who: self.who.clone(),
+                outfit,
+            })
+            .await;
+    }
     pub async fn zone(&self, zone: String) {
         let _ = self
             .room
@@ -224,14 +244,14 @@ impl Lobby {
                                 .and_then(|no| rooms.get(&no))
                         {
                             let (reply, received) = oneshot::channel();
-                            let command = RoomCommand::Resume { token: token.clone(), outbound: outbound.clone(), reply };
+                            let command = RoomCommand::Resume { token: token.clone(), outfit: request.outfit, outbound: outbound.clone(), reply };
                             if room.send(command).await.is_ok() && let Ok(Some(who)) = received.await {
                                 assigned = Some((who, room.clone()));
                             }
                         }
                         if assigned.is_none() {
                             for room in rooms.values() {
-                                if let Some(who) = join(room, &request.name, outbound.clone()).await {
+                                if let Some(who) = join(room, &request.name, request.outfit.unwrap_or(0), outbound.clone()).await {
                                     assigned = Some((who, room.clone())); break;
                                 }
                             }
@@ -240,7 +260,7 @@ impl Lobby {
                             next_room += 1;
                             let (tx, rx) = mpsc::channel(128);
                             tokio::spawn(run_room(next_room, config, rx, metrics.clone()));
-                            if let Some(who) = join(&tx, &request.name, outbound.clone()).await { assigned = Some((who, tx.clone())); }
+                            if let Some(who) = join(&tx, &request.name, request.outfit.unwrap_or(0), outbound.clone()).await { assigned = Some((who, tx.clone())); }
                             rooms.insert(next_room, tx);
                         }
                         if let Some((who, room)) = assigned {
@@ -255,11 +275,19 @@ impl Lobby {
         Self { tx }
     }
     /// 加入房間；帶有效的 `resume_token` 時恢復原本的玩家，否則視為新玩家。
-    pub async fn join(&self, name: String, resume_token: Option<String>) -> Option<Membership> {
+    /// `outfit` 是 `hello` 帶的有效衣裝（缺少或無效為 `None`）：新玩家以它為準（沒有則 0），
+    /// 恢復時只有與保存值不同才更換。
+    pub async fn join(
+        &self,
+        name: String,
+        resume_token: Option<String>,
+        outfit: Option<u8>,
+    ) -> Option<Membership> {
         let (reply, received) = oneshot::channel();
         self.tx
             .send(Admission {
                 name,
+                outfit,
                 resume_token,
                 reply,
             })
@@ -271,11 +299,13 @@ impl Lobby {
 async fn join(
     room: &mpsc::Sender<RoomCommand>,
     name: &str,
+    outfit: u8,
     outbound: mpsc::Sender<ServerMessage>,
 ) -> Option<Who> {
     let (reply, received) = oneshot::channel();
     room.send(RoomCommand::Join {
         name: name.into(),
+        outfit,
         outbound,
         reply,
     })
@@ -339,6 +369,7 @@ impl Room {
             z: p.z,
             heading: p.heading,
             action: p.action.clone(),
+            outfit: p.outfit,
         }
     }
     fn welcome(&self, p: &Player) -> ServerMessage {
@@ -360,6 +391,7 @@ impl Room {
     fn join(
         &mut self,
         name: String,
+        outfit: u8,
         outbound: mpsc::Sender<ServerMessage>,
         now: Instant,
     ) -> Option<Who> {
@@ -375,6 +407,7 @@ impl Room {
             id: id.clone(),
             n,
             name,
+            outfit,
             token: self.new_token(),
             zone: &world::COURTYARD,
             x: spawn.x + rand::random_range(-2.0..=2.0),
@@ -404,6 +437,7 @@ impl Room {
     fn resume(
         &mut self,
         token: &str,
+        outfit: Option<u8>,
         outbound: mpsc::Sender<ServerMessage>,
         now: Instant,
     ) -> Option<Who> {
@@ -428,9 +462,21 @@ impl Room {
             p.moving = false;
             p.dirty = true;
         }
+        // hello 帶了有效且不同的衣裝以它為準（welcome 已含新值）；其他人要另外得知。
+        let changed = outfit.filter(|o| *o != p.outfit);
+        if let Some(o) = changed {
+            p.outfit = o;
+        }
         if !self.send_welcome(&id) {
             self.detach(&id, now);
             return None;
+        }
+        if let Some(outfit) = changed {
+            let message = ServerMessage::Outfit {
+                id: id.clone(),
+                outfit,
+            };
+            self.broadcast(message, now, |q| q.id != id);
         }
         Some(Who { id, conn })
     }
@@ -567,6 +613,20 @@ impl Room {
             id: who.id.clone(),
             text,
             at: now_ms(),
+        };
+        self.broadcast(message, now, |_| true);
+    }
+
+    /// 更換衣裝：與目前相同不廣播；否則保存並廣播給同房所有在線玩家（不分場景、含本人）。
+    fn set_outfit(&mut self, who: &Who, outfit: u8, now: Instant) {
+        let Some(p) = self.live(who) else { return };
+        if p.outfit == outfit {
+            return;
+        }
+        p.outfit = outfit;
+        let message = ServerMessage::Outfit {
+            id: who.id.clone(),
+            outfit,
         };
         self.broadcast(message, now, |_| true);
     }
@@ -723,9 +783,9 @@ async fn run_room(
                 let Some(command) = command else { break };
                 let now = Instant::now();
                 match command {
-                    RoomCommand::Join { name, outbound, reply } => {
+                    RoomCommand::Join { name, outfit, outbound, reply } => {
                         if reply.is_closed() || outbound.is_closed() { let _ = reply.send(None); continue; }
-                        match room.join(name, outbound, now) {
+                        match room.join(name, outfit, outbound, now) {
                             Some(who) => {
                                 let id = who.id.clone();
                                 if reply.send(Some(who)).is_err() {
@@ -738,8 +798,8 @@ async fn run_room(
                             None => { let _ = reply.send(None); }
                         }
                     }
-                    RoomCommand::Resume { token, outbound, reply } => {
-                        let _ = reply.send(room.resume(&token, outbound, now));
+                    RoomCommand::Resume { token, outfit, outbound, reply } => {
+                        let _ = reply.send(room.resume(&token, outfit, outbound, now));
                     }
                     RoomCommand::Disconnect(who) => {
                         if room.live(&who).is_some() { room.detach(&who.id, now); }
@@ -748,6 +808,7 @@ async fn run_room(
                     RoomCommand::Action { who, req_id, action, data_ok } => room.action(&who, req_id, action, data_ok, now),
                     RoomCommand::Zone { who, zone } => room.switch_zone(&who, &zone, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
+                    RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
                 }
             }
             _ = tick.tick() => {
