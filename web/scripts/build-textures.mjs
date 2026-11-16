@@ -2,7 +2,7 @@
 //   assets/textures/*.jpg  → public/textures/*.ktx2（場景材質）
 //   assets/lightmaps/*.png → public/lightmaps/*.ktx2（庭院烘焙貼圖，RGBA 線性：RGB = AO、A = 太陽可見度）
 //   assets/statues/*.png   → public/statues/*.ktx2（殿內神像的底色 sRGB 與法線，由 process-statues 產生）
-//   assets/backdrops/*.png → public/backdrops/*.ktx2（殿門外景 sRGB，由 capture-doorway 產生）
+//   assets/backdrops/*.png → public/backdrops/*.ktx2（殿門兩側的景 sRGB＋alpha，由 capture-doorway 產生）
 // 用法：node scripts/build-textures.mjs [textures|lightmaps|statues|backdrops]（不給參數全部都做）。
 // 需要 Khronos KTX-Software 的 ktx 執行檔：放在 PATH，或以環境變數 KTX 指定路徑。
 // ponytail: 全部用 ETC1S，下載量與 JPG 相近；法線若看得出色塊再改 UASTC（下載量約 4 倍）。
@@ -47,10 +47,11 @@ const jobs = [
     },
   },
   {
-    // 殿門外景（capture-doorway 從庭院場景擷取的全景圖，已含色調映射，sRGB）
+    // 殿門兩側的景（capture-doorway 擷取的兩層全景圖，已是最終顏色，sRGB）。門外景的第 1 層用 alpha
+    // 標出香爐與石燈籠（直立片以 alphaTest 裁切），所以帶 alpha；ETC1S 的 alpha 是獨立的 slice。
     name: 'backdrops',
     ext: '.png',
-    args: () => ['create', '--format', 'R8G8B8_SRGB', '--assign-tf', 'srgb', '--assign-primaries', 'bt709', '--encode', 'basis-lz', '--clevel', '4', '--qlevel', '255', '--generate-mipmap'],
+    args: () => ['create', '--format', 'R8G8B8A8_SRGB', '--assign-tf', 'srgb', '--assign-primaries', 'bt709', '--encode', 'basis-lz', '--clevel', '4', '--qlevel', '255', '--generate-mipmap'],
   },
 ]
 

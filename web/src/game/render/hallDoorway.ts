@@ -11,6 +11,8 @@ import type { ResourceTracker } from './ResourceTracker'
  *   新增的只有格心（畫在 canvas 上的菱花格與窗紙，一張貼圖）、門外景與地上的日光。
  * - 格心用不透明貼圖而不是鏤空：門扇貼著牆，後面本來就是牆；不透明才有 mipmap、遠看不閃爍，也沒有排序問題。
  *   橫披窗的直櫺是實體細條，透出門外的景。
+ * - 門框（doorFrameSlabs）、門扇（doorLeafParts）與格心貼圖（latticeTexture）也給庭院側的主殿正面使用
+ *   （TempleScene 的 buildHallFront，等比縮小、門扇改為推開 90°），兩側樣式一致。
  */
 
 /** 門洞（殿內座標）：寬 3、高 3.6，牆厚 0.3。 */
@@ -39,6 +41,127 @@ const LEAF = {
   front: 8.77,
 }
 
+/** 門扇格心的寬與高（殿內座標）：格心貼圖就是依這個比例畫的，庭院側的格扇窗用同樣比例才不會拉伸。 */
+export const LEAF_LATTICE_SIZE: readonly [number, number] = [LEAF.width - LEAF.stile * 2, LEAF.lattice[1] - LEAF.lattice[0]]
+
+type Range = readonly [number, number]
+export type DoorMaterialKey = 'lacquer' | 'lacquerDark' | 'gold'
+/** 依範圍放一個方塊；範圍一律以殿內座標表示（庭院側自己換算，見 TempleScene 的殿門）。 */
+export type DoorSlab = (mat: DoorMaterialKey, x: Range, y: Range, z: Range) => void
+
+export interface DoorFrameOptions {
+  /** 橫披窗每格的直櫺數。 */
+  transomBars: number
+  /** 直櫺寬（殿內座標）。庭院側縮小後太細會閃爍，用較少、較粗的櫺條。 */
+  barWidth: number
+}
+
+/**
+ * 門框：抱框、門檻、中檻（門楣，下緣一道金線）、上檻，與兩根間柱分成三格的直櫺橫披窗。
+ * 殿內與庭院兩側共用：範圍以殿內座標交給 slab，庭院側以等比縮放換算到主殿正面。
+ */
+export function doorFrameSlabs(slab: DoorSlab, opts: DoorFrameOptions = { transomBars: 9, barWidth: 0.025 }): void {
+  const { halfWidth: hw, height } = HALL_DOOR
+  const outer = hw + JAMB_W
+  const frameZ = [FRAME_FRONT, FRAME_BACK] as const
+  // 抱框的內面退進門洞 1 公分，不與牆的端面共面（避免 z-fighting）
+  for (const s of [-1, 1]) slab('lacquer', [s * (hw - 0.01), s * outer], [0, HALL_DOOR_TOP], frameZ)
+  slab('lacquerDark', [-outer, outer], [0, 0.22], [8.8, 9.35]) // 門檻
+  slab('lacquer', [-outer, outer], [height, height + 0.26], frameZ) // 中檻（門楣）
+  slab('gold', [-hw, hw], [height + 0.02, height + 0.045], [FRAME_FRONT - 0.006, FRAME_FRONT]) // 門楣下緣的金線（殿內側）
+  slab('gold', [-hw, hw], [height + 0.02, height + 0.045], [FRAME_BACK, FRAME_BACK + 0.006]) // 門楣下緣的金線（庭院側）
+  slab('lacquer', [-outer, outer], [HALL_DOOR_TOP - 0.16, HALL_DOOR_TOP], frameZ) // 上檻
+
+  // 橫披窗：兩根間柱分成三格，直櫺透出門外（或殿內）的景
+  const tY = [height + 0.26, HALL_DOOR_TOP - 0.16] as const
+  const tZ = [8.97, 9.03] as const
+  for (const x of [-0.5, 0.5]) slab('lacquer', [x - 0.04, x + 0.04], tY, [8.9, 9.1])
+  const panes = [[-hw, -0.54], [-0.46, 0.46], [0.54, hw]] as const
+  const half = opts.barWidth / 2
+  for (const [x0, x1] of panes) {
+    slab('lacquer', [x0, x1], [tY[0], tY[0] + 0.035], tZ)
+    slab('lacquer', [x0, x1], [tY[1] - 0.035, tY[1]], tZ)
+    slab('lacquer', [x0, x1], [(tY[0] + tY[1]) / 2 - half, (tY[0] + tY[1]) / 2 + half], tZ)
+    const bars = opts.transomBars
+    for (let i = 1; i <= bars; i++) {
+      const x = x0 + ((x1 - x0) * i) / (bars + 1)
+      slab('lacquer', [x - half, x + half], tY, tZ)
+    }
+  }
+}
+
+/**
+ * 門扇的擺放：把門扇局部座標的範圍換成殿內座標的 x、z 範圍。局部座標 u 是從鉸鏈側量起的寬度方向（0～LEAF.width），
+ * t 是離裝飾面（關門時朝外的那一面）的深度（0～LEAF_DEPTH）。
+ */
+export interface LeafPose {
+  x(u: Range, t: Range): Range
+  z(u: Range, t: Range): Range
+}
+
+export interface LeafParts {
+  slab: DoorSlab
+  /** 格心平面（裝飾面朝外）：u、y 是範圍，t 是離裝飾面的深度。 */
+  lattice(pose: LeafPose, u: Range, y: Range, t: number): void
+  /** 鋪首（可省略）：u、y 是中心。 */
+  pull?(pose: LeafPose, u: number, y: number, t: number): void
+}
+
+/** 門扇厚度（框正面到背面）。 */
+export const LEAF_DEPTH = LEAF.back - LEAF.front
+const sorted = (a: number, b: number): Range => (a <= b ? [a, b] : [b, a])
+
+/** 殿內：推開 180°，貼在門洞兩側牆的內面，裝飾面朝殿內（-z）。 */
+export function hallLeafPose(s: 1 | -1): LeafPose {
+  const x0 = HALL_DOOR.halfWidth + JAMB_W + 0.005
+  return {
+    x: (u) => sorted(s * (x0 + u[0]), s * (x0 + u[1])),
+    z: (_u, t) => [LEAF.front + t[0], LEAF.front + t[1]],
+  }
+}
+
+/**
+ * 庭院側：向殿內推開 90°，鉸鏈在抱框內側，門扇立在門洞兩側往殿內延伸，裝飾面朝門洞中央。
+ * 從門外看主要是門洞與門框，門扇只在門洞內側兩邊斜斜露出一點（殿內那一側是推到 180° 貼牆，兩邊刻意不同：
+ * 殿內若立成 90° 會伸進可走範圍；庭院若貼牆，門扇整個藏在抱框後面看不到）。
+ */
+export function facadeLeafPose(s: 1 | -1): LeafPose {
+  const face = HALL_DOOR.halfWidth - 0.01 - LEAF_DEPTH
+  return {
+    x: (_u, t) => sorted(s * (face + t[0]), s * (face + t[1])),
+    z: (u) => [FRAME_FRONT - u[1], FRAME_FRONT - u[0]],
+  }
+}
+
+/** 一扇格扇門：邊梃、抹頭、裙板（起鼓板心與細金線）、縧環板、格心、鋪首。殿內與庭院兩側共用，擺放由 pose 決定。 */
+export function doorLeafParts(parts: LeafParts, pose: LeafPose): void {
+  const L = LEAF
+  const { slab } = parts
+  const frameT = [0, LEAF_DEPTH] as const
+  const panelT = [L.panel - L.front, LEAF_DEPTH] as const
+  const box = (mat: DoorMaterialKey, u: Range, y: Range, t: Range) => slab(mat, pose.x(u, t), y, pose.z(u, t))
+  // 邊梃與抹頭
+  box('lacquer', [0, L.stile], [L.bottom, L.top], frameT)
+  box('lacquer', [L.width - L.stile, L.width], [L.bottom, L.top], frameT)
+  for (const r of L.rails) box('lacquer', [L.stile, L.width - L.stile], r, frameT)
+  // 裙板：凹進的深紅板心，中間一塊起鼓的朱漆，外圍一圈細金線
+  const inner = [L.stile, L.width - L.stile] as const
+  box('lacquerDark', inner, L.apron, panelT)
+  for (const band of [L.bandLow, L.bandHigh]) box('lacquerDark', inner, band, panelT)
+  const field = { u: [0.2, L.width - 0.2] as const, y: [L.apron[0] + 0.1, L.apron[1] - 0.1] as const }
+  box('lacquer', field.u, field.y, [panelT[0] - 0.012, LEAF_DEPTH])
+  const gt = [panelT[0] - 0.017, panelT[0] - 0.012] as const
+  const g = 0.012
+  box('gold', [field.u[0] - 0.04, field.u[1] + 0.04], [field.y[0] - 0.04 - g, field.y[0] - 0.04], gt)
+  box('gold', [field.u[0] - 0.04, field.u[1] + 0.04], [field.y[1] + 0.04, field.y[1] + 0.04 + g], gt)
+  box('gold', [field.u[0] - 0.04 - g, field.u[0] - 0.04], [field.y[0] - 0.04 - g, field.y[1] + 0.04 + g], gt)
+  box('gold', [field.u[1] + 0.04, field.u[1] + 0.04 + g], [field.y[0] - 0.04 - g, field.y[1] + 0.04 + g], gt)
+  // 格心
+  parts.lattice(pose, inner, L.lattice, panelT[0] - 0.005)
+  // 鋪首：門扇外緣（關門時在中間）的縧環板上
+  parts.pull?.(pose, L.width - 0.2, (L.bandLow[0] + L.bandLow[1]) / 2, panelT[0])
+}
+
 export interface DoorwayMaterials {
   /** 朱漆（抱框、門框、櫺條）。 */
   lacquer: THREE.Material
@@ -52,8 +175,11 @@ export interface HallDoorway {
   backdrop: THREE.MeshBasicMaterial
 }
 
-/** 格心貼圖：斜方格（菱花）櫺條、交點的四瓣花結，後面是窗紙。不透明（RGBA 256×352，含 mipmap 約 0.5 MB）。 */
-function latticeTexture(): THREE.CanvasTexture {
+/**
+ * 格心貼圖：斜方格（菱花）櫺條、交點的四瓣花結，後面是窗紙。不透明（RGBA 256×352，含 mipmap 約 0.5 MB）。
+ * 殿內的門扇與庭院側的格扇窗共用這個畫法（各自建立一張，擁有者各自釋放）。
+ */
+export function latticeTexture(): THREE.CanvasTexture {
   const W = 512
   const H = 704
   const cell = 64
@@ -274,73 +400,34 @@ export function buildHallDoorway(
     root.add(mesh)
     return mesh
   }
-  const { halfWidth: hw, height } = HALL_DOOR
-  const outer = hw + JAMB_W
-  const frameZ = [FRAME_FRONT, FRAME_BACK] as const
-
-  // ---------- 門框 ----------
-  // 抱框的內面退進門洞 1 公分，不與牆的端面共面（避免 z-fighting）
-  for (const s of [-1, 1]) slab(mats.lacquer, [s * (hw - 0.01), s * outer], [0, HALL_DOOR_TOP], frameZ)
-  slab(mats.lacquerDark, [-outer, outer], [0, 0.22], [8.8, 9.35]) // 門檻
-  slab(mats.lacquer, [-outer, outer], [height, height + 0.26], frameZ) // 中檻（門楣）
-  slab(mats.gold, [-hw, hw], [height + 0.02, height + 0.045], [FRAME_FRONT - 0.006, FRAME_FRONT]) // 門楣下緣的金線
-  slab(mats.lacquer, [-outer, outer], [HALL_DOOR_TOP - 0.16, HALL_DOOR_TOP], frameZ) // 上檻
-
-  // 橫披窗：兩根間柱分成三格，直櫺透出門外的景
-  const tY = [height + 0.26, HALL_DOOR_TOP - 0.16] as const
-  const tZ = [8.97, 9.03] as const
-  for (const x of [-0.5, 0.5]) slab(mats.lacquer, [x - 0.04, x + 0.04], tY, [8.9, 9.1])
-  const panes = [[-hw, -0.54], [-0.46, 0.46], [0.54, hw]] as const
-  for (const [x0, x1] of panes) {
-    slab(mats.lacquer, [x0, x1], [tY[0], tY[0] + 0.035], tZ)
-    slab(mats.lacquer, [x0, x1], [tY[1] - 0.035, tY[1]], tZ)
-    slab(mats.lacquer, [x0, x1], [(tY[0] + tY[1]) / 2 - 0.0125, (tY[0] + tY[1]) / 2 + 0.0125], tZ)
-    const bars = 9
-    for (let i = 1; i <= bars; i++) {
-      const x = x0 + ((x1 - x0) * i) / (bars + 1)
-      slab(mats.lacquer, [x - 0.0125, x + 0.0125], tY, tZ)
-    }
-  }
+  // ---------- 門框（與庭院側共用 doorFrameSlabs）----------
+  doorFrameSlabs((mat, x, y, z) => slab(mats[mat], x, y, z))
 
   // ---------- 門扇（推開 180°，貼在門洞兩側的牆上）----------
   const latticeMat = tracker.trackMaterial(new THREE.MeshLambertMaterial({ map: latticeTexture() }))
-  const latticeGeo = geo(new THREE.PlaneGeometry(LEAF.width - LEAF.stile * 2, LEAF.lattice[1] - LEAF.lattice[0]))
+  const latticeGeo = geo(new THREE.PlaneGeometry(...LEAF_LATTICE_SIZE))
   latticeGeo.rotateY(Math.PI) // 面向殿內（-z）
   const ringGeo = geo(new THREE.TorusGeometry(0.05, 0.008, 6, 18))
   const plateGeo = geo(new THREE.CylinderGeometry(0.065, 0.065, 0.016, 18).rotateX(Math.PI / 2))
-  const L = LEAF
-  for (const s of [-1, 1]) {
-    const x0 = outer + 0.005
-    const X = (u0: number, u1: number) => [s * (x0 + u0), s * (x0 + u1)] as const
-    const frameD = [L.front, L.back] as const
-    const panelD = [L.panel, L.back] as const
-    // 邊梃與抹頭
-    slab(mats.lacquer, X(0, L.stile), [L.bottom, L.top], frameD)
-    slab(mats.lacquer, X(L.width - L.stile, L.width), [L.bottom, L.top], frameD)
-    for (const r of L.rails) slab(mats.lacquer, X(L.stile, L.width - L.stile), r, frameD)
-    // 裙板：凹進的深紅板心，中間一塊起鼓的朱漆，外圍一圈細金線
-    const inner = X(L.stile, L.width - L.stile)
-    slab(mats.lacquerDark, inner, L.apron, panelD)
-    for (const band of [L.bandLow, L.bandHigh]) slab(mats.lacquerDark, inner, band, panelD)
-    const field = { u: [0.2, L.width - 0.2] as const, y: [L.apron[0] + 0.1, L.apron[1] - 0.1] as const }
-    slab(mats.lacquer, X(...field.u), field.y, [L.panel - 0.012, L.back])
-    const gz = [L.panel - 0.017, L.panel - 0.012] as const
-    const g = 0.012
-    slab(mats.gold, X(field.u[0] - 0.04, field.u[1] + 0.04), [field.y[0] - 0.04 - g, field.y[0] - 0.04], gz)
-    slab(mats.gold, X(field.u[0] - 0.04, field.u[1] + 0.04), [field.y[1] + 0.04, field.y[1] + 0.04 + g], gz)
-    slab(mats.gold, X(field.u[0] - 0.04 - g, field.u[0] - 0.04), [field.y[0] - 0.04 - g, field.y[1] + 0.04 + g], gz)
-    slab(mats.gold, X(field.u[1] + 0.04, field.u[1] + 0.04 + g), [field.y[0] - 0.04 - g, field.y[1] + 0.04 + g], gz)
-    // 格心
-    place(latticeGeo, latticeMat, s * (x0 + L.width / 2), (L.lattice[0] + L.lattice[1]) / 2, L.panel - 0.005)
-    // 鋪首：門扇外緣（關門時在中間）的縧環板上，一個圓座與門環
-    const pullX = s * (x0 + L.width - 0.2)
-    const pullY = (L.bandLow[0] + L.bandLow[1]) / 2
-    place(plateGeo, mats.gold, pullX, pullY, L.panel - 0.008)
-    place(ringGeo, mats.gold, pullX, pullY - 0.05, L.panel - 0.02)
+  const mid = (r: Range) => (r[0] + r[1]) / 2
+  const leafParts: LeafParts = {
+    slab: (mat, x, y, z) => slab(mats[mat], x, y, z),
+    lattice: (pose, u, y, t) => {
+      place(latticeGeo, latticeMat, mid(pose.x(u, [t, t])), mid(y), mid(pose.z(u, [t, t])))
+    },
+    // 一個圓座與門環
+    pull: (pose, u, y, t) => {
+      const x = mid(pose.x([u, u], [t, t]))
+      const z = mid(pose.z([u, u], [t, t]))
+      place(plateGeo, mats.gold, x, y, z - 0.008)
+      place(ringGeo, mats.gold, x, y - 0.05, z - 0.02)
+    },
   }
+  for (const s of [-1, 1] as const) doorLeafParts(leafParts, hallLeafPose(s))
 
   // ---------- 門外景 ----------
-  const backdrop = tracker.trackMaterial(new THREE.MeshBasicMaterial({ color: '#f4ecdb', fog: false, side: THREE.DoubleSide }))
+  // alphaTest：香爐與石燈籠的直立片只有物件本身不透明（兩層貼圖，見 doorwayView.ts）；仍在不透明 pass，不需排序
+  const backdrop = tracker.trackMaterial(new THREE.MeshBasicMaterial({ color: '#f4ecdb', fog: false, side: THREE.DoubleSide, alphaTest: 0.5 }))
   const outside = place(geo(buildDoorwayBackdrop()), backdrop, 0, 0, 0)
   outside.name = 'doorway-view'
   // 畫在其他不透明物件之後，只有門洞裡的像素會通過深度測試
