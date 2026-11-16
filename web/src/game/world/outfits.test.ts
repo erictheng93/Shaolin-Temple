@@ -10,12 +10,12 @@ describe('衣裝資料', () => {
 
   it('既有 6 套的外觀不變', () => {
     expect(OUTFITS.slice(0, 6)).toEqual([
-      { key: 'orange', label: '橘黃僧袍', robe: '#c9853a' },
-      { key: 'grey', label: '灰色常服', robe: '#86837d' },
-      { key: 'brown', label: '褐色海青', robe: '#6e4f3a' },
-      { key: 'black', label: '黑色海青', robe: '#363333' },
-      { key: 'kasaya', label: '黃袍披袈裟', robe: '#c99a3e', sash: '#9c2f23' },
-      { key: 'beads', label: '灰藍袍掛念珠', robe: '#56687f', beads: '#4a2e1c' },
+      { key: 'orange', label: 'outfit.orange', robe: '#c9853a' },
+      { key: 'grey', label: 'outfit.grey', robe: '#86837d' },
+      { key: 'brown', label: 'outfit.brown', robe: '#6e4f3a' },
+      { key: 'black', label: 'outfit.black', robe: '#363333' },
+      { key: 'kasaya', label: 'outfit.kasaya', robe: '#c99a3e', sash: '#9c2f23' },
+      { key: 'beads', label: 'outfit.beads', robe: '#56687f', beads: '#4a2e1c' },
     ])
   })
 

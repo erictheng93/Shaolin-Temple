@@ -2,6 +2,7 @@ import { envelope, smooth, type ClipFn } from '../../anim/AnimationSystem'
 import { synthesizeQing } from '../../audio/AudioManager'
 import { FACE_SMILE, PIVOT_HEIGHT, PROP_INCENSE } from '../../render/AvatarFactory'
 import { censerForPosition, pickCenserSpot, pickCushion } from '../../world/worship'
+import { t } from '../../../i18n'
 import type { GameplayModule } from '../types'
 import { installBell } from './bell'
 import { installChant } from './chant'
@@ -67,7 +68,7 @@ export const worshipModule: GameplayModule = {
   id: 'worship',
   install(api) {
     let count = 0
-    const counted = () => api.setStat('worship.count', '禮敬', ++count)
+    const counted = () => api.setStat('worship.count', 'stat.worship', ++count)
     const timers = new Set<ReturnType<typeof setTimeout>>()
 
     const off = [
@@ -77,7 +78,7 @@ export const worshipModule: GameplayModule = {
       api.audio.defineSfx('qing3', (ctx) => synthesizeQing(ctx, PROSTRATE_STRIKES)),
       api.actions.register({
         id: 'bow',
-        label: '合十',
+        label: 'action.bow',
         glyph: '🙏',
         cooldownMs: 2500,
         animation: 'bow',
@@ -88,21 +89,21 @@ export const worshipModule: GameplayModule = {
       }),
       api.actions.register({
         id: 'prostrate',
-        label: '跪拜',
+        label: 'action.prostrate',
         glyph: '🧎',
         cooldownMs: PROSTRATE_MS + 1000,
         animation: 'prostrate',
         durationMs: PROSTRATE_MS,
         locksMovement: true,
         sound: 'qing3',
-        unavailableReason: (zone) => (zone === 'hall' ? null : '跪拜要在殿內的蒲團上進行'),
+        unavailableReason: (zone) => (zone === 'hall' ? null : t('reason.prostrateInHall')),
         approach: pickCushion,
         onConfirmed: counted,
       }),
       installChant(api, counted),
       api.actions.register({
         id: 'incense',
-        label: '上香',
+        label: 'action.incense',
         glyph: '香',
         cooldownMs: INCENSE_MS + 2000,
         animation: 'incense',
@@ -134,7 +135,7 @@ export const worshipModule: GameplayModule = {
       off.forEach((fn) => fn())
       timers.forEach((t) => clearTimeout(t))
       timers.clear()
-      api.setStat('worship.count', '', null)
+      api.setStat('worship.count', 'stat.worship', null)
     }
   },
 }

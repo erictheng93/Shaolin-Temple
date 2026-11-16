@@ -18,6 +18,26 @@
   color-scheme: dark;
 }
 
+/*
+ * 依介面語言（<html lang>，由 i18n 的 setLocale 設定）換字型堆疊，都用系統字型、不下載網路字型。
+ * 日文：日文字型優先，否則漢字會以繁中字形顯示；標題用明朝體。
+ * 英文、越南文：系統無襯線字型（皆含越南文的疊加變音符號），標題用含越南文字元的襯線字型。
+ */
+:root:lang(ja) {
+  --font: system-ui, -apple-system, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Yu Gothic', 'Meiryo', 'Noto Sans JP', 'Noto Sans CJK JP', sans-serif;
+  --font-title: 'Hiragino Mincho ProN', 'Yu Mincho', 'Noto Serif JP', 'Noto Serif CJK JP', serif;
+}
+
+:root:is(:lang(en), :lang(vi)) {
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', 'Helvetica Neue', Arial, sans-serif;
+  --font-title: 'Noto Serif', Georgia, 'Times New Roman', serif;
+}
+
+/* Georgia 與 Palatino 在部分系統缺越南文的疊加變音符號，越南文標題改用 Times New Roman */
+:root:lang(vi) {
+  --font-title: 'Noto Serif', 'Times New Roman', serif;
+}
+
 *,
 *::before,
 *::after {

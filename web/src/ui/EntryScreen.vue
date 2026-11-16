@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { t, type Locale } from '../i18n'
+import LocaleSelect from './LocaleSelect.vue'
 import OutfitPicker from './OutfitPicker.vue'
 
 const props = defineProps<{ initialName: string; busy: boolean; ready: boolean; outfit: number }>()
 const emit = defineEmits<{ enter: [name: string]; outfit: [outfit: number] }>()
 
 const name = ref(props.initialName)
+/** 進寺前就能換語言；與設定面板是同一個設定欄位。 */
+const locale = defineModel<Locale>('locale', { required: true })
 
 function submit() {
   // 進場按鈕同時是解鎖音訊的使用者操作，必須在這個事件中同步觸發。
@@ -16,25 +20,27 @@ function submit() {
 <template>
   <section class="entry" aria-labelledby="entry-title">
     <form class="card" @submit.prevent="submit">
-      <p class="eyebrow">線上靜心空間</p>
-      <h1 id="entry-title">少林寺</h1>
-      <p class="lead">放慢腳步，與其他人安靜地共處片刻。<br />建議戴上耳機。</p>
+      <!-- 放在最上方：看不懂目前語言的玩家第一眼就找得到 -->
+      <LocaleSelect v-model="locale" compact class="lang" />
+      <p class="eyebrow">{{ t('entry.eyebrow') }}</p>
+      <h1 id="entry-title">{{ t('app.title') }}</h1>
+      <p class="lead">{{ t('entry.lead') }}<br />{{ t('entry.headphones') }}</p>
 
       <label class="field">
-        <span>你的名字（選填）</span>
-        <input v-model="name" maxlength="16" autocomplete="nickname" placeholder="訪客" enterkeyhint="go" />
+        <span>{{ t('entry.nameLabel') }}</span>
+        <input v-model="name" maxlength="16" autocomplete="nickname" :placeholder="t('player.visitor')" enterkeyhint="go" />
       </label>
 
       <div class="field">
-        <span>衣裝</span>
+        <span>{{ t('outfit.label') }}</span>
         <OutfitPicker :model-value="outfit" @update:model-value="(o) => emit('outfit', o)" />
       </div>
 
       <button class="enter" type="submit" :disabled="busy || !ready">
-        {{ busy ? '進入中…' : ready ? '入寺' : '準備場景…' }}
+        {{ busy ? t('entry.entering') : ready ? t('entry.enter') : t('entry.preparing') }}
       </button>
 
-      <p class="hint">點擊地面行走・拖曳轉動視角・雙指或滾輪縮放<br />鍵盤可用 WASD／方向鍵</p>
+      <p class="hint">{{ t('entry.hintPointer') }}<br />{{ t('entry.hintKeys') }}</p>
     </form>
   </section>
 </template>
@@ -80,6 +86,20 @@ h1 {
   white-space: nowrap;
 }
 
+/* 拉丁文字（英文、越南文）：中文用的寬字距在拉丁字母下顯得鬆散，改小；寺名較長，允許換行 */
+.eyebrow:is(:lang(en), :lang(vi)) {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+
+h1:is(:lang(en), :lang(vi)) {
+  letter-spacing: 0.02em;
+  text-indent: 0;
+  white-space: normal;
+  font-size: clamp(1.7rem, 8vw, 2.2rem);
+}
+
 .lead {
   margin: 0 0 24px;
   color: var(--ink-soft);
@@ -122,6 +142,16 @@ h1 {
   transition: filter 0.2s, opacity 0.2s;
 }
 
+.enter:not(:lang(zh)) {
+  letter-spacing: 0.06em;
+  text-indent: 0;
+}
+
+.enter:lang(ja) {
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+}
+
 .enter:hover:not(:disabled) {
   filter: brightness(1.08);
 }
@@ -138,10 +168,19 @@ h1 {
   color: var(--ink-faint);
 }
 
+.lang {
+  /* 疊進卡片上方的留白，不增加卡片高度 */
+  margin: -22px -14px -6px 0;
+}
+
 /* 橫向手機：壓縮間距，讓按鈕盡量不用捲動就看得到。 */
 @media (max-height: 480px) {
   .card {
     padding: 16px 24px 14px;
+  }
+
+  .lang {
+    margin-top: -10px;
   }
 
   h1 {
