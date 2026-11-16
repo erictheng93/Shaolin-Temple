@@ -150,6 +150,7 @@ repo 內的文字檔一律是 LF。Windows 的 git 可能開了 `core.autocrlf`�
 
 - [docs/TECH_STACK.md](docs/TECH_STACK.md)：技術選型、版本、前端架構、庭院視覺與烘焙流程、VPS 容量條件與 Phase 2。版本與技術決策以它為準。
 - [docs/BACKEND_TASKS.md](docs/BACKEND_TASKS.md)：後端任務清單、進度與驗收標準。
+- [docs/DEPLOY.md](docs/DEPLOY.md)：Dokploy 部署流程、上線驗證、正式環境壓測與回滾（設定已備妥，尚未實際部署）。
 - [docs/ASSETS.md](docs/ASSETS.md)：素材來源、授權與署名清單。新增素材前先讀。
 - [AGENTS.md](AGENTS.md)：給所有開發者與 AI 程式助手的專案規範。
 - [CLAUDE.md](CLAUDE.md)：給 Claude Code 的程式架構導覽與常用指令。

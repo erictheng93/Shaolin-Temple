@@ -66,7 +66,7 @@ async fn close(ws: &mut WebSocket, code: u16, reason: &'static str) {
     })
     .await;
 }
-/// 送出一則伺服器訊息：`moves`／`sync` 為二進位幀，其餘為 JSON 文字。
+/// 送出一則伺服器訊息：`moves`／`sync`／`action` 為二進位幀，其餘為 JSON 文字。
 async fn deliver(ws: &mut WebSocket, metrics: &Metrics, msg: ServerMessage) -> bool {
     let Some(frame) = msg.to_frame() else {
         tracing::error!(?msg, "server message could not be encoded");

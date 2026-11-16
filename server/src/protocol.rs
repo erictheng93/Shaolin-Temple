@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::world;
+
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
-/// 協定版本。2（T8）：`moves`／`sync` 改為二進位幀（見 [`encode_batch`]），其餘訊息仍是 JSON。
+/// 協定版本。2（T8）：`moves`／`sync` 改為二進位幀（見 [`encode_batch`]）；
+/// 3：下行的 `action` 也改為二進位幀（見 [`encode_action`]）。其餘訊息與所有上行仍是 JSON。
 /// `hello.v` 不同時回 `unsupported_version` 並關閉，前端據此提示重新整理。
-pub const PROTOCOL_VERSION: f64 = 2.0;
+pub const PROTOCOL_VERSION: f64 = 3.0;
 /// 客戶端字串欄位上限（UTF-8 bytes）。超過時整則視為無效訊息。
 /// reqId 會被快取做去重（T4），沒有上限時每條連線最壞可佔約 1 MB。
 pub const MAX_REQ_ID_BYTES: usize = 128;
@@ -134,12 +137,13 @@ pub enum ServerMessage {
     Sync {
         m: Vec<MoveTuple>,
     },
+    /// 其他玩家開始一個動作。只以二進位幀送出（[`encode_action`]）：`n` 是執行者的房內短編號，
+    /// `code` 是動作在 [`world::ACTIONS`] 中的索引（[`world::action_code`]），`started_at` 是 Unix 毫秒。
+    #[serde(skip)]
     Action {
-        player_id: String,
-        id: String,
+        n: u8,
+        code: u8,
         started_at: f64,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        data: Option<Map<String, Value>>,
     },
     Ack {
         req_id: String,
@@ -205,17 +209,22 @@ impl Frame {
     }
 }
 impl ServerMessage {
-    /// `moves`／`sync` 編成二進位幀，其餘編成 JSON 文字。無法編碼時回 `None`（不應發生）。
+    /// `moves`／`sync`／`action` 編成二進位幀，其餘編成 JSON 文字。無法編碼時回 `None`（不應發生）。
     pub fn to_frame(&self) -> Option<Frame> {
         match self {
             Self::Moves { m } => encode_batch(BatchKind::Moves, m).map(Frame::Binary),
             Self::Sync { m } => encode_batch(BatchKind::Sync, m).map(Frame::Binary),
+            Self::Action {
+                n,
+                code,
+                started_at,
+            } => encode_action(*n, *code, *started_at).map(Frame::Binary),
             other => serde_json::to_string(other).ok().map(Frame::Text),
         }
     }
 }
 
-// ---- moves／sync 二進位幀（協定版本 2）----
+// ---- moves／sync 二進位幀（協定版本 2 起）----
 //
 // 幀 = 1 byte 幀型 + N 筆 × 6 bytes，N = (長度 − 1) / 6，0 ≤ N ≤ MAX_MOVES_PER_MESSAGE。多位元組整數為 little-endian。
 //
@@ -226,7 +235,7 @@ impl ServerMessage {
 // | 3 | i16 | z，公分，同上 |
 // | 5 | u8 | heading，q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128，範圍 (−π, π] |
 //
-// 前端實作在 web/src/game/net/moveFrame.ts；兩邊以 server/tests/protocol-v2.json 的 binary 測試向量驗證一致。
+// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v3.json 的 binary 測試向量驗證一致。
 
 /// 幀型：`moves`（增量）。
 pub const FRAME_MOVES: u8 = 0x01;
@@ -351,6 +360,86 @@ pub fn decode_batch(bytes: &[u8]) -> Result<(BatchKind, Vec<MoveTuple>), BatchEr
     Ok((kind, m))
 }
 
+// ---- action 二進位幀（協定版本 3）----
+//
+// 固定 7 bytes：
+//
+// | 位移 | 型別 | 內容 |
+// | --- | --- | --- |
+// | 0 | u8 | 幀型 0x03 |
+// | 1 | u8 | 執行者的房內短編號 n（0～127；bit 7 保留，須為 0） |
+// | 2 | u8 | 動作編號：`world::ACTIONS` 的索引（與前端 `ACTION_CODES`、固定資料 `binary.action.codes` 相同） |
+// | 3 | u32 | started_at（Unix 毫秒）mod 2^32，little-endian；客戶端以 [`unwrap_started_at`] 還原 |
+
+/// 幀型：`action`。
+pub const FRAME_ACTION: u8 = 0x03;
+/// 動作幀的固定長度。
+pub const ACTION_FRAME_BYTES: usize = 7;
+
+/// 編碼一則動作幀。短編號超過 `MAX_SHORT_ID`、動作編號不在對照表內、`started_at` 不是有限的非負數時回 `None`。
+pub fn encode_action(n: u8, code: u8, started_at: f64) -> Option<Vec<u8>> {
+    if n > MAX_SHORT_ID
+        || usize::from(code) >= world::ACTIONS.len()
+        || !started_at.is_finite()
+        || started_at < 0.0
+    {
+        return None;
+    }
+    // Unix 毫秒遠小於 2^53，`as u64` 對非負的有限值是 floor；只送低 32 位元。
+    let low = (started_at as u64 & 0xFFFF_FFFF) as u32;
+    let mut out = Vec::with_capacity(ACTION_FRAME_BYTES);
+    out.extend_from_slice(&[FRAME_ACTION, n, code]);
+    out.extend_from_slice(&low.to_le_bytes());
+    Some(out)
+}
+
+/// 動作幀解碼後、還原絕對時間之前的內容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActionFrame {
+    pub n: u8,
+    pub id: &'static str,
+    /// started_at mod 2^32。
+    pub started_at_low: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionFrameError {
+    Kind,
+    Length(usize),
+    ShortId(u8),
+    UnknownAction(u8),
+}
+
+/// 解碼一則動作幀（負載工具與測試用）。幀型不符、長度不是 7、n 超過 127、動作編號不在對照表內都拒絕。
+pub fn decode_action(bytes: &[u8]) -> Result<ActionFrame, ActionFrameError> {
+    if bytes.first() != Some(&FRAME_ACTION) {
+        return Err(ActionFrameError::Kind);
+    }
+    let &[_, n, code, a, b, c, d] = bytes else {
+        return Err(ActionFrameError::Length(bytes.len()));
+    };
+    if n > MAX_SHORT_ID {
+        return Err(ActionFrameError::ShortId(n));
+    }
+    let id = *world::ACTIONS
+        .get(usize::from(code))
+        .ok_or(ActionFrameError::UnknownAction(code))?;
+    Ok(ActionFrame {
+        n,
+        id,
+        started_at_low: u32::from_le_bytes([a, b, c, d]),
+    })
+}
+
+/// 由 started_at 的低 32 位元還原絕對毫秒：取 mod 2^32 相同、且離 `reference`（收件人估計的伺服器現在時間）
+/// 最近的值。`started_at − reference` 在 [−2^31, 2^31) 毫秒（約 ±24.8 天）內都正確。與前端 `unwrapStartedAt` 相同。
+pub fn unwrap_started_at(low: u32, reference: f64) -> f64 {
+    let reference = reference.floor() as i64;
+    // 差值取 [−2^31, 2^31)：u32 減法回繞後當成 i32。
+    let delta = low.wrapping_sub(reference as u32) as i32;
+    (reference + i64::from(delta)) as f64
+}
+
 pub fn clean_name(name: &str) -> String {
     let filtered: String = name.chars().filter(|c| !c.is_control()).collect();
     let name: String = filtered.trim().chars().take(16).collect();
@@ -406,7 +495,7 @@ mod tests {
                 .map(|n| format!(r#","resumeToken":"{}""#, "t".repeat(n)))
                 .unwrap_or_default();
             parse(format!(
-                r#"{{"t":"hello","v":2,"name":"{}"{token}}}"#,
+                r#"{{"t":"hello","v":3,"name":"{}"{token}}}"#,
                 "n".repeat(name)
             ))
         };

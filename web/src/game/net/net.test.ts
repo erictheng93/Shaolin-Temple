@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
-import { FRAME_MOVES, FRAME_SYNC, MAX_COORD_CM, MOVE_ENTRY_BYTES, encodeBatch, quantizeCoord } from './moveFrame'
+import { FRAME_MOVES, FRAME_SYNC, MAX_COORD_CM, MOVE_ENTRY_BYTES, encodeBatch, quantizeCoord } from './binaryFrame'
 import { MAX_MESSAGE_BYTES, decode, type MoveTuple } from './protocol'
 
 describe('decode', () => {
@@ -36,7 +36,7 @@ describe('decode', () => {
     expect(decode(frame(FRAME_SYNC))).toEqual({ t: 'sync', m: [] })
     expect(decode(frame(FRAME_MOVES, entry(1, MAX_COORD_CM, -MAX_COORD_CM)))).toEqual({ t: 'moves', m: [[1, 100, -100, 0, 0]] })
     expect(decode(new ArrayBuffer(0))).toBeNull()
-    expect(decode(frame(0x03, entry(1, 0, 0)))).toBeNull()
+    expect(decode(frame(0x04, entry(1, 0, 0)))).toBeNull()
     expect(decode(frame(0x00))).toBeNull()
     expect(decode(frame(FRAME_MOVES, entry(1, 0, 0)).slice(0, 6))).toBeNull()
     expect(decode(frame(FRAME_MOVES, entry(1, 0, 0), [0]))).toBeNull()
