@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { loadSettings, saveSettings } from './settings'
+import { detectQuality, loadSettings, saveSettings } from './settings'
 
 const stubStorage = (init: Record<string, string>) => {
   const store = new Map(Object.entries(init))
@@ -29,5 +29,26 @@ describe('settings 舊 key 遷移', () => {
       'shaolin-temple:settings:v1': JSON.stringify({ musicVolume: 0.9 }),
     })
     expect(loadSettings().musicVolume).toBe(0.9)
+  })
+})
+
+describe('畫質', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('loadSettings 接受 low', () => {
+    stubStorage({ 'shaolin-temple:settings:v1': JSON.stringify({ quality: 'low' }) })
+    expect(loadSettings().quality).toBe('low')
+  })
+
+  it('detectQuality 依裝置資訊判斷', () => {
+    expect(detectQuality({ coarse: false })).toBe('high')
+    expect(detectQuality({ coarse: false, deviceMemory: 8, cores: 8 })).toBe('high')
+    expect(detectQuality({ coarse: false, deviceMemory: 4 })).toBe('medium')
+    expect(detectQuality({ coarse: false, deviceMemory: 2 })).toBe('low')
+    expect(detectQuality({ coarse: true })).toBe('medium') // iOS Safari：沒有 deviceMemory 與核心數
+    expect(detectQuality({ coarse: true, deviceMemory: 4, cores: 8 })).toBe('medium')
+    expect(detectQuality({ coarse: true, deviceMemory: 4, cores: 4 })).toBe('low')
+    expect(detectQuality({ coarse: true, cores: 4 })).toBe('medium') // iOS：沒有 deviceMemory 時不信任核心數
+    expect(detectQuality({ coarse: false, cores: 2 })).toBe('high') // 桌機核心少不降級
   })
 })

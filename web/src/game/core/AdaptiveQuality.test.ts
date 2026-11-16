@@ -42,4 +42,13 @@ describe('AdaptiveQuality', () => {
     run(a, now + 60_000, 10_000, 16.7, 1000 / 60)
     expect(a.level).toBe(0)
   })
+
+  it('可指定起始等級（限制在範圍內），順暢一段時間後升回', () => {
+    expect(new AdaptiveQuality().level).toBe(0)
+    expect(new AdaptiveQuality(1).level).toBe(1)
+    expect(new AdaptiveQuality(99).level).toBe(lowest)
+    const a = new AdaptiveQuality(1)
+    run(a, 0, 45_000, 33)
+    expect(a.level).toBe(0)
+  })
 })
