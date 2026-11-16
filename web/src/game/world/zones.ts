@@ -1,4 +1,4 @@
-import { CENSER, OBSTACLES, PLAYER_RADIUS, SPAWN, WORLD_BOUNDS, type Rect } from './layout'
+import { CENSER, HALL, OBSTACLES, PLAYER_RADIUS, SPAWN, WORLD_BOUNDS, type Rect } from './layout'
 
 /**
  * 場景（zone）定義：每個場景有自己的可走範圍、障礙物、出生點、鏡頭範圍與出入口。
@@ -19,6 +19,8 @@ export interface Portal {
   rect: Rect
   to: ZoneId
   spawn: Pose
+  /** 點擊落在此範圍（例如整棟主殿）時，改為走向出入口。 */
+  tapArea?: Rect
 }
 
 export interface ZoneDef {
@@ -147,6 +149,11 @@ export const CENSERS: ReadonlyArray<CenserDef> = [COURTYARD_CENSER, ...HALL_CENS
 
 /** 庭院：殿門前的階梯即入口（主殿障礙物邊緣 z≈-5.85），往前延伸到階梯前方約 0.85 公尺。 */
 const COURTYARD_DOOR: Rect = { minX: -1.6, maxX: 1.6, minZ: -6.2, maxZ: -5.0 }
+/**
+ * 點擊導向殿門的範圍：主殿本體加上其後方。點在屋頂或牆上時，射線會穿過建築打到後方地面，
+ * 從庭院看不到主殿後方，點到那裡一定是點在建築上。
+ */
+const HALL_TAP_AREA: Rect = { minX: HALL.minX, maxX: HALL.maxX, minZ: -1000, maxZ: HALL.maxZ }
 /** 殿內：門口內側。 */
 const HALL_DOOR: Rect = { minX: -1.4, maxX: 1.4, minZ: 8.15, maxZ: 9 }
 
@@ -157,7 +164,7 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
     bounds: WORLD_BOUNDS,
     obstacles: OBSTACLES,
     spawn: SPAWN,
-    portals: [{ rect: COURTYARD_DOOR, to: 'hall', spawn: { x: 0, z: 7.4, heading: Math.PI } }],
+    portals: [{ rect: COURTYARD_DOOR, to: 'hall', spawn: { x: 0, z: 7.4, heading: Math.PI }, tapArea: HALL_TAP_AREA }],
     cameraBounds: null,
     // yaw 0：鏡頭在 +z（庭院）一側看向主殿；出殿時若鏡頭放在角色背後，會卡在角色與主殿之間被建築擋住
     camera: { distance: 10, min: 5, max: 20, yaw: 0 },
@@ -199,6 +206,16 @@ export function entryCamera(zone: ZoneId, pose: Pose, saved: CameraPose | undefi
     return { ...saved, distance: Math.min(def.camera.max, Math.max(def.camera.min, saved.distance)) }
   }
   return { yaw: def.camera.yaw ?? pose.heading + Math.PI, pitch: currentPitch, distance: def.camera.distance }
+}
+
+/** 出入口範圍中最靠近可走區的點（玩家走向這裡即可觸發）。 */
+export function portalApproach(p: Portal): { x: number; z: number } {
+  return { x: (p.rect.minX + p.rect.maxX) / 2, z: (p.rect.minZ + p.rect.maxZ) / 2 }
+}
+
+/** 點擊位置若落在某出入口的 tapArea，回傳該出入口。 */
+export function portalForTap(zone: ZoneId, x: number, z: number): Portal | null {
+  return ZONES[zone].portals.find((p) => p.tapArea && inside(p.tapArea, x, z)) ?? null
 }
 
 /** 位置所在的出入口，沒有則 null。 */

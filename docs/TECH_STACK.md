@@ -116,7 +116,7 @@ Vue 管理選單、音量設定、房間資訊、個人計數與連線提示。�
 | `src/game/audio/` | `AudioManager`：風聲、鳥叫、遠處鐘聲與短音效（鐘、木魚、頌缽、引磬）即時合成、靜音／背景時暫停運算；玩法模組可用 `defineSfx()` 加合成音效 |
 | `src/game/net/` | `protocol`（協定草案與驗證）、`NetworkClient`（重連、心跳、節流、確認重送）、`OutboundQueue`、`backoff` |
 | `src/game/world/` | 場地配置（場景與碰撞共用）、移動與碰撞、玩家管理與插值 |
-| `src/game/input/` | 虛擬搖桿（UI 層 `ui/Joystick.vue`）、拖曳旋轉、雙指／滾輪縮放、鍵盤 |
+| `src/game/input/` | 虛擬搖桿（UI 層 `ui/Joystick.vue`，觸控裝置）、滑鼠點擊移動（桌機）、拖曳旋轉、雙指／滾輪縮放、鍵盤 |
 | `src/game/gameplay/` | **玩法擴充點**：`ActionRegistry`、`GameplayModule` 介面、`modules/`（參拜模組 `worship.ts`，誦經 `chant.ts`、敲鐘 `bell.ts`） |
 | `src/ui/` | Vue 介面：進場、狀態列、動作列、設定、效能資訊、提示 |
 | `scripts/mock-server.mjs` | 開發用 mock 伺服器，實作同一協定並提供機器人 |
