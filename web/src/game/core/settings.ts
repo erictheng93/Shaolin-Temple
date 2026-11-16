@@ -1,3 +1,5 @@
+import { detectLocale, isLocale, type Locale } from '../../i18n'
+
 export type QualityLevel = 'low' | 'medium' | 'high'
 export type QualitySetting = 'auto' | QualityLevel
 
@@ -47,6 +49,8 @@ export interface Settings {
   muted: boolean
   playerName: string
   showStats: boolean
+  /** 介面語言。舊存檔沒有這欄時依瀏覽器語言推測（detectLocale）。 */
+  locale: Locale
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -57,6 +61,7 @@ export const DEFAULT_SETTINGS: Settings = {
   muted: false,
   playerName: '',
   showStats: false,
+  locale: 'zh-Hant',
 }
 
 const KEY = 'shaolin-temple:settings:v1'
@@ -74,7 +79,7 @@ export function loadSettings(): Settings {
   } catch {
     raw = null
   }
-  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SETTINGS }
+  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SETTINGS, locale: detectLocale() }
   const r = raw as Partial<Record<keyof Settings, unknown>>
   const d = DEFAULT_SETTINGS
   return {
@@ -87,6 +92,7 @@ export function loadSettings(): Settings {
     muted: typeof r.muted === 'boolean' ? r.muted : d.muted,
     playerName: typeof r.playerName === 'string' ? r.playerName.slice(0, 16) : d.playerName,
     showStats: typeof r.showStats === 'boolean' ? r.showStats : d.showStats,
+    locale: isLocale(r.locale) ? r.locale : detectLocale(),
   }
 }
 

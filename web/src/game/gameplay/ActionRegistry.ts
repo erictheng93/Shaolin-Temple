@@ -1,3 +1,4 @@
+import type { MessageKey } from '../../i18n'
 import type { SpotContext } from '../world/worship'
 import type { Pose, ZoneId } from '../world/zones'
 
@@ -6,8 +7,8 @@ import type { Pose, ZoneId } from '../world/zones'
  */
 export interface GameActionDef {
   id: string
-  /** 按鈕文字。 */
-  label: string
+  /** 按鈕文字的字典 key（i18n），顯示當下才由 GameCore 以 t() 解析，切換語言立即生效。 */
+  label: MessageKey
   /** 按鈕上的單字或符號，選填。 */
   glyph?: string
   /** 兩次執行之間的最短間隔（毫秒）。伺服器仍會驗證，這裡只是避免無效請求。 */
@@ -24,12 +25,13 @@ export interface GameActionDef {
   onConfirmed?: () => void
   /**
    * 依場景判斷能不能用：可用回傳 null，不可用回傳給玩家看的原因（按鈕變暗，按下時提示原因）。
+   * 原因在呼叫當下以 t() 取得（GameCore 每次推送 UiState 與按下時都會重新呼叫），不要在定義時先算好字串。
    * 只依場景判斷，因為 UI 是低頻摘要，不隨位置每幀更新。
    */
   unavailableReason?: (zone: ZoneId) => string | null
   /**
    * 需要先走到定點再執行：回傳站位與面向，角色會自動走過去、轉向後才開始動作（冷卻、動畫、送出都從抵達時算起）；
-   * 回傳字串表示現在找不到可用的點（提示玩家原因）。
+   * 回傳字串表示現在找不到可用的點（提示玩家原因，在呼叫當下以 t() 取得）。
    */
   approach?: (ctx: SpotContext) => Pose | string
   /**
