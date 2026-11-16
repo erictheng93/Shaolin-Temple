@@ -102,7 +102,7 @@ const en: Record<MessageKey, string> = {
   'outfit.black': 'Black long robe',
   'outfit.kasaya': 'Yellow robe & kasaya',
   'outfit.beads': 'Blue-grey robe & mala',
-  'outfit.pilgrim': 'Wandering monk',
+  'outfit.pilgrim': 'Pilgrim monk',
   'outfit.warrior': 'Warrior monk',
 
   'perf.label': 'Performance',
