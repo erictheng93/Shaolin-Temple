@@ -1,12 +1,12 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式（協定版本 2）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 3）。
  *
- * 位置廣播 moves／sync 是 WebSocket 二進位幀（格式與位元組配置見 moveFrame.ts），其餘訊息與上行都是 JSON 文字。
- * 編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
- * 與 Rust 伺服器共用固定資料 server/tests/protocol-v2.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
+ * 位置廣播 moves／sync 與動作廣播 action 是 WebSocket 二進位幀（格式與位元組配置見 binaryFrame.ts），
+ * 其餘訊息與所有上行都是 JSON 文字。編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v3.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
  *
- * 版本：v2 的前端連到 v1 伺服器、或 v1 的前端連到 v2 伺服器，都會在 hello 時收到 error unsupported_version，
- * 前端不再重連並提示重新整理，不會出現「連上了但位置解不開」的靜默故障。
+ * 版本：前端與伺服器的協定版本不同時，前端在 hello 時收到 error unsupported_version，
+ * 不再重連並提示重新整理，不會出現「連上了但訊息解不開」的靜默故障。
  *
  * 語意分類：
  * - 可取代：move/stop。尚未送出的舊位置可被新位置覆蓋。
@@ -17,14 +17,25 @@
  *   客戶端以 welcome／join 建立 n → 玩家對照，leave 時移除，對照不到的 n 直接忽略。
  * - moves 是增量（只含有變動的玩家）；sync 是整批校正（收件人所在場景的所有其他玩家），客戶端直接套用、不插值。
  * - moves／sync／action 只送給同場景玩家；zone／join／leave 送給同房所有人。
+ * - action 幀以 n 指稱執行者、以一個 byte 的編號指稱動作、只帶 startedAt 的低 32 位元；decode() 以 DecodeContext
+ *   （FrameContext：由 welcome／join／leave 維護 n → id，由 welcome／pong 估計伺服器時間）還原成與 v2 相同的
+ *   { t: 'action', playerId, id, startedAt }，上層看不出差別。
  * - 上行 move／stop 的座標與 heading 四捨五入到 0.01（JSON）。下行 moves／sync 的座標精度 0.01 公尺、heading 一格 2π/256。
  */
 
-import { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, decodeBatch, type MoveTuple } from './moveFrame'
+import {
+  FRAME_ACTION,
+  MAX_MOVES_PER_MESSAGE,
+  MAX_SHORT_ID,
+  decodeAction,
+  decodeBatch,
+  unwrapStartedAt,
+  type MoveTuple,
+} from './binaryFrame'
 
 export { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, type MoveTuple }
 
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 /** 單則訊息上限（bytes）。超過即丟棄，伺服器端也應設相同上限。 */
 export const MAX_MESSAGE_BYTES = 16 * 1024
 /**
@@ -76,6 +87,10 @@ export type ServerMessage =
    * 若含收件人自己的短編號，代表伺服器拒絕了他送出的位置，須回到這個位置。
    */
   | { t: 'sync'; m: MoveTuple[] }
+  /**
+   * 其他玩家開始一個動作（二進位幀，解碼時以 DecodeContext 還原 playerId 與絕對 startedAt）。
+   * startedAt 是伺服器的 Unix 毫秒。v3 的幀不帶 data（伺服器只接受空的 data）。
+   */
   | { t: 'action'; playerId: string; id: string; startedAt: number; data?: Record<string, unknown> }
   | { t: 'ack'; reqId: string; ok: boolean; reason?: string }
   /** 某玩家切換場景。 */
@@ -103,13 +118,72 @@ function isPlayer(v: unknown): v is PlayerSnapshot {
   return isObj(v.action) && isStr(v.action.id) && isNum(v.action.startedAt)
 }
 
+/** 還原 action 幀所需的連線狀態。 */
+export interface DecodeContext {
+  /** 房內短編號 → 玩家 id；對照不到回傳 undefined。 */
+  playerIdOf(n: number): string | undefined
+  /** 客戶端估計的伺服器現在時間（Unix 毫秒），用來還原 startedAt 的高位。 */
+  serverNow(): number
+}
+
+/**
+ * 一條連線的 DecodeContext：看過的每則伺服器訊息都交給 observe()。welcome 重建 n → id 對照並校正時鐘、
+ * join 加入（同一玩家換了編號時移除舊的）、leave 移除、pong 校正時鐘。重連後的 welcome 會整批重建。
+ */
+export class FrameContext implements DecodeContext {
+  private readonly ids = new Map<number, string>()
+  private offset: number | null = null
+
+  constructor(private readonly clock: () => number = () => performance.now()) {}
+
+  playerIdOf(n: number): string | undefined {
+    return this.ids.get(n)
+  }
+
+  serverNow(): number {
+    return this.clock() + (this.offset ?? 0)
+  }
+
+  observe(m: ServerMessage): void {
+    switch (m.t) {
+      case 'welcome':
+        this.ids.clear()
+        for (const p of m.players) this.ids.set(p.n, p.id)
+        this.offset = m.serverTime - this.clock()
+        break
+      case 'join':
+        for (const [n, id] of this.ids) if (id === m.player.id) this.ids.delete(n)
+        this.ids.set(m.player.n, m.player.id)
+        break
+      case 'leave':
+        for (const [n, id] of this.ids) if (id === m.id) this.ids.delete(n)
+        break
+      case 'pong':
+        this.offset = m.serverTime - this.clock()
+        break
+    }
+  }
+}
+
+/** 解碼 action 幀並以 ctx 還原；格式不符、沒有 ctx、或對照不到 n（例如 leave 之後才到）都回傳 null。 */
+function decodeActionMessage(raw: ArrayBuffer, ctx: DecodeContext | undefined): ServerMessage | null {
+  const frame = decodeAction(raw)
+  if (!frame || !ctx) return null
+  const playerId = ctx.playerIdOf(frame.n)
+  if (playerId === undefined) return null
+  return { t: 'action', playerId, id: frame.id, startedAt: unwrapStartedAt(frame.startedAtLow, ctx.serverNow()) }
+}
+
 /**
  * 解析伺服器訊息。格式不符、過大或未知類型時回傳 null，呼叫端直接忽略，不讓壞資料進入遊戲狀態。
- * ArrayBuffer（WebSocket binaryType = 'arraybuffer'）是 moves／sync 的二進位幀；字串是 JSON。
- * moves／sync 只接受二進位幀，以 JSON 送來的視為無效（v1 格式）。
+ * ArrayBuffer（WebSocket binaryType = 'arraybuffer'）是二進位幀（moves／sync／action）；字串是 JSON。
+ * moves／sync／action 只接受二進位幀，以 JSON 送來的視為無效（舊版格式）。action 幀需要 ctx 才能還原。
  */
-export function decode(raw: unknown): ServerMessage | null {
-  if (raw instanceof ArrayBuffer) return raw.byteLength > MAX_MESSAGE_BYTES ? null : decodeBatch(raw)
+export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null {
+  if (raw instanceof ArrayBuffer) {
+    if (raw.byteLength > MAX_MESSAGE_BYTES || raw.byteLength === 0) return null
+    return new Uint8Array(raw)[0] === FRAME_ACTION ? decodeActionMessage(raw, ctx) : decodeBatch(raw)
+  }
   if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_BYTES) return null
   let m: unknown
   try {
@@ -134,10 +208,6 @@ export function decode(raw: unknown): ServerMessage | null {
       return isStr(m.id) ? (m as ServerMessage) : null
     case 'move':
       return isStr(m.id) && isNum(m.x) && isNum(m.z) && isNum(m.heading) && typeof m.moving === 'boolean'
-        ? (m as ServerMessage)
-        : null
-    case 'action':
-      return isStr(m.playerId) && isStr(m.id) && isNum(m.startedAt) && (m.data === undefined || isObj(m.data))
         ? (m as ServerMessage)
         : null
     case 'ack':

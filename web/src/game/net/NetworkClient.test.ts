@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient, PENALTY_RECONNECT_MS } from './NetworkClient'
-import { encodeBatch } from './moveFrame'
+import { encodeAction, encodeBatch } from './binaryFrame'
 import type { ServerMessage } from './protocol'
 
 class FakeSocket {
@@ -77,6 +77,73 @@ describe('NetworkClient 下行二進位幀', () => {
     last().receiveBinary(new Uint8Array([0x09])) // 未知幀型：忽略
     expect(got.map((m) => m.t)).toEqual(['welcome', 'moves', 'leave', 'sync'])
     expect(got[1]).toEqual({ t: 'moves', m: [[3, 1.5, -2, 0, 1]] })
+  })
+})
+
+describe('NetworkClient action 幀', () => {
+  const T = 1_794_787_200_000
+  const player = (id: string, n: number) => ({ id, n, name: id, x: 0, z: 0, heading: 0 })
+  const actions = (got: ServerMessage[]) => got.filter((m) => m.t === 'action')
+
+  function online(got: ServerMessage[]): void {
+    client.events.on('message', (m) => got.push(m))
+    client.connect()
+    last().open()
+    last().receive({ ...welcome, serverTime: T, players: [player('a', 0), player('b', 4)] })
+  }
+
+  it('以 welcome／join 的短編號還原 playerId，startedAt 還原成伺服器的絕對毫秒', () => {
+    const got: ServerMessage[] = []
+    online(got)
+    last().receiveBinary(encodeAction({ n: 4, id: 'bell', startedAt: T - 50 })!)
+    last().receive({ t: 'join', player: player('c', 9) })
+    last().receiveBinary(encodeAction({ n: 9, id: 'chant', startedAt: T + 20 })!)
+    expect(actions(got)).toEqual([
+      { t: 'action', playerId: 'b', id: 'bell', startedAt: T - 50 },
+      { t: 'action', playerId: 'c', id: 'chant', startedAt: T + 20 },
+    ])
+  })
+
+  it('對照不到的 n（從未加入、或已 leave）整則忽略', () => {
+    const got: ServerMessage[] = []
+    online(got)
+    last().receiveBinary(encodeAction({ n: 5, id: 'bow', startedAt: T })!)
+    last().receive({ t: 'leave', id: 'b' })
+    last().receiveBinary(encodeAction({ n: 4, id: 'bow', startedAt: T })!)
+    expect(actions(got)).toEqual([])
+  })
+
+  it('同一玩家以新編號 join 時舊編號失效；編號回收給新玩家後指向新玩家', () => {
+    const got: ServerMessage[] = []
+    online(got)
+    last().receive({ t: 'join', player: player('b', 6) })
+    last().receiveBinary(encodeAction({ n: 4, id: 'bow', startedAt: T })!)
+    last().receive({ t: 'join', player: player('d', 4) })
+    last().receiveBinary(encodeAction({ n: 4, id: 'bow', startedAt: T })!)
+    last().receiveBinary(encodeAction({ n: 6, id: 'bow', startedAt: T })!)
+    expect(actions(got).map((m) => m.t === 'action' && m.playerId)).toEqual(['d', 'b'])
+  })
+
+  it('未知動作編號、長度不符、以 JSON 送來的 action 都忽略', () => {
+    const got: ServerMessage[] = []
+    online(got)
+    const unknown = encodeAction({ n: 4, id: 'bow', startedAt: T })!
+    unknown[2] = 6
+    last().receiveBinary(unknown)
+    last().receiveBinary(encodeAction({ n: 4, id: 'bow', startedAt: T })!.slice(0, 6))
+    last().receive({ t: 'action', playerId: 'b', id: 'bow', startedAt: T })
+    expect(actions(got)).toEqual([])
+  })
+
+  it('重連後的 welcome 整批重建對照', () => {
+    const got: ServerMessage[] = []
+    online(got)
+    last().drop()
+    vi.advanceTimersByTime(1000)
+    last().open()
+    last().receive({ ...welcome, serverTime: T, players: [player('a', 0), player('e', 4)] })
+    last().receiveBinary(encodeAction({ n: 4, id: 'incense', startedAt: T })!)
+    expect(actions(got)).toEqual([{ t: 'action', playerId: 'e', id: 'incense', startedAt: T }])
   })
 })
 

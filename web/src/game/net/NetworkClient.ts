@@ -2,6 +2,7 @@ import { Emitter } from '../core/Emitter'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import {
+  FrameContext,
   MAX_MESSAGE_BYTES,
   PROTOCOL_VERSION,
   decode,
@@ -50,6 +51,8 @@ export class NetworkClient {
   private ws: WebSocket | null = null
   private status: ConnectionStatus = 'offline'
   private queue = new OutboundQueue()
+  /** action 幀的 n → 玩家 id 與伺服器時鐘，由收到的 welcome／join／leave／pong 維護。 */
+  private frames = new FrameContext()
   private pending = new Map<string, PendingAck>()
   private attempt = 0
   private seq = 0
@@ -101,7 +104,7 @@ export class NetworkClient {
       return
     }
     this.ws = ws
-    // moves／sync 是二進位幀；arraybuffer 讓 onmessage 同步拿到資料（預設的 Blob 要非同步讀取，可能打亂訊息順序）。
+    // moves／sync／action 是二進位幀；arraybuffer 讓 onmessage 同步拿到資料（預設的 Blob 要非同步讀取，可能打亂訊息順序）。
     ws.binaryType = 'arraybuffer'
     ws.onopen = () => {
       this.sendNow({ t: 'hello', v: PROTOCOL_VERSION, name: this.opts.name, resumeToken: this.resumeToken })
@@ -197,8 +200,9 @@ export class NetworkClient {
   }
 
   private onMessage(data: unknown): void {
-    const msg = decode(data)
+    const msg = decode(data, this.frames)
     if (!msg) return
+    this.frames.observe(msg)
     switch (msg.t) {
       case 'welcome':
         this.attempt = 0 // 收到 welcome 才算連線成功；只 onopen 就被踢的情況仍要持續退避。

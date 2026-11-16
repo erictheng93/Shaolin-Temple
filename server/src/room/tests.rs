@@ -594,7 +594,7 @@ async fn actions_are_acked_idempotently_and_only_known_ones_broadcast() {
     let seen = b.drain();
     assert_eq!(kinds(&seen), ["action"]);
     assert!(
-        matches!(&seen[0], ServerMessage::Action { player_id, id, .. } if *player_id == a.who.id && id == "bow")
+        matches!(&seen[0], ServerMessage::Action { n, code, .. } if *n == a.n && world::ACTIONS[usize::from(*code)] == "bow")
     );
     // 未知動作與不支援的 data
     a.action("r2", "dance", true).await;
@@ -675,11 +675,11 @@ async fn chant_and_early_end_are_relayed_in_order_and_snapshot_keeps_the_end() {
         acks(&a.drain()),
         [ack("r1", true, None), ack("r2", true, None)]
     );
-    let ids: Vec<String> = b
+    let ids: Vec<&str> = b
         .drain()
         .into_iter()
         .filter_map(|m| match m {
-            ServerMessage::Action { id, .. } => Some(id),
+            ServerMessage::Action { code, .. } => Some(world::ACTIONS[usize::from(code)]),
             _ => None,
         })
         .collect();
