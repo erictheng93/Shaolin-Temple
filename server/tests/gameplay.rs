@@ -124,12 +124,19 @@ struct Me {
     zone: String,
     x: f64,
     z: f64,
+    outfit: u64,
     welcome: Value,
 }
 async fn hello(ws: &mut Ws, resume: Option<&str>) -> Me {
+    hello_with(ws, resume, None).await
+}
+async fn hello_with(ws: &mut Ws, resume: Option<&str>, outfit: Option<Value>) -> Me {
     let mut message = json!({ "t": "hello", "v": PROTOCOL_VERSION, "name": "測試" });
     if let Some(token) = resume {
         message["resumeToken"] = json!(token);
+    }
+    if let Some(outfit) = outfit {
+        message["outfit"] = outfit;
     }
     send(ws, message).await;
     let welcome = recv(ws, Duration::from_secs(5)).await.expect("welcome");
@@ -149,6 +156,7 @@ async fn hello(ws: &mut Ws, resume: Option<&str>) -> Me {
         zone: me["zone"].as_str().unwrap().into(),
         x: me["x"].as_f64().unwrap(),
         z: me["z"].as_f64().unwrap(),
+        outfit: me["outfit"].as_u64().expect("snapshot carries outfit"),
         id,
         welcome,
     }
@@ -422,6 +430,97 @@ async fn chat_over_the_rate_limit_is_dropped() {
         .map(|m| m["text"].as_str().unwrap())
         .collect();
     assert_eq!(texts, ["訊息0", "訊息1", "訊息2"]);
+}
+
+// ---- 衣裝 ----
+
+#[tokio::test]
+async fn hello_outfit_defaults_to_zero_when_missing_or_invalid_and_never_rejects() {
+    let server = server_with(options()).await;
+    let mut a = connect(&server).await;
+    assert_eq!(hello_with(&mut a, None, Some(json!(4))).await.outfit, 4);
+    for (i, bad) in [json!(6), json!(-1), json!(1.5), json!("2"), json!(null)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut ws = connect(&server).await;
+        let me = hello_with(&mut ws, None, Some(bad.clone())).await;
+        assert_eq!(me.outfit, 0, "case {i}: {bad}");
+    }
+    let mut b = connect(&server).await;
+    assert_eq!(hello(&mut b, None).await.outfit, 0);
+    // 先前加入的人在 welcome 的 players 裡帶著自己的衣裝
+    let mut c = connect(&server).await;
+    let me = hello(&mut c, None).await;
+    let players = me.welcome["players"].as_array().unwrap();
+    assert!(players.iter().any(|p| p["outfit"] == 4));
+}
+
+#[tokio::test]
+async fn outfit_change_is_broadcast_to_everyone_and_invalid_values_are_dropped() {
+    let server = server_with(options()).await;
+    let mut a = connect(&server).await;
+    let me = hello(&mut a, None).await;
+    let mut b = connect(&server).await;
+    hello(&mut b, None).await;
+    collect(&mut a, Duration::from_millis(200)).await; // 清掉 b 的 join
+    // 無效值：丟棄，連線不受影響（不算違規）
+    for bad in [json!(9), json!("1")] {
+        send(&mut a, json!({ "t": "outfit", "outfit": bad })).await;
+    }
+    // 有效且不同：廣播給所有人含本人
+    send(&mut a, json!({ "t": "outfit", "outfit": 2 })).await;
+    for ws in [&mut a, &mut b] {
+        let m = recv_kind(ws, "outfit").await;
+        assert_eq!(m["id"], me.id.as_str());
+        assert_eq!(m["outfit"], 2);
+        let rest = collect(ws, Duration::from_millis(200)).await;
+        assert!(!rest.iter().any(|m| m["t"] == "outfit"), "{rest:?}");
+    }
+}
+
+#[tokio::test]
+async fn outfit_over_the_rate_limit_is_dropped() {
+    let server = server_with(options()).await;
+    let mut a = connect(&server).await;
+    hello(&mut a, None).await;
+    for outfit in 1..=5 {
+        send(&mut a, json!({ "t": "outfit", "outfit": outfit })).await;
+    }
+    let seen = collect(&mut a, Duration::from_millis(500)).await;
+    let got: Vec<_> = seen
+        .iter()
+        .filter(|m| m["t"] == "outfit")
+        .map(|m| m["outfit"].as_u64().unwrap())
+        .collect();
+    assert_eq!(got, [1, 2, 3]);
+}
+
+#[tokio::test]
+async fn resume_keeps_the_outfit_and_hello_outfit_overrides_and_is_announced() {
+    let server = server_with(options()).await;
+    let mut b = connect(&server).await;
+    hello(&mut b, None).await;
+    let mut a = connect(&server).await;
+    let first = hello_with(&mut a, None, Some(json!(3))).await;
+    collect(&mut b, Duration::from_millis(200)).await;
+    drop(a);
+    sleep(Duration::from_millis(300)).await;
+    let mut a2 = connect(&server).await;
+    let second = hello(&mut a2, Some(&first.token)).await;
+    assert_eq!((second.id.as_str(), second.outfit), (first.id.as_str(), 3));
+    let seen = collect(&mut b, Duration::from_millis(300)).await;
+    assert!(seen.iter().all(|m| m["t"] != "outfit"), "{seen:?}");
+    drop(a2);
+    sleep(Duration::from_millis(300)).await;
+    let mut a3 = connect(&server).await;
+    let third = hello_with(&mut a3, Some(&second.token), Some(json!(5))).await;
+    assert_eq!((third.id.as_str(), third.outfit), (first.id.as_str(), 5));
+    let m = recv_kind(&mut b, "outfit").await;
+    assert_eq!(
+        (m["id"].as_str().unwrap(), m["outfit"].as_u64()),
+        (first.id.as_str(), Some(5))
+    );
 }
 
 // ---- T5：停止 ----

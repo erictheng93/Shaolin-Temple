@@ -1,8 +1,9 @@
 import type * as THREE from 'three'
 import { AnimationSystem, createAnimState, type AnimState } from '../anim/AnimationSystem'
-import { AvatarFactory, colorIndexFor, type Avatar } from '../render/AvatarFactory'
+import { AvatarFactory, type Avatar } from '../render/AvatarFactory'
 import type { PlayerSnapshot } from '../net/protocol'
 import { SPAWN } from './layout'
+import { DEFAULT_OUTFIT, normalizeOutfit } from './outfits'
 import { REMOTE_MOVE_TIMEOUT_MS, REMOTE_SNAP_DISTANCE, sampleBetween, stepDuration, type Sample } from './interp'
 import type { MoverState } from './movement'
 
@@ -11,6 +12,8 @@ export interface RemotePlayer {
   name: string
   avatar: Avatar
   anim: AnimState
+  /** 衣裝編號（world/outfits.ts）。 */
+  outfit: number
   x: number
   z: number
   heading: number
@@ -32,6 +35,8 @@ export interface RemotePlayer {
 
 export interface LocalPlayer {
   avatar: Avatar
+  /** 衣裝編號（world/outfits.ts）。 */
+  outfit: number
   anim: AnimState
   mover: MoverState
   /** 鎖住移動直到此時間（毫秒），由需要定身的動作設定。 */
@@ -39,6 +44,7 @@ export interface LocalPlayer {
 }
 
 const LABEL_LIMIT = 12
+
 const CULL_INTERVAL_S = 0.5
 
 /**
@@ -59,12 +65,15 @@ export class Players {
     private readonly parent: THREE.Object3D,
     private readonly anim: AnimationSystem,
     public maxVisible: number,
+    localOutfit = DEFAULT_OUTFIT,
   ) {
     this.factory = new AvatarFactory(parent)
-    const avatar = this.factory.create({ name: '', colorIndex: 0, local: true })
+    const outfit = normalizeOutfit(localOutfit)
+    const avatar = this.factory.create({ name: '', outfit, local: true })
     parent.add(avatar.root)
     this.local = {
       avatar,
+      outfit,
       anim: createAnimState(),
       mover: { x: SPAWN.x, z: SPAWN.z, heading: SPAWN.heading, target: null },
       lockedUntil: 0,
@@ -88,15 +97,22 @@ export class Players {
         this.byN.set(p.n, existing)
       }
       existing.zone = p.zone ?? 'courtyard'
+      const outfit = normalizeOutfit(p.outfit)
+      if (p.outfit !== undefined && outfit !== existing.outfit) {
+        existing.outfit = outfit
+        existing.avatar.setOutfit(outfit)
+      }
       this.snapTo(existing, p.x, p.z, p.heading, now)
       return existing
     }
-    const avatar = this.factory.create({ name: p.name, colorIndex: colorIndexFor(p.id), local: false })
+    const outfit = normalizeOutfit(p.outfit)
+    const avatar = this.factory.create({ name: p.name, outfit, local: false })
     this.parent.add(avatar.root)
     const r: RemotePlayer = {
       id: p.id,
       name: p.name,
       avatar,
+      outfit,
       anim: createAnimState(),
       x: p.x,
       z: p.z,
@@ -203,6 +219,22 @@ export class Players {
   say(playerId: string | null, text: string, until: number): void {
     const avatar = playerId === null ? this.local.avatar : this.remotes.get(playerId)?.avatar
     avatar?.say(text, until)
+  }
+
+  /** 更換衣裝；playerId 為 null 代表本機玩家，找不到的遠端玩家忽略。無效值當成預設衣裝。回傳是否有改變。 */
+  setOutfit(playerId: string | null, outfit: number): boolean {
+    const p = playerId === null ? this.local : this.remotes.get(playerId)
+    if (!p) return false
+    const o = normalizeOutfit(outfit)
+    if (o === p.outfit) return false
+    p.outfit = o
+    p.avatar.setOutfit(o)
+    return true
+  }
+
+  /** 伺服器廣播的遠端玩家衣裝。只作用於遠端玩家：本機玩家（含自己的回音）與未知 id 都忽略。回傳是否有改變。 */
+  setRemoteOutfit(playerId: string, outfit: number): boolean {
+    return this.remotes.has(playerId) && this.setOutfit(playerId, outfit)
   }
 
   /** 每幀更新。回傳是否仍有動態需要重繪。 */

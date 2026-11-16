@@ -2,7 +2,7 @@ use crate::{
     metrics::Metrics,
     protocol::{
         ClientMessage, Frame, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage, clean_chat,
-        clean_name,
+        clean_name, parse_outfit,
     },
     rate_limit::{RateLimiter, Verdict},
 };
@@ -200,6 +200,7 @@ async fn session_inner(
                 v,
                 name: requested,
                 resume_token,
+                outfit,
             }) if name.is_none() => {
                 if v != PROTOCOL_VERSION {
                     deliver(
@@ -215,7 +216,14 @@ async fn session_inner(
                     return;
                 }
                 let cleaned = clean_name(&requested);
-                *membership = state.lobby.join(cleaned.clone(), resume_token).await;
+                *membership = state
+                    .lobby
+                    .join(
+                        cleaned.clone(),
+                        resume_token,
+                        outfit.as_ref().and_then(parse_outfit),
+                    )
+                    .await;
                 if membership.is_none() {
                     close(ws, 1013, "server busy").await;
                     return;
@@ -285,6 +293,12 @@ async fn session_inner(
                         let text = clean_chat(&text);
                         if !text.is_empty() {
                             member.chat(text);
+                        }
+                    }
+                    ClientMessage::Outfit { outfit } => {
+                        // 無效值直接丟棄；與目前相同的值由房間判斷、不廣播。
+                        if let Some(outfit) = parse_outfit(&outfit) {
+                            member.outfit(outfit).await;
                         }
                     }
                     ClientMessage::Hello { .. } => {}

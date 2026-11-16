@@ -4,7 +4,7 @@ import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
 import { frameCap, isLowBattery } from './core/frameCap'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
-import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
+import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, saveSettings, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
 import type { GameEvents, GameplayApi } from './gameplay/types'
@@ -19,6 +19,7 @@ import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
 import { resolveCollisions, stepMover, type MoveConfig } from './world/movement'
 import { findPath, type Point } from './world/pathfind'
+import { normalizeOutfit } from './world/outfits'
 import { Players } from './world/Players'
 import type { SpotContext } from './world/worship'
 import { CENSERS, ZONES, entryCamera, isZoneId, portalApproach, portalAt, portalForTap, type CameraPose, type Portal, type Pose, type ZoneId } from './world/zones'
@@ -67,6 +68,8 @@ export interface UiState {
   /** 場景切換中（畫面淡出黑幕）。 */
   fading: boolean
   zone: ZoneId
+  /** 本機玩家目前的衣裝編號（world/outfits.ts）。 */
+  outfit: number
   actions: UiAction[]
   chat: ChatEntry[]
   stats: Array<{ key: string; label: string; value: string | number }>
@@ -213,7 +216,7 @@ export class GameCore {
     this.marker.visible = false
     this.renderer.scene.add(this.marker)
 
-    this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality))
+    this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality), opts.settings.outfit)
     // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
     const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
     this.renderer.setResolutionScale(startLevel.resolution)
@@ -239,7 +242,7 @@ export class GameCore {
 
     this.watchBattery()
 
-    this.net = new NetworkClient({ url: opts.wsUrl, name: '' })
+    this.net = new NetworkClient({ url: opts.wsUrl, name: '', outfit: this.players.local.outfit })
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
     this.net.events.on('rtt', (ms) => (this.rtt = ms))
@@ -275,6 +278,23 @@ export class GameCore {
       return 'sent'
     }
     return res
+  }
+
+  /**
+   * 更換本機玩家的衣裝：立即套用到角色、存進設定、重繪並更新 UiState。無效值當成預設衣裝。
+   * 離線模式到此為止；連線時另外通知伺服器（見下方接點）。
+   */
+  setOutfit(outfit: number): void {
+    const o = normalizeOutfit(outfit)
+    if (o !== this.settings.outfit) {
+      this.settings = { ...this.settings, outfit: o }
+      saveSettings(this.settings)
+    }
+    if (!this.players.setOutfit(null, o)) return
+    // 本機立即換，不等伺服器；限速、補送與重連時的 hello 由 NetworkClient 負責。
+    this.net.setOutfit(o)
+    this.wake()
+    this.pushUi(true)
   }
 
   /** 開始渲染場景（進場前就先顯示背景畫面）。 */
@@ -420,6 +440,8 @@ export class GameCore {
       this.players.maxVisible = this.maxVisibleFor(q)
     }
     this.audio.setVolumes(this.volumes())
+    // 設定面板的衣裝選擇也可能經由這裡進來（App 的 settings 與 UiState.outfit 同步）
+    if (settings.outfit !== this.players.local.outfit) this.setOutfit(settings.outfit)
     this.wake()
     this.pushUi(true)
   }
@@ -819,6 +841,10 @@ export class GameCore {
       case 'chat':
         this.onChat(m)
         break
+      case 'outfit':
+        // 自己的回音一律忽略：本機已立即套用，較舊的回音晚到不可把外觀改回去（setRemoteOutfit 只動遠端玩家）。
+        if (m.id !== this.selfId) this.players.setRemoteOutfit(m.id, m.outfit)
+        break
       case 'pong':
         this.serverOffset = m.serverTime - performance.now()
         break
@@ -921,6 +947,7 @@ export class GameCore {
       contextLost: this.contextLost,
       fading: this.fading,
       zone: this.zone,
+      outfit: this.players.local.outfit,
       actions: this.actions.list().filter((a) => !a.hidden).map((a) => {
         const unavailable = a.unavailableReason?.(this.zone)
         return {

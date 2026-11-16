@@ -5,6 +5,7 @@ import {
   ChatLimiter,
   FrameContext,
   MAX_MESSAGE_BYTES,
+  isOutfit,
   PROTOCOL_VERSION,
   decode,
   encode,
@@ -17,6 +18,10 @@ import {
 export const PENALTY_RECONNECT_MS = 5000
 const PENALTY_CLOSE_CODES = [1013, 1008]
 /** 位置座標與面向的上行精度（0.01）。 */
+/** 衣裝限速的補充間隔（毫秒）：伺服器是每 2 秒補 1 個額度。 */
+const OUTFIT_REFILL_MS = 2200
+/** 被限速擋下的衣裝，每隔這段時間檢查一次額度。 */
+const OUTFIT_RETRY_MS = 250
 const round2 = (v: number): number => Math.round(v * 100) / 100
 
 export type ConnectionStatus = 'offline' | 'connecting' | 'online' | 'reconnecting' | 'closed'
@@ -30,6 +35,8 @@ interface NetworkEvents extends Record<string, unknown> {
 export interface NetworkOptions {
   url: string | undefined
   name: string
+  /** 初始衣裝（0..OUTFIT_COUNT-1）；每次 hello 都帶。未給時 hello 不帶，伺服器當作 0（恢復連線時沿用保存的）。 */
+  outfit?: number
   /** 位置訊息送出頻率，與渲染頻率分開。 */
   sendHz?: number
   heartbeatMs?: number
@@ -56,6 +63,14 @@ export class NetworkClient {
   /** action 幀的 n → 玩家 id 與伺服器時鐘，由收到的 welcome／join／leave／pong 維護。 */
   private frames = new FrameContext()
   private chatLimiter = new ChatLimiter()
+  /**
+   * 更換衣裝的限速：規則同聊天（突發 3），補充間隔多留 10% 餘裕，避免與伺服器的計時差讓最後一次選擇被伺服器丟掉。
+   */
+  private outfitLimiter = new ChatLimiter(() => performance.now(), 3, OUTFIT_REFILL_MS)
+  private outfit: number | undefined
+  /** 目前的衣裝還沒送給伺服器（被限速擋下或尚未連線）：只留最新的一個值，額度恢復後補送。 */
+  private outfitPending = false
+  private outfitTimer: ReturnType<typeof setTimeout> | null = null
   private pending = new Map<string, PendingAck>()
   private attempt = 0
   private seq = 0
@@ -70,7 +85,7 @@ export class NetworkClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
-  private readonly opts: Required<Omit<NetworkOptions, 'url'>> & { url: string | undefined }
+  private readonly opts: Required<Omit<NetworkOptions, 'url' | 'outfit'>> & { url: string | undefined }
 
   constructor(options: NetworkOptions) {
     this.opts = {
@@ -80,6 +95,7 @@ export class NetworkClient {
       maxBufferedBytes: 64 * 1024,
       ...options,
     }
+    if (isOutfit(options.outfit)) this.outfit = options.outfit
     window.addEventListener('online', this.onBrowserOnline)
   }
 
@@ -110,7 +126,16 @@ export class NetworkClient {
     // moves／sync／action 是二進位幀；arraybuffer 讓 onmessage 同步拿到資料（預設的 Blob 要非同步讀取，可能打亂訊息順序）。
     ws.binaryType = 'arraybuffer'
     ws.onopen = () => {
-      this.sendNow({ t: 'hello', v: PROTOCOL_VERSION, name: this.opts.name, resumeToken: this.resumeToken })
+      this.sendNow({
+        t: 'hello',
+        v: PROTOCOL_VERSION,
+        name: this.opts.name,
+        resumeToken: this.resumeToken,
+        outfit: this.outfit,
+      })
+      // hello 已帶最新衣裝，斷線期間或被限速而待送的值不必再送。
+      this.outfitPending = false
+      this.clearOutfitTimer()
       // 重送尚未確認的操作；伺服器以 reqId 去重。
       for (const p of this.pending.values()) this.sendNow(p.msg)
       this.setStatus('online')
@@ -160,6 +185,37 @@ export class NetworkClient {
   }
 
   /**
+   * 更換衣裝。記住目前衣裝（之後每次 hello 都帶，含重連）；已連線時送出 outfit 訊息。
+   * 超過限速時只保留最新的選擇、不排隊，額度恢復後補送；斷線時不送（重連的 hello 會帶）。
+   * 無效編號（非整數或超出範圍）忽略。
+   */
+  setOutfit(outfit: number): void {
+    if (!isOutfit(outfit) || this.disposed) return
+    const changed = outfit !== this.outfit
+    this.outfit = outfit
+    if (!this.enabled) return
+    if (changed) this.outfitPending = true
+    if (this.outfitPending) this.trySendOutfit()
+  }
+
+  private trySendOutfit(): void {
+    this.clearOutfitTimer()
+    if (!this.outfitPending || this.outfit === undefined || this.status !== 'online') return
+    if (this.outfitLimiter.tryTake()) {
+      if (this.sendNow({ t: 'outfit', outfit: this.outfit })) {
+        this.outfitPending = false
+        return
+      }
+    }
+    this.outfitTimer = setTimeout(() => this.trySendOutfit(), OUTFIT_RETRY_MS)
+  }
+
+  private clearOutfitTimer(): void {
+    if (this.outfitTimer) clearTimeout(this.outfitTimer)
+    this.outfitTimer = null
+  }
+
+  /**
    * 切換場景（需送達，但可被更新的場景取代）。離線模式忽略。
    * 斷線期間會留在佇列，重連後的 hello 之後送出；伺服器以 resumeToken 恢復時也會帶回場景。
    */
@@ -192,6 +248,7 @@ export class NetworkClient {
     this.disposed = true
     window.removeEventListener('online', this.onBrowserOnline)
     this.clearReconnectTimer()
+    this.clearOutfitTimer()
     this.stopTimers()
     for (const p of this.pending.values()) {
       clearTimeout(p.timer)
