@@ -5,7 +5,8 @@
 //! - 殿內邊界、出入口與落點：`web/src/game/world/zones.ts`
 //!   （`COURTYARD_DOOR` 第 77 行、`HALL_DOOR` 第 84 行、`ZONES` 第 86～112 行）
 //! - 移動速度 3.2 m/s：`web/src/game/GameCore.ts` 的 `MOVE_SPEED`（第 57 行）
-//! - 動作允許清單：`web/scripts/mock-server.mjs` 的 `ACTIONS`（前端玩法模組 `gameplay/modules/worship.ts`）
+//! - 動作允許清單：`web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（同時是 action 幀的動作編號，mock 伺服器也用它；
+//!   前端玩法模組 `gameplay/modules/worship.ts`）。兩份由固定資料 `tests/protocol-v3.json` 的 `binary.action.codes` 鎖住。
 //!
 //! - 障礙物：`layout.ts` 的 `OBSTACLES`（主殿、鐘亭、香爐、石燈籠、樹）與 `zones.ts` 殿內的神龕、供桌、柱子，
 //!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。
@@ -216,7 +217,16 @@ pub fn zone(id: &str) -> Option<&'static Zone> {
 /// 動作允許清單（參拜玩法：合十、跪拜、誦經、上香、敲鐘），`chant_end` 是提前結束誦經（起身），
 /// 由客戶端在誦經中點地面或按其他動作時送出，轉送給同場景的人讓他們看到的也停止。
 /// 快照與廣播中的動作 id 只會來自這份清單。
+///
+/// 索引就是 action 二進位幀的動作編號（協定的一部分）：只能在尾端新增（舊客戶端收到不認得的編號會整則忽略），
+/// 改順序或刪除要升協定版本。
 pub const ACTIONS: [&str; 6] = ["bow", "prostrate", "chant", "chant_end", "incense", "bell"];
+const _: () = assert!(ACTIONS.len() <= 256);
+
+/// 動作在清單中的索引（action 幀的動作編號）；不在清單內為 `None`。
+pub fn action_code(id: &str) -> Option<u8> {
+    ACTIONS.iter().position(|a| *a == id).map(|i| i as u8)
+}
 
 /// 回傳清單中的同名動作；不在清單內為 `None`。
 pub fn action(id: &str) -> Option<&'static str> {

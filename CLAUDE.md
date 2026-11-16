@@ -49,7 +49,8 @@ npm run build:statues                # 殿內神像：.statues-src/ 的原檔 �
 
 ### 網路協定
 
-- `src/game/net/protocol.ts` 是前後端協定的定義來源（版本 2）。`moves`／`sync` 是 WebSocket 二進位幀（`net/moveFrame.ts`，位元組配置見 docs/BACKEND_TASKS.md T8），其餘訊息與所有上行都是 JSON。編碼集中在 `encode()`／`decode()`；`decode()` 依收到字串或 `ArrayBuffer` 分流並負責驗證，新增伺服器訊息時同步擴充型別與驗證。改協定時前端、mock 伺服器與後端在同一個 PR 修改，共用固定資料 `server/tests/protocol-v2.json`（含二進位測試向量）兩邊的測試都要讀。版本不符時伺服器回 `unsupported_version`。
+- `src/game/net/protocol.ts` 是前後端協定的定義來源（版本 3）。下行的 `moves`／`sync`／`action` 是 WebSocket 二進位幀（`net/binaryFrame.ts`，位元組配置見 docs/BACKEND_TASKS.md T8），其餘訊息與所有上行（含帶 `reqId` 的 `action` 與 `ack`）都是 JSON。編碼集中在 `encode()`／`decode()`；`decode()` 依收到字串或 `ArrayBuffer` 分流並負責驗證，新增伺服器訊息時同步擴充型別與驗證。改協定時前端、mock 伺服器與後端在同一個 PR 修改，共用固定資料 `server/tests/protocol-v3.json`（含二進位測試向量，由 `server/tests/protocol-v3-vectors.py` 獨立產生）兩邊的測試都要讀。版本不符時伺服器回 `unsupported_version`。
+- `action` 幀（7 bytes）以房內短編號 `n` 指稱執行者、以一個 byte 的動作編號指稱動作、只帶 `startedAt` 的低 32 位元。`NetworkClient` 的 `FrameContext`（由 `welcome`／`join`／`leave` 維護 `n → id`，由 `welcome`／`pong` 估計伺服器時間）在 `decode()` 時還原成 `{ t: 'action', playerId, id, startedAt }`（絕對 Unix 毫秒，與 v2 相同），GameCore 與玩法看不出差別；對照不到的 `n` 或未知動作編號整則忽略。
 - 語意分兩類：`move`／`stop` 可取代（`OutboundQueue` 合併未送出的舊位置）；`action` 需確認（帶 `reqId`，伺服器去重並回 `ack`，重送不重複執行）。
 - 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家。
 - 伺服器每個 tick 送批次位置 `moves`（解碼後為 `MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`；二進位每筆 6 bytes：座標量化到公分、heading 一格 2π/256）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`，0～127）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
@@ -69,7 +70,7 @@ npm run build:statues                # 殿內神像：.statues-src/ 的原檔 �
 - 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間點擊地面、方向鍵或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
 - 動畫片段的第三個參數是目前時間（`ClipFn(rig, p, now)`），`api.clockOffset()`（伺服器時間 − performance.now）讓片段與聲音對齊共同的節拍；`audio.play(name, { at })` 在 AudioContext 時間軸上預排聲音。
 - 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。
-- 動作允許清單有三份要一致：`server/src/world.rs` 的 `ACTIONS`、`web/scripts/mock-server.mjs`、`server/src/bin/loadtest.rs`。
+- 動作允許清單有兩份，同時是 `action` 幀的動作編號對照表（索引即編號）：`server/src/world.rs` 的 `ACTIONS`（負載工具直接用它）與 `web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（mock 伺服器直接用它）。兩邊測試都比對固定資料的 `binary.action.codes`，不一致就失敗。新增動作只能加在尾端（同時改兩份與產生腳本）；改順序或刪除要升協定版本。
 - 香爐裡的香與煙是動態物件 `render/IncenseSystem.ts`（GameCore 擁有，2 個 draw call，沒香時 0），不併入靜態幾何、不與庭院烘焙材質共用。
 
 ### 音訊

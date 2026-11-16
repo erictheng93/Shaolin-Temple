@@ -1,8 +1,8 @@
 //! 負載測試工具：模擬多位玩家連線到伺服器，依前端行為送出 `hello`、10 Hz `move`、偶發 `action`
 //! 與 20 秒一次的 `ping`，量測每連線的接收／送出流量與 `moves` 的到達間隔。
 //!
-//! 協定版本 2：`moves`／`sync` 是二進位幀（每則都以 `decode_batch` 驗證，解不開的計入 `invalid_frames`），
-//! 其餘是 JSON 文字。bytes 計的是 WebSocket 酬載長度；`recv_ws_bytes_per_conn_s` 另外加上
+//! 協定版本 3：`moves`／`sync`／`action` 是二進位幀（每則都以 `decode_batch`／`decode_action` 驗證，
+//! 解不開的計入 `invalid_frames`），其餘是 JSON 文字。動作從伺服器的允許清單 `world::ACTIONS` 隨機挑選。bytes 計的是 WebSocket 酬載長度；`recv_ws_bytes_per_conn_s` 另外加上
 //! 伺服器到客戶端的 WebSocket 框架標頭（2～4 bytes／則），仍不含 TCP／IP 與 TLS。
 //!
 //! 用法：
@@ -22,7 +22,10 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use temple_server::protocol::{BatchKind, PROTOCOL_VERSION, decode_batch};
+use temple_server::{
+    protocol::{BatchKind, FRAME_ACTION, PROTOCOL_VERSION, decode_action, decode_batch},
+    world::ACTIONS,
+};
 use tokio::{
     sync::watch,
     time::{MissedTickBehavior, interval, interval_at, sleep, timeout},
@@ -41,7 +44,6 @@ const MAX_Z: f64 = 17.0;
 const SPEED: f64 = 2.5;
 const SEND_HZ: f64 = 10.0;
 const PING_EVERY: Duration = Duration::from_secs(20);
-const ACTIONS: [&str; 6] = ["bow", "prostrate", "chant", "chant_end", "incense", "bell"];
 
 struct Args {
     url: String,
@@ -94,6 +96,9 @@ const KINDS: [&str; 11] = [
 const OTHER: usize = KINDS.len() - 1;
 fn kind_of(message: &Message) -> usize {
     match message {
+        Message::Binary(raw) if raw.first() == Some(&FRAME_ACTION) => {
+            decode_action(raw).map_or(OTHER, |_| 2)
+        }
         Message::Binary(raw) => match decode_batch(raw) {
             Ok((BatchKind::Moves, _)) => 0,
             Ok((BatchKind::Sync, _)) => 1,
