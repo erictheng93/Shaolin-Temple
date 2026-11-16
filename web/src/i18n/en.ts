@@ -23,7 +23,7 @@ const en: Record<MessageKey, string> = {
   'top.connecting': 'Connecting',
   'top.reconnecting': 'Reconnecting',
   'top.offline': 'Offline',
-  'top.inTemple': 'In the temple: {count}',
+  'top.inTemple': '{count} here',
   'top.unmute': 'Turn sound on',
   'top.mute': 'Turn sound off',
   'top.settings': 'Settings',
