@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 // 角色繪製（Three.js）與本測試無關，換成最小替身。
 vi.mock('../render/AvatarFactory', () => {
-  const makeAvatar = () => ({
+  const makeAvatar = (opts: { outfit: number }) => ({
+    outfit: opts.outfit,
+    setOutfit(o: number) {
+      this.outfit = o
+    },
     root: { visible: true, position: { set() {} }, rotation: { y: 0 } },
     pivot: {},
     head: {},
@@ -17,7 +21,6 @@ vi.mock('../render/AvatarFactory', () => {
     dispose() {},
   })
   return {
-    colorIndexFor: () => 0,
     AvatarFactory: class {
       create = makeAvatar
       sync() {}
@@ -145,5 +148,65 @@ describe('Players 插值與看門狗', () => {
     p.update(1000 + REMOTE_MOVE_TIMEOUT_MS + 1, 0.016, 0)
     expect(r.serverMoving).toBe(false)
     expect(r.anim.moving).toBe(false)
+  })
+})
+
+describe('Players 衣裝', () => {
+  const outfitOf = (a: unknown) => (a as { outfit: number }).outfit
+  it('本機衣裝由建構參數決定；遠端從快照讀取，沒有或無效時為 0', () => {
+    const anim = { apply() {}, isActive: () => false }
+    const p = new Players({ add() {} } as never, anim as never, 50, 3)
+    expect(p.local.outfit).toBe(3)
+    expect(outfitOf(p.local.avatar)).toBe(3)
+    expect(p.upsert({ ...snap('a', 1), outfit: 4 }, 0).outfit).toBe(4)
+    expect(p.upsert(snap('b', 2), 0).outfit).toBe(0)
+    expect(p.upsert({ ...snap('c', 3), outfit: 99 } as never, 0).outfit).toBe(0)
+  })
+
+  it('setOutfit 更新本機（null）與遠端玩家；找不到或沒變時回傳 false', () => {
+    const p = makePlayers()
+    const r = p.upsert(snap('b', 1), 0)
+    expect(p.setOutfit('b', 5)).toBe(true)
+    expect(r.outfit).toBe(5)
+    expect(outfitOf(r.avatar)).toBe(5)
+    expect(p.setOutfit('b', 5)).toBe(false)
+    expect(p.setOutfit(null, 2)).toBe(true)
+    expect(outfitOf(p.local.avatar)).toBe(2)
+    expect(p.setOutfit('zzz', 1)).toBe(false)
+    expect(p.setOutfit(null, 7)).toBe(true) // 無效值當成預設
+    expect(p.local.outfit).toBe(0)
+  })
+
+  it('既有玩家的快照帶新衣裝時更新，沒帶時保留', () => {
+    const p = makePlayers()
+    const r = p.upsert({ ...snap('b', 1), outfit: 2 }, 0)
+    p.upsert(snap('b', 1), 10)
+    expect(r.outfit).toBe(2)
+    p.upsert({ ...snap('b', 1), outfit: 1 }, 20)
+    expect(outfitOf(r.avatar)).toBe(1)
+  })
+
+  it('setRemoteOutfit 只動遠端玩家：自己的（較舊）回音與未知 id 不會改掉本機外觀', () => {
+    const p = makePlayers()
+    const r = p.upsert({ ...snap('b', 1), outfit: 1 }, 0)
+    p.setOutfit(null, 4) // 本機連點：先 3 再 4，之後 3 的回音（id 為自己）才到
+    expect(p.setRemoteOutfit('me', 3)).toBe(false) // 自己不在 remotes
+    expect(p.local.outfit).toBe(4)
+    expect(outfitOf(p.local.avatar)).toBe(4)
+    expect(p.setRemoteOutfit('zzz', 2)).toBe(false)
+    expect(p.setRemoteOutfit('b', 5)).toBe(true)
+    expect(outfitOf(r.avatar)).toBe(5)
+  })
+
+  it('welcome 流程：遠端取快照衣裝，本機以本機設定為準（自己的快照不經 upsert）', () => {
+    const anim = { apply() {}, isActive: () => false }
+    const p = new Players({ add() {} } as never, anim as never, 50, 2)
+    const players = [
+      { ...snap('me', 0), outfit: 5 }, // 伺服器記錄的自己（可能較舊）
+      { ...snap('b', 1), outfit: 3 },
+    ]
+    for (const s of players) if (s.id !== 'me') p.upsert(s, 0) // GameCore welcome 對自己不呼叫 upsert
+    expect(p.local.outfit).toBe(2)
+    expect(p.remotes.get('b')?.outfit).toBe(3)
   })
 })

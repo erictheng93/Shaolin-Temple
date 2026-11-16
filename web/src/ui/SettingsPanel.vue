@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { assetPresetFor, needsReload, saveSettings, type QualityLevel, type QualityPreset, type Settings } from '../game/core/settings'
+import OutfitPicker from './OutfitPicker.vue'
 
 // settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。
 const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedPreset: QualityPreset }>()
@@ -60,6 +61,11 @@ function reloadNow() {
         <h2 id="settings-title">設定</h2>
         <button class="icon-btn" type="button" aria-label="關閉設定" @click="emit('close')">✕</button>
       </header>
+
+      <fieldset>
+        <legend>衣裝</legend>
+        <OutfitPicker v-model="s.outfit" />
+      </fieldset>
 
       <fieldset>
         <legend>畫質</legend>

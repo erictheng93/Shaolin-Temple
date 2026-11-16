@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import OutfitPicker from './OutfitPicker.vue'
 
-const props = defineProps<{ initialName: string; busy: boolean; ready: boolean }>()
-const emit = defineEmits<{ enter: [name: string] }>()
+const props = defineProps<{ initialName: string; busy: boolean; ready: boolean; outfit: number }>()
+const emit = defineEmits<{ enter: [name: string]; outfit: [outfit: number] }>()
 
 const name = ref(props.initialName)
 
@@ -23,6 +24,11 @@ function submit() {
         <span>你的名字（選填）</span>
         <input v-model="name" maxlength="16" autocomplete="nickname" placeholder="訪客" enterkeyhint="go" />
       </label>
+
+      <div class="field">
+        <span>衣裝</span>
+        <OutfitPicker :model-value="outfit" @update:model-value="(o) => emit('outfit', o)" />
+      </div>
 
       <button class="enter" type="submit" :disabled="busy || !ready">
         {{ busy ? '進入中…' : ready ? '入寺' : '準備場景…' }}
@@ -86,6 +92,10 @@ h1 {
   text-align: left;
   font-size: 0.85rem;
   color: var(--ink-soft);
+}
+
+.field + .field {
+  margin-top: 14px;
 }
 
 .field input {

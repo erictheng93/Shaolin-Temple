@@ -28,6 +28,7 @@ fn full_room_welcome_fits_message_limit() {
             id: longest(&world::ACTIONS),
             started_at: n,
         }),
+        outfit: crate::protocol::OUTFIT_COUNT - 1,
     };
     let welcome = ServerMessage::Welcome {
         self_id: player.id.clone(),
@@ -58,6 +59,7 @@ struct Client {
     n: u8,
     token: String,
     zone: String,
+    outfit: u8,
     x: f64,
     z: f64,
 }
@@ -75,6 +77,7 @@ impl Client {
         Self {
             room: room.clone(),
             n: me.n,
+            outfit: me.outfit,
             x: me.x,
             z: me.z,
             zone: me.zone.clone().unwrap(),
@@ -126,6 +129,13 @@ impl Client {
         };
         self.room.send(command).await.unwrap();
     }
+    async fn outfit(&self, outfit: u8) {
+        let command = RoomCommand::Outfit {
+            who: self.who.clone(),
+            outfit,
+        };
+        self.room.send(command).await.unwrap();
+    }
     async fn zone(&self, zone: &str) {
         let command = RoomCommand::Zone {
             who: self.who.clone(),
@@ -155,6 +165,18 @@ impl Client {
         self.drain();
     }
 }
+/// 以預設衣裝（0）加入。
+async fn join(room: &RoomTx, name: &str, out: mpsc::Sender<ServerMessage>) -> Option<Who> {
+    join_with(room, name, 0, out).await
+}
+async fn join_with(
+    room: &RoomTx,
+    name: &str,
+    outfit: u8,
+    out: mpsc::Sender<ServerMessage>,
+) -> Option<Who> {
+    super::join(room, name, outfit, out).await
+}
 async fn connect_with(room: &RoomTx, capacity: usize) -> Client {
     let (out, rx) = mpsc::channel(capacity);
     let who = join(room, "測試", out).await.unwrap();
@@ -164,10 +186,14 @@ async fn connect(room: &RoomTx) -> Client {
     connect_with(room, 64).await
 }
 async fn resume(room: &RoomTx, token: &str) -> Option<Client> {
+    resume_with(room, token, None).await
+}
+async fn resume_with(room: &RoomTx, token: &str, outfit: Option<u8>) -> Option<Client> {
     let (outbound, rx) = mpsc::channel(64);
     let (reply, received) = oneshot::channel();
     room.send(RoomCommand::Resume {
         token: token.into(),
+        outfit,
         outbound,
         reply,
     })
@@ -191,6 +217,7 @@ fn kind(m: &ServerMessage) -> &'static str {
         ServerMessage::Pong { .. } => "pong",
         ServerMessage::Error { .. } => "error",
         ServerMessage::Chat { .. } => "chat",
+        ServerMessage::Outfit { .. } => "outfit",
     }
 }
 fn kinds(messages: &[ServerMessage]) -> Vec<&'static str> {
@@ -832,6 +859,88 @@ async fn dropped_moves_are_replaced_by_one_sync_when_the_queue_has_room() {
     mover.position(last.0 + 0.05, last.1, 0.0, true).await;
     sleep(TICK * 2).await;
     assert_eq!(kinds(&slow.drain()), ["moves"]);
+}
+
+// ---- 衣裝 ----
+
+fn outfit_of(messages: &[ServerMessage]) -> Vec<(String, u8)> {
+    messages
+        .iter()
+        .filter_map(|m| match m {
+            ServerMessage::Outfit { id, outfit } => Some((id.clone(), *outfit)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn outfit_change_is_stored_and_broadcast_to_everyone_across_zones() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    b.enter_hall().await;
+    sleep(TICK).await;
+    a.drain();
+    a.outfit(3).await;
+    sleep(TICK).await;
+    let want = vec![(a.who.id.clone(), 3)];
+    assert_eq!(outfit_of(&a.drain()), want, "the sender gets the echo");
+    assert_eq!(outfit_of(&b.drain()), want, "other zones too");
+    // 與目前相同：不廣播
+    a.outfit(3).await;
+    sleep(TICK).await;
+    assert!(outfit_of(&a.drain()).is_empty());
+    assert!(outfit_of(&b.drain()).is_empty());
+    // 之後加入的人在 welcome 與 join 都看得到
+    let (out, mut rx) = mpsc::channel(64);
+    let who = join_with(&room, "新", 5, out).await.unwrap();
+    let first = rx.try_recv().unwrap();
+    let ServerMessage::Welcome { players, .. } = &first else {
+        panic!("welcome first")
+    };
+    assert_eq!(players.iter().find(|p| p.id == a.who.id).unwrap().outfit, 3);
+    assert_eq!(players.iter().find(|p| p.id == who.id).unwrap().outfit, 5);
+    sleep(TICK).await;
+    let joins: Vec<_> = a
+        .drain()
+        .into_iter()
+        .filter_map(|m| match m {
+            ServerMessage::Join { player } => Some((player.id, player.outfit)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(joins, vec![(who.id, 5)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn resume_keeps_the_outfit_and_a_different_hello_outfit_wins_and_is_announced() {
+    let room = spawn_room(RoomConfig::new(50));
+    let a = connect(&room).await;
+    let mut b = connect(&room).await;
+    a.outfit(4).await;
+    sleep(TICK).await;
+    b.drain();
+    a.disconnect().await;
+    sleep(Duration::from_secs(2)).await;
+    // 沒帶衣裝：保留 4，其他人不會收到任何衣裝訊息
+    let a2 = resume(&room, &a.token).await.unwrap();
+    assert_eq!(a2.outfit, 4);
+    sleep(TICK).await;
+    assert!(outfit_of(&b.drain()).is_empty());
+    // 帶相同衣裝：不廣播
+    a2.disconnect().await;
+    sleep(Duration::from_secs(1)).await;
+    let a3 = resume_with(&room, &a2.token, Some(4)).await.unwrap();
+    assert_eq!(a3.outfit, 4);
+    sleep(TICK).await;
+    assert!(outfit_of(&b.drain()).is_empty());
+    // 帶不同的有效衣裝：以 hello 為準，welcome 已含新值，其他人收到廣播
+    a3.disconnect().await;
+    sleep(Duration::from_secs(1)).await;
+    let a4 = resume_with(&room, &a3.token, Some(1)).await.unwrap();
+    assert_eq!(a4.outfit, 1);
+    sleep(TICK).await;
+    assert_eq!(outfit_of(&b.drain()), vec![(a.who.id.clone(), 1)]);
 }
 
 // ---- T6：斷線恢復 ----

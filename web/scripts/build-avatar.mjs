@@ -1,5 +1,5 @@
 // 產生 Q 版小沙彌公仔模型：全部由光滑的基本形狀組成（橢球、旋轉體），沒有稜角。
-// 輸出兩個節點：body（袍、袖子、鞋，帶頂點色）與 skin（頭、耳朵、合十的手）。
+// 輸出兩個節點：body（袍、袖子、鞋、念珠，帶頂點色與衣裝屬性 _OUTFIT）與 skin（頭、耳朵、合十的手）。
 // 用法：node scripts/build-avatar.mjs [輸出.glb] [細緻度：1 完整模型、0 遠處用的低面數模型]
 // 之後若改用 Blender 流程（展 UV、烘焙法線），輸出同樣的 body／skin 兩個節點即可直接取代。
 // 臉不在模型上，由 AvatarFactory 的臉圖集貼在頭的正面（+z）。單位公尺，腳底在 y=0。
@@ -35,7 +35,27 @@ const ROBE_PROFILE = [
 /** 袍的前後厚度相對左右寬度的比例。 */
 const ROBE_DEPTH = 0.9
 
-const mesh = () => ({ p: [], n: [], col: [], indices: [] })
+/**
+ * 衣裝屬性 _OUTFIT（VEC2，只在 body）：AvatarFactory 依衣裝編號在著色器裡上色。
+ * x：到袈裟披帶中線的有號距離（公尺）。披帶中線是一個含 z 軸的平面，從左肩（角色自身的左，+x）斜到右腰（-x），
+ *    所以前後都是左肩高、右腰低，右肩不在帶上（偏袒右肩）。距離在平面上是線性的，三角形內插後完全準確，
+ *    片段著色器以 smoothstep 做門檻，低面數的遠處模型邊緣一樣俐落。鞋子與念珠填 NO_SASH，永遠不在帶上。
+ * y：念珠為 1、其餘 0；不戴念珠的衣裝在頂點著色器把念珠縮到一點。
+ */
+const SASH_FROM = [0.13, 0.66]
+const SASH_TO = [-0.19, 0.3]
+const SASH_N = (() => {
+  const [dx, dy] = [SASH_TO[0] - SASH_FROM[0], SASH_TO[1] - SASH_FROM[1]]
+  const l = Math.hypot(dx, dy)
+  return [-dy / l, dx / l]
+})()
+const sashDistance = (x, y) => SASH_N[0] * (x - SASH_FROM[0]) + SASH_N[1] * (y - SASH_FROM[1])
+const NO_SASH = 9
+/** 正在建構的部分屬於哪一類（'robe' 依位置算披帶距離、'shoe' 不在帶上、'bead' 念珠）。 */
+let part = 'robe'
+const outfitOf = (x, y) => (part === 'bead' ? [NO_SASH, 1] : part === 'shoe' ? [NO_SASH, 0] : [sashDistance(x, y), 0])
+
+const mesh = () => ({ p: [], n: [], col: [], out: [], indices: [] })
 const norm = (v) => {
   const l = Math.hypot(...v) || 1
   return [v[0] / l, v[1] / l, v[2] / l]
@@ -67,6 +87,7 @@ function ellipsoid(m, c, r, color, segs, axis = [0, 1, 0], ringCount = Math.max(
       const d = [Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta)]
       const at = world([d[0] * r[0], d[1] * r[1], d[2] * r[2]])
       m.p.push(c[0] + at[0], c[1] + at[1], c[2] + at[2])
+      m.out.push(...outfitOf(c[0] + at[0], c[1] + at[1]))
       // 橢球的法線：方向除以半徑後正規化
       m.n.push(...norm(world([d[0] / r[0], d[1] / r[1], d[2] / r[2]])))
       m.col.push(...color)
@@ -100,6 +121,7 @@ function lathe(m, profile, color, segs, depth) {
       const theta = (s / segs) * Math.PI * 2
       const [sx, sz] = [Math.sin(theta), Math.cos(theta)]
       m.p.push(sx * r, y, sz * r * depth)
+      m.out.push(...outfitOf(sx * r, y))
       m.n.push(...norm([sx * nr, ny, (sz * nr) / depth]))
       m.col.push(...color)
     }
@@ -115,7 +137,26 @@ for (const side of [-1, 1]) {
   // 袖口
   ellipsoid(body, [side * 0.04, 0.505, 0.158], [0.05, 0.022, 0.052], TRIM, seg(12, 8), [-side * 0.11, -0.1, 0.17], rg(6))
   // 鞋：從下襬前緣露出鞋尖
+  part = 'shoe'
   ellipsoid(body, [side * 0.075, 0.036, 0.135], [0.058, 0.036, 0.09], SHOE, seg(12, 8), undefined, rg(6))
+  part = 'robe'
+}
+
+// 念珠（只在完整模型；遠處看不出來，省下面數）：一圈斜掛在肩上的珠子，前低後高，從下巴下方露出、落在合十的手後面。
+// 後半圈被頭擋住的珠子不產生。頂點色為 1，顏色完全由衣裝決定。
+if (FINE) {
+  part = 'bead'
+  const BEADS = 24
+  const inHead = ([x, y, z]) => (x / HEAD.r[0]) ** 2 + ((y - HEAD.c[1]) / HEAD.r[1]) ** 2 + ((z - HEAD.c[2]) / HEAD.r[2]) ** 2 < 0.92
+  for (let i = 0; i < BEADS; i++) {
+    const t = (i / BEADS) * Math.PI * 2
+    const c = [0.137 * Math.sin(t), 0.635 - 0.045 * Math.cos(t), 0.012 + 0.125 * Math.cos(t)]
+    if (inHead(c)) continue
+    ellipsoid(body, c, [0.017, 0.017, 0.017], ROBE, 6, undefined, 4)
+  }
+  // 前方垂下的母珠，較大一顆
+  ellipsoid(body, [0, 0.567, 0.142], [0.022, 0.022, 0.022], ROBE, 8, undefined, 5)
+  part = 'robe'
 }
 
 const skin = mesh()
@@ -136,7 +177,7 @@ const accessor = (array, type, target, withBounds) => {
   gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: bytes.length, target })
   chunks.push(padded)
   offset += padded.length
-  const width = type === 'SCALAR' ? 1 : 3
+  const width = { SCALAR: 1, VEC2: 2, VEC3: 3 }[type]
   const acc = { bufferView: gltf.bufferViews.length - 1, componentType: array instanceof Uint16Array ? 5123 : 5126, count: array.length / width, type }
   if (withBounds) {
     acc.min = [0, 1, 2].map((k) => Math.min(...array.filter((_, i) => i % 3 === k)))
@@ -149,7 +190,11 @@ const report = []
 for (const [name, m] of [['body', body], ['skin', skin]]) {
   if (m.p.length / 3 > 65535) throw new Error(`${name} 頂點數超過 16 位元索引上限`)
   const attributes = { POSITION: accessor(new Float32Array(m.p), 'VEC3', 34962, true), NORMAL: accessor(new Float32Array(m.n), 'VEC3', 34962) }
-  if (name === 'body') attributes.COLOR_0 = accessor(new Float32Array(m.col), 'VEC3', 34962)
+  if (name === 'body') {
+    attributes.COLOR_0 = accessor(new Float32Array(m.col), 'VEC3', 34962)
+    // 自訂屬性依 glTF 規定以底線開頭；three 的 GLTFLoader 載入後名稱轉小寫（_outfit）
+    attributes._OUTFIT = accessor(new Float32Array(m.out), 'VEC2', 34962)
+  }
   gltf.meshes.push({ name, primitives: [{ attributes, indices: accessor(new Uint16Array(m.indices), 'SCALAR', 34963) }] })
   gltf.nodes.push({ name, mesh: gltf.meshes.length - 1 })
   report.push(`${name} ${m.indices.length / 3} 面／${m.p.length / 3} 頂點`)

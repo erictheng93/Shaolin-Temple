@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { MALLET_HEAD_Z, WOODFISH_FORWARD, WOODFISH_STRIKE_Y, createChantPropsGeometry, patchChantPropsMaterial } from './chantProps'
 import { createIncenseStickGeometry } from './IncenseSystem'
 import { ResourceTracker } from './ResourceTracker'
+import { OUTFITS, normalizeOutfit } from '../world/outfits'
 
 /** 角色節點結構，動畫片段只操作這些節點。節點本身不含網格，只提供變換。 */
 export interface AvatarRig {
@@ -52,6 +53,8 @@ export interface Avatar extends AvatarRig {
   say(text: string, until: number): void
   /** 過期則收掉泡泡並釋放貼圖；回傳泡泡是否仍顯示（給渲染排程判斷是否需要重繪）。 */
   tickBubble(now: number): boolean
+  /** 更換衣裝（衣裝編號，見 world/outfits.ts；無效值當成預設）。下一次 sync() 生效。 */
+  setOutfit(outfit: number): void
   /** 釋放此角色獨有的資源（名牌貼圖）並移出批次繪製。 */
   dispose(): void
 }
@@ -59,7 +62,8 @@ export interface Avatar extends AvatarRig {
 interface AvatarRecord {
   rig: AvatarRig
   shadow: THREE.Object3D
-  color: THREE.Color
+  /** 衣裝編號（OUTFITS 的索引），外觀完全由它決定。 */
+  outfit: number
 }
 
 /** 臉圖集的格數（橫向排列）。 */
@@ -165,8 +169,86 @@ function makeFaceGeometry(skin: THREE.BufferGeometry): THREE.BufferGeometry {
   return geo
 }
 
-const ROBE_COLORS = ['#a35d3a', '#6b7a8f', '#8a7a5a', '#5d6e5a', '#7a5a6e', '#b08a4a', '#4f5d6e', '#9a6a5a']
-const LOCAL_ROBE = '#c9853a'
+/** 袈裟披帶的半寬（公尺），以模型屬性 _OUTFIT.x（到披帶中線的有號距離）做門檻。 */
+const SASH_HALF_WIDTH = 0.058
+/** 披帶兩側略深的細邊寬度（公尺）。 */
+const SASH_HEM = 0.012
+/** 不戴念珠時，念珠的頂點縮到這一點（藏在袍裡），三角形退化成不繪製。 */
+const BEAD_HIDE_POINT = '0.0, 0.5, 0.0'
+/** 替代用圓柱的 robeField.x：遠離披帶中線，不畫披帶。 */
+const NO_SASH = 9
+
+/**
+ * 修補身體（袍、鞋、念珠）的 MeshStandardMaterial：依實例的衣裝編號（outfitId）查 uniform 色表上色。
+ * - 袍色乘在頂點色上（袖口略深、鞋近黑）。
+ * - 袈裟：robeField.x 是到披帶中線的有號距離，片段著色器以 smoothstep（寬度取 fwidth）做門檻，低面數模型邊緣一樣俐落。
+ * - 念珠：robeField.y = 1 的頂點；不戴念珠的衣裝在頂點著色器把它縮到一點。念珠的影子不另外處理（深度材質沒有修補）。
+ * 近、遠兩個 tier 共用這個材質，程式只有一份。
+ */
+function patchOutfitMaterial(mat: THREE.MeshStandardMaterial): void {
+  const n = OUTFITS.length
+  const rgba = (hex: string, on: boolean) => {
+    const c = new THREE.Color(hex) // 轉成線性色彩空間
+    return new THREE.Vector4(c.r, c.g, c.b, on ? 1 : 0)
+  }
+  const uniforms = {
+    outfitRobe: { value: OUTFITS.map((o) => new THREE.Color(o.robe)) },
+    outfitSash: { value: OUTFITS.map((o) => rgba(o.sash ?? o.robe, !!o.sash)) },
+    outfitBeads: { value: OUTFITS.map((o) => rgba(o.beads ?? o.robe, !!o.beads)) },
+  }
+  const varyings = 'varying vec3 vOutfitRobe;\nvarying vec4 vOutfitSash;\nvarying vec3 vOutfitBeads;\nvarying vec2 vRobeField;\n'
+  const edge = SASH_HALF_WIDTH.toFixed(4)
+  const hemEdge = (SASH_HALF_WIDTH - SASH_HEM).toFixed(4)
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms)
+    shader.vertexShader =
+      `attribute float outfitId;\nattribute vec2 robeField;\nuniform vec3 outfitRobe[${n}];\nuniform vec4 outfitSash[${n}];\nuniform vec4 outfitBeads[${n}];\n` +
+      varyings +
+      shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        int outfitK = int(outfitId + 0.5);
+        vOutfitRobe = outfitRobe[outfitK];
+        vOutfitSash = outfitSash[outfitK];
+        vOutfitBeads = outfitBeads[outfitK].rgb;
+        vRobeField = robeField;
+        if (robeField.y > 0.5 && outfitBeads[outfitK].a < 0.5) transformed = vec3(${BEAD_HIDE_POINT});`,
+      )
+    shader.fragmentShader =
+      varyings +
+      shader.fragmentShader
+        .replace(
+          '#include <color_fragment>',
+          `#include <color_fragment>
+          {
+            float sashD = abs(vRobeField.x);
+            float sashAa = max(fwidth(vRobeField.x), 1e-4);
+            float band = vOutfitSash.a * (1.0 - smoothstep(${edge} - sashAa, ${edge} + sashAa, sashD));
+            float hem = smoothstep(${hemEdge} - sashAa, ${hemEdge} + sashAa, sashD);
+            vec3 cloth = mix(vOutfitRobe, vOutfitSash.rgb * mix(1.0, 0.7, hem), band);
+            diffuseColor.rgb *= mix(cloth, vOutfitBeads, step(0.5, vRobeField.y));
+          }`,
+        )
+        .replace(
+          '#include <roughnessmap_fragment>',
+          '#include <roughnessmap_fragment>\n roughnessFactor = mix(roughnessFactor, 0.4, step(0.5, vRobeField.y));',
+        )
+  }
+  mat.customProgramCacheKey = () => 'avatar-outfit-v1'
+}
+
+/** 替代用的袍（圓柱）：補上與模型相同的頂點色（全白）與衣裝屬性（不在披帶上、不是念珠）。 */
+function makePlaceholderRobe(): THREE.BufferGeometry {
+  const geo = new THREE.CylinderGeometry(0.2, 0.36, 1.05, 8)
+  geo.translate(0, 0.525, 0)
+  const count = geo.getAttribute('position').count
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(count * 3).fill(1), 3))
+  const field = new Float32Array(count * 2)
+  for (let i = 0; i < count; i++) field[i * 2] = NO_SASH
+  geo.setAttribute('robeField', new THREE.Float32BufferAttribute(field, 2))
+  return geo
+}
+
 const ORIGIN = new THREE.Vector3()
 export const PIVOT_HEIGHT = 0.55
 /** 小沙彌模型的身高（公尺），與 scripts/build-avatar.mjs 的 HEIGHT 一致。 */
@@ -178,13 +260,6 @@ const FIGURE_HEIGHT = 1.15
 const SHOULDER_HEIGHT = 0.66
 /** 同時繪製的角色上限（含自己）。需大於最高畫質的可見人數。 */
 export const AVATAR_CAPACITY = 160
-
-/** 字串雜湊成顏色索引，同一玩家在所有客戶端顏色一致。 */
-export function colorIndexFor(id: string): number {
-  let h = 0
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
-  return Math.abs(h) % ROBE_COLORS.length
-}
 
 function makeLabelTexture(text: string): THREE.CanvasTexture {
   const c = document.createElement('canvas')
@@ -253,6 +328,8 @@ export class AvatarFactory {
    */
   private tiers: Array<{
     body: THREE.InstancedMesh
+    /** 每個實例的衣裝編號（身體的實例屬性 outfitId）。 */
+    outfit: THREE.InstancedBufferAttribute
     skin: THREE.InstancedMesh
     face: THREE.InstancedMesh
     faceIndex: THREE.InstancedBufferAttribute
@@ -270,8 +347,6 @@ export class AvatarFactory {
   private malletQuat = new THREE.Quaternion()
   private propPose = new THREE.Matrix4()
   private records = new Set<AvatarRecord>()
-  private robeColors = ROBE_COLORS.map((c) => new THREE.Color(c))
-  private localColor = new THREE.Color(LOCAL_ROBE)
   private pose = new THREE.Matrix4()
   private poseScale = new THREE.Vector3()
   /** 頭、手與臉的剛體姿勢（不縮放），與 shoulderOffset 都是重用的暫存物件。 */
@@ -281,15 +356,14 @@ export class AvatarFactory {
 
   constructor(parent: THREE.Object3D) {
     const t = this.tracker
-    const robeGeo = t.track(new THREE.CylinderGeometry(0.2, 0.36, 1.05, 8))
-    robeGeo.translate(0, 0.525, 0)
     const headGeo = t.track(new THREE.IcosahedronGeometry(0.17, 1))
     headGeo.translate(0, 1.2, 0)
     const shadowGeo = t.track(new THREE.CircleGeometry(0.45, 16))
     shadowGeo.rotateX(-Math.PI / 2)
 
-    // 袍色由 instanceColor 決定，材質本身用白色；模型的頂點色把鞋子壓暗。
+    // 袍色與配件由實例的衣裝編號決定（patchOutfitMaterial），材質本身用白色；模型的頂點色把袖口與鞋子壓暗。
     const robeMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.85 }))
+    patchOutfitMaterial(robeMat)
     const skinMat = t.trackMaterial(new THREE.MeshStandardMaterial({ color: '#d2a07c', roughness: 0.7 }))
 
     const c = document.createElement('canvas')
@@ -334,8 +408,12 @@ export class AvatarFactory {
         )
     }
     this.tiers = [true, false].map((near) => {
+      // 衣裝編號是實例屬性，掛在各 tier 自己的幾何上，所以替代用的圓柱每個 tier 各一份
+      const outfit = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY), 1)
+      outfit.setUsage(THREE.DynamicDrawUsage)
+      const robeGeo = t.track(makePlaceholderRobe())
+      robeGeo.setAttribute('outfitId', outfit)
       const body = make(robeGeo, robeMat)
-      body.setColorAt(0, this.localColor) // 建立 instanceColor 緩衝區
       const skin = make(headGeo, skinMat)
       body.castShadow = skin.castShadow = near
       // 臉不投影（兩個 tier 都一樣）；幾何在模型載入後才有
@@ -343,7 +421,7 @@ export class AvatarFactory {
       face.castShadow = false
       const faceIndex = new THREE.InstancedBufferAttribute(new Float32Array(AVATAR_CAPACITY), 1)
       faceIndex.setUsage(THREE.DynamicDrawUsage)
-      return { body, skin, face, faceIndex, count: 0 }
+      return { body, outfit, skin, face, faceIndex, count: 0 }
     })
     this.shadows = make(shadowGeo, shadowMat)
     this.shadows.renderOrder = -1
@@ -373,7 +451,16 @@ export class AvatarFactory {
           const body = geometryOf('body')
           const skin = geometryOf('skin')
           if (!body || !skin) return
+          // build-avatar.mjs 的自訂屬性 _OUTFIT（GLTFLoader 轉成小寫 _outfit）改名為著色器用的 robeField
+          const field = body.getAttribute('_outfit')
+          if (!field) {
+            console.warn(`${file} 缺少 _OUTFIT 屬性，請重新執行 npm run build:avatar`)
+            return
+          }
+          body.setAttribute('robeField', field)
+          body.deleteAttribute('_outfit')
           const tier = this.tiers[i]!
+          body.setAttribute('outfitId', tier.outfit)
           tier.body.geometry = t.track(body)
           tier.skin.geometry = t.track(skin)
           // 臉取自該 tier 自己的膚色幾何，才會貼合各自的頭部曲面
@@ -385,7 +472,7 @@ export class AvatarFactory {
     })
   }
 
-  create(opts: { name: string; colorIndex: number; local: boolean }): Avatar {
+  create(opts: { name: string; outfit: number; local: boolean }): Avatar {
     const root = new THREE.Group()
     const pivot = new THREE.Group()
     pivot.position.y = PIVOT_HEIGHT
@@ -423,11 +510,7 @@ export class AvatarFactory {
     }
 
     const rig: AvatarRig = { root, pivot, head, face: FACE_CALM, prop: PROP_NONE, propAngle: 0 }
-    const record: AvatarRecord = {
-      rig,
-      shadow,
-      color: opts.local ? this.localColor : this.robeColors[opts.colorIndex % this.robeColors.length]!,
-    }
+    const record: AvatarRecord = { rig, shadow, outfit: normalizeOutfit(opts.outfit) }
     this.records.add(record)
 
     return Object.assign(rig, {
@@ -452,6 +535,9 @@ export class AvatarFactory {
       tickBubble: (now: number) => {
         if (bubble && now >= bubbleUntil) clearBubble()
         return bubble !== null
+      },
+      setOutfit: (outfit: number) => {
+        record.outfit = normalizeOutfit(outfit)
       },
       dispose: () => {
         this.records.delete(record)
@@ -482,7 +568,7 @@ export class AvatarFactory {
       this.pose.compose(ORIGIN, pivot.quaternion, this.poseScale.set(side, stretch, side)).premultiply(root.matrixWorld)
       const tier = this.tiers[(root.position.x - x) ** 2 + (root.position.z - z) ** 2 <= nearRadius * nearRadius ? 0 : 1]!
       tier.body.setMatrixAt(tier.count, this.pose)
-      tier.body.setColorAt(tier.count, r.color)
+      tier.outfit.setX(tier.count, r.outfit)
       // 頭、耳朵、手與臉：同樣的傾斜，但不縮放，只跟著肩膀的高度升降（手比袖口多降約 3 公分，可接受）。
       this.rigidPose
         .compose(this.shoulderOffset.set(0, SHOULDER_HEIGHT * (stretch - 1), 0).applyQuaternion(pivot.quaternion), pivot.quaternion, AvatarFactory.UNIT_SCALE)
@@ -501,7 +587,7 @@ export class AvatarFactory {
         m.count = tier.count
         m.instanceMatrix.needsUpdate = true
       }
-      tier.body.instanceColor!.needsUpdate = true
+      tier.outfit.needsUpdate = true
       // 模型還沒載入時沒有臉的幾何（替代用的圓柱與球不畫臉）
       tier.face.count = tier.face.geometry.getAttribute('position') ? tier.count : 0
       tier.face.instanceMatrix.needsUpdate = true

@@ -23,7 +23,9 @@ use std::{
     time::{Duration, Instant},
 };
 use temple_server::{
-    protocol::{BatchKind, FRAME_ACTION, PROTOCOL_VERSION, decode_action, decode_batch},
+    protocol::{
+        BatchKind, FRAME_ACTION, OUTFIT_COUNT, PROTOCOL_VERSION, decode_action, decode_batch,
+    },
     world::ACTIONS,
 };
 use tokio::{
@@ -228,7 +230,7 @@ async fn player(
         Err(_) => return Joined::Failed("connect: timeout".into()),
     };
     let hello =
-        json!({"t": "hello", "v": PROTOCOL_VERSION, "name": format!("bot{index}")}).to_string();
+        json!({"t": "hello", "v": PROTOCOL_VERSION, "name": format!("bot{index}"), "outfit": rand::random_range(0..OUTFIT_COUNT)}).to_string();
     if ws.send(Message::Text(hello.into())).await.is_err() {
         return Joined::Failed("hello: send".into());
     }
