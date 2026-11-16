@@ -131,6 +131,18 @@ describe('誦經：多人時的聲音（共同節拍格，每拍只發一聲）'
     expect(twin).toHaveLength(2)
   })
 
+  it('幾乎同時的引磬在分段排程（每 100 ms 一段）時也只留一聲', () => {
+    for (const second of [
+      { startS: 200, local: false, distance: 2 },
+      { startS: 200, local: false, distance: 0 }, // 與第一人同音量
+    ]) {
+      const list = [{ startS: 0, local: second.distance === 0 ? false : true, distance: 0 }, second]
+      const pieces = []
+      for (let t = 0; t < 30_000; t += 100) pieces.push(...planChantSounds(list, t, t + 100))
+      expect(pieces.filter((s) => s.sound === 'qing').map((s) => s.atS)).toEqual([QING_START_MS, QING_END_MS])
+    }
+  })
+
   it('分段排程不漏拍也不重複（每段是 (from, to]）', () => {
     const whole = planChantSounds(crowd, 0, 60_000)
     const pieces = []
