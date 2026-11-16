@@ -1,0 +1,18 @@
+# Cloudflare Pages 的快取標頭，規則與 web/deploy/nginx.conf 相同（見 docs/DEPLOY.md）。
+# 沒列到的路徑（index.html 等）用 Pages 的預設：max-age=0, must-revalidate。
+# 不寫 /* 的規則：同一個標頭被兩條規則命中時 Pages 會把值以逗號串接。
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+/lightmaps/*
+  Cache-Control: public, max-age=31536000, immutable
+/statues/*
+  Cache-Control: public, max-age=31536000, immutable
+/textures/*
+  Cache-Control: public, max-age=86400
+/models/*
+  Cache-Control: public, max-age=86400
+/basis/*
+  Cache-Control: public, max-age=86400
+/draco/*
+  Cache-Control: public, max-age=86400
