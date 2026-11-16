@@ -3,7 +3,7 @@ import { AnimationSystem } from './anim/AnimationSystem'
 import { AudioManager } from './audio/AudioManager'
 import { Emitter } from './core/Emitter'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
-import { QUALITY_PRESETS, readDeviceInfo, resolveQuality, type QualityLevel, type Settings } from './core/settings'
+import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
 import type { GameEvents, GameplayApi } from './gameplay/types'
@@ -114,6 +114,8 @@ export class GameCore {
 
   private settings: Settings
   private quality: QualityLevel
+  /** 目前畫質對應的預設（自動畫質在慢速網路或資料節省時，貼圖與神像已降級）。 */
+  private preset: QualityPreset
   private raf = 0
   private lastTime = 0
   private lastRender = 0
@@ -147,7 +149,8 @@ export class GameCore {
     this.quality = resolveQuality(opts.settings.quality)
     // 自動畫質且為觸控裝置：從等級 1 起步，開頭幾秒不致超出預算（順暢後會自動升回）。
     this.adaptive = new AdaptiveQuality(opts.settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0)
-    const preset = QUALITY_PRESETS[this.quality]
+    const preset = this.assetPreset()
+    this.preset = preset
 
     this.renderer = new SceneRenderer(opts.canvas, preset, {
       onContextLost: () => {
@@ -351,12 +354,18 @@ export class GameCore {
     return { zone: this.zone, x: local.x, z: local.z, selfId: this.selfId ?? 'local', others }
   }
 
+  /** 載入資產用的預設：只有自動畫質才依網路狀況降級，使用者明確選的畫質照選擇。 */
+  private assetPreset(): QualityPreset {
+    return effectivePreset(this.quality, this.settings.quality === 'auto' ? readNetworkInfo() : undefined)
+  }
+
   applySettings(settings: Settings): void {
     this.settings = settings
     const q = resolveQuality(settings.quality)
     if (q !== this.quality) {
       this.quality = q
-      this.renderer.setQuality(QUALITY_PRESETS[q])
+      this.preset = this.assetPreset()
+      this.renderer.setQuality(this.preset)
       this.players.maxVisible = this.maxVisibleFor(q)
     }
     this.audio.setVolumes(this.volumes())
@@ -401,7 +410,7 @@ export class GameCore {
   private frame = (time: number): void => {
     this.raf = 0
     if (this.paused || this.contextLost) return
-    const preset = QUALITY_PRESETS[this.quality]
+    const preset = this.preset
 
     // 依目標幀率略過多餘的 rAF（高更新率螢幕上限制在 30/60 FPS）。
     const fps = time - this.lastInputAt > IDLE_AFTER_MS ? Math.min(IDLE_FPS, preset.activeFps) : preset.activeFps
@@ -594,7 +603,7 @@ export class GameCore {
   /** 立即切換到指定場景與位置（無過場）。 */
   private applyZone(zone: ZoneId, pose: Pose): void {
     if (zone === 'hall' && !this.hall) {
-      this.hall = buildHallScene(this.renderer.renderer, this.tracker, QUALITY_PRESETS[this.quality], () => this.wake())
+      this.hall = buildHallScene(this.renderer.renderer, this.tracker, this.assetPreset(), () => this.wake())
       this.renderer.scene.add(this.hall.root)
     }
     if (zone !== this.zone) {
