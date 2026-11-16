@@ -2,7 +2,10 @@ import * as THREE from 'three'
 import { CUSHION_RADIUS, HALL_AISLE_HALF_WIDTH, HALL_ALTAR, HALL_CENSERS, HALL_CUSHIONS, HALL_PILLARS, HALL_ROOM, HALL_STATUES, HALL_TABLE } from '../world/zones'
 import type { QualityPreset } from '../core/settings'
 import type { ResourceTracker } from './ResourceTracker'
+import { DOORWAY_VIEW_VERSION } from './doorwayView'
+import { HALL_DOOR, HALL_DOOR_TOP, buildHallDoorway } from './hallDoorway'
 import { mergeStatic } from './mergeStatic'
+import { HALL_ENV } from './SceneRenderer'
 import { buildStatue, createStatueKit, createStatueLoaders, loadStatueModel, type StatueId } from './statues'
 
 /**
@@ -17,7 +20,7 @@ export interface HallScene {
   walkSurface: THREE.Object3D
   /** 三尊神像的插槽：先放程序化造型，寫實模型下載完成後替換。 */
   statueSlots: Record<StatueId, THREE.Group>
-  /** 寫實模型全部載入（或失敗）後 resolve；失敗的那尊維持程序化造型。 */
+  /** 寫實模型與門外景貼圖全部載入（或失敗）後 resolve；失敗的那尊維持程序化造型。 */
   statuesReady: Promise<void>
   update(t: number, dt: number): void
   /** 停止尚未完成的下載（之後到的模型不再加入場景）。資源仍由 tracker 釋放。 */
@@ -114,7 +117,6 @@ export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceT
     lantern: lambert(PALETTE.lantern, { emissive: '#ff5a2a', emissiveIntensity: 0.55 }),
     lampCell: lambert('#fff1cf', { emissive: PALETTE.lampCell, emissiveIntensity: 0.8 }),
     lampFrame: lambert('#3d1610'),
-    doorLight: tracker.trackMaterial(new THREE.MeshBasicMaterial({ color: '#f3ead2' })),
     fruit: lambert('#e08a2a'),
     flower: lambert('#e7c13d'),
     leaf: lambert('#4f7a43'),
@@ -186,17 +188,13 @@ export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceT
   wall(0, R.minZ, W, 0.3) // 後牆
   wall(R.minX, 0, 0.3, D) // 左牆
   wall(R.maxX, 0, 0.3, D) // 右牆
-  const doorW = 3
+  const doorW = HALL_DOOR.halfWidth * 2
   const sideW = (W - doorW) / 2
   wall(R.minX + sideW / 2, R.maxZ, sideW, 0.3)
   wall(R.maxX - sideW / 2, R.maxZ, sideW, 0.3)
-  add(box, m.wallHigh, [0, (H + 3.6) / 2, R.maxZ], [doorW, H - 3.6, 0.3])
-  // 門外的天光
-  add(geo(new THREE.PlaneGeometry(doorW, 3.6)), m.doorLight, [0, 1.8, R.maxZ + 0.2], [1, 1, 1], Math.PI)
-  // 門框
-  add(box, m.pillar, [-doorW / 2 - 0.12, 1.8, R.maxZ - 0.1], [0.24, 3.6, 0.4])
-  add(box, m.pillar, [doorW / 2 + 0.12, 1.8, R.maxZ - 0.1], [0.24, 3.6, 0.4])
-  add(box, m.gold, [0, 3.66, R.maxZ - 0.12], [doorW + 0.5, 0.14, 0.42])
+  add(box, m.wallHigh, [0, (H + HALL_DOOR_TOP) / 2, R.maxZ], [doorW, H - HALL_DOOR_TOP, 0.3])
+  // 殿門：門框、橫披窗、推開的格扇門、門外的庭院景色與地上的日光（hallDoorway.ts）
+  const doorway = buildHallDoorway(root, tracker, { lacquer: m.pillar, lacquerDark: m.altar, gold: m.gold }, box, new THREE.Vector3(...HALL_ENV.sun.position).normalize())
 
   // ---------- 天花、彩繪樑、藻井 ----------
   add(box, m.ceiling, [0, H + 0.1, 0], [W, 0.2, D])
@@ -341,12 +339,27 @@ export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceT
   // 靜態物件依材質合併以減少 draw call。神像各自合併、不跨插槽，才能單獨換成寫實模型；
   // 地板（點擊射線目標）不合併。
   for (const slot of Object.values(statueSlots)) for (const statue of slot.children) mergeStatic(statue, tracker)
-  mergeStatic(root, tracker, (o) => o === floor || o.name.startsWith('slot:'))
+  mergeStatic(root, tracker, (o) => o === floor || o.name.startsWith('slot:') || o.name.startsWith('doorway-'))
 
   // 寫實神像：三尊同時下載，各自到齊就替換；失敗的維持程序化造型（媽祖是紅布覆蓋的佔位）。
   let disposed = false
   const statuesReady = createStatueLoaders(renderer).then(async (loaders) => {
-    await Promise.all(
+    // 門外景貼圖與神像共用 loader（同一組 Basis 轉碼 worker）；到之前門洞是亮色
+    const backdropReady = loaders.ktx2.loadAsync(`${import.meta.env.BASE_URL}backdrops/hall_doorway.ktx2?v=${DOORWAY_VIEW_VERSION}`).then(
+      (tex) => {
+        tracker.track(tex)
+        if (disposed) return
+        tex.anisotropy = preset.statueTier === 'hi' ? 4 : 1
+        doorway.backdrop.map = tex
+        doorway.backdrop.color.set('#ffffff')
+        doorway.backdrop.needsUpdate = true
+        onChange()
+      },
+      (err) => console.warn('門外景貼圖載入失敗，維持亮色', err),
+    )
+    await Promise.all([
+      backdropReady,
+      ...
       (Object.keys(statueSlots) as StatueId[]).map(async (id) => {
         try {
           // 先載入到暫存的 Group，確認場景還在才換進插槽
@@ -361,7 +374,7 @@ export function buildHallScene(renderer: THREE.WebGLRenderer, tracker: ResourceT
           console.warn('神像模型載入失敗，維持替代造型', id, err)
         }
       }),
-    )
+    ])
     loaders.dispose()
   }).catch((err) => console.warn('神像 loader 建立失敗', err))
 

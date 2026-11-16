@@ -64,7 +64,8 @@ npm run build        # 型別檢查 + 正式建置到 web/dist
 其他指令：
 
 ```bash
-npm run build:textures    # assets/textures、assets/lightmaps 與 assets/statues 轉成 public 下的 KTX2（需要 ktx）
+npm run build:textures    # assets/textures、assets/lightmaps、assets/statues 與 assets/backdrops 轉成 public 下的 KTX2（需要 ktx）
+npm run capture:doorway   # 殿門外景：無頭 Chrome 從庭院場景擷取全景圖到 assets/backdrops/（需要 Chrome；之後跑 build:textures）
 npm run bake:lightmaps    # 重新烘焙庭院光照（需要 Blender 與 ktx）
 npm run build:avatar      # 以程式產生 public/models/monk.glb 與 monk-lod.glb
 npm run build:statues     # 殿內神像：原檔放在 web/.statues-src/<buddha|guanyin|mazu>/（不進 git，見 docs/ASSETS.md），Blender 減面與烘焙後輸出到 public/statues/（需要 Blender 與 ktx）
