@@ -95,6 +95,14 @@ const ja: Record<MessageKey, string> = {
   'credits.thanks': '謝辞：釈迦牟尼仏像は{buddha}（CC0）、シーンのテクスチャは{polyhaven}（CC0）によるものです。',
   'credits.buddhaTitle': 'Cleveland Museum of Art「1973.85 Seated Buddha」',
 
+  'outfit.label': '衣',
+  'outfit.orange': '橙色の僧衣',
+  'outfit.grey': '灰色の作務衣',
+  'outfit.brown': '茶色の法衣',
+  'outfit.black': '黒の法衣',
+  'outfit.kasaya': '黄衣に袈裟',
+  'outfit.beads': '青灰の衣に数珠',
+
   'perf.label': 'パフォーマンス情報',
   'perf.quality': '画質 {quality} · 省電力 {level}/{max}',
 }

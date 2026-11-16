@@ -59,6 +59,14 @@ onBeforeUnmount(() => {
   core = null
 })
 
+// 衣裝以 GameCore 為準（也可能從主控台或之後的網路校正改變），同步回設定以便儲存與面板顯示。
+watch(
+  () => ui.value?.outfit,
+  (o) => {
+    if (o !== undefined && o !== settings.outfit) settings.outfit = o
+  },
+)
+
 watch(
   settings,
   (s) => {
@@ -113,9 +121,11 @@ function toggleMute() {
         v-if="!entered && !fatal"
         v-model:locale="settings.locale"
         :initial-name="settings.playerName"
+        :outfit="settings.outfit"
         :busy="entering"
         :ready="!!ui"
         @enter="enter"
+        @outfit="(o) => (settings.outfit = o)"
       />
     </Transition>
 

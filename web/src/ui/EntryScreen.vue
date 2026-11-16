@@ -2,9 +2,10 @@
 import { ref } from 'vue'
 import { t, type Locale } from '../i18n'
 import LocaleSelect from './LocaleSelect.vue'
+import OutfitPicker from './OutfitPicker.vue'
 
-const props = defineProps<{ initialName: string; busy: boolean; ready: boolean }>()
-const emit = defineEmits<{ enter: [name: string] }>()
+const props = defineProps<{ initialName: string; busy: boolean; ready: boolean; outfit: number }>()
+const emit = defineEmits<{ enter: [name: string]; outfit: [outfit: number] }>()
 
 const name = ref(props.initialName)
 /** 進寺前就能換語言；與設定面板是同一個設定欄位。 */
@@ -27,6 +28,11 @@ function submit() {
         <span>{{ t('entry.nameLabel') }}</span>
         <input v-model="name" maxlength="16" autocomplete="nickname" :placeholder="t('player.visitor')" enterkeyhint="go" />
       </label>
+
+      <div class="field">
+        <span>{{ t('outfit.label') }}</span>
+        <OutfitPicker :model-value="outfit" @update:model-value="(o) => emit('outfit', o)" />
+      </div>
 
       <button class="enter" type="submit" :disabled="busy || !ready">
         {{ busy ? t('entry.entering') : ready ? t('entry.enter') : t('entry.preparing') }}
@@ -106,6 +112,10 @@ h1:is(:lang(en), :lang(vi)) {
   text-align: left;
   font-size: 0.85rem;
   color: var(--ink-soft);
+}
+
+.field + .field {
+  margin-top: 14px;
 }
 
 .field input {

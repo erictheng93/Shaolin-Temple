@@ -1,6 +1,7 @@
 // 開發用 mock 遊戲伺服器：實作 src/game/net/protocol.ts 的協定草案，供 Rust 後端完成前測試前端。
 // 不是正式伺服器，不做權限、持久化或容量設計。
 // 與正式伺服器相同的行為：房內短編號 n、moves／sync／action 只送同場景、zone／join／leave 送全房、
+// 衣裝 outfit（hello 可帶、執行中以 outfit 訊息更換、斷線保留期內以 resumeToken 恢復並保留）、
 // 切換場景後先廣播 zone 再對切換者送 sync、移動中超過 1 秒沒有位置就視為停止、
 // 協定版本 3：moves／sync／action 以二進位幀送出（與前端共用 src/game/net/binaryFrame.ts 的編碼器），hello.v 不符時回 unsupported_version。
 //
@@ -43,14 +44,23 @@ const sanitizeChat = (text) =>
     .slice(0, CHAT_MAX_CHARS)
     .join('')
     .trim()
-const takeChatToken = (p) => {
+// 限速的 token bucket（突發 3 則、每 2 秒補 1 則）；聊天與更換衣裝各自獨立計數。
+const takeToken = (p, key) => {
   const t = now()
-  p.chatTokens = Math.min(3, (p.chatTokens ?? 3) + (t - (p.chatAt ?? t)) / 2000)
-  p.chatAt = t
-  if (p.chatTokens < 1) return false
-  p.chatTokens -= 1
+  const buckets = (p.buckets ??= {})
+  const b = (buckets[key] ??= { tokens: 3, at: t })
+  b.tokens = Math.min(3, b.tokens + (t - b.at) / 2000)
+  b.at = t
+  if (b.tokens < 1) return false
+  b.tokens -= 1
   return true
 }
+const takeChatToken = (p) => takeToken(p, 'chat')
+// 衣裝：編號 0..OUTFIT_COUNT-1（與 src/game/net/protocol.ts 的 OUTFIT_COUNT 相同；這裡不能 import protocol.ts，見上）。
+// 缺少或無效一律當作 0（hello），或丟棄（outfit 訊息）；與目前相同不廣播。
+const OUTFIT_COUNT = 6
+const validOutfit = (v) => Number.isInteger(v) && v >= 0 && v < OUTFIT_COUNT
+const RESUME_GRACE_MS = 30_000
 const broadcastChat = (from, raw) => {
   const text = sanitizeChat(raw)
   if (text) broadcast({ t: 'chat', id: from.id, text, at: now() })
@@ -97,7 +107,7 @@ const sendTuples = (ws, t, list) => {
     if (frame && ws.readyState === 1) ws.send(frame)
   }
 }
-const snapshot = (p) => ({ id: p.id, n: p.n, name: p.name, x: p.x, z: p.z, heading: p.heading, zone: p.zone })
+const snapshot = (p) => ({ id: p.id, n: p.n, name: p.name, x: p.x, z: p.z, heading: p.heading, zone: p.zone, outfit: p.outfit })
 
 // 機器人：在廣場上隨機走動，偶爾做動作。
 for (let i = 0; i < BOTS; i++) {
@@ -113,6 +123,7 @@ for (let i = 0; i < BOTS; i++) {
     z: pick(ROAM[zone].z),
     heading: 0,
     zone,
+    outfit: Math.floor(Math.random() * OUTFIT_COUNT),
     bot: { tx: 0, tz: 0, wait: Math.random() * 3, chatIn: 5 + Math.random() * 40 },
   })
 }
@@ -187,10 +198,28 @@ wss.on('connection', (ws) => {
         ws.close(1008, 'unsupported version')
         return
       }
+      const wanted = validOutfit(m.outfit) ? m.outfit : undefined
+      // 恢復連線：保留期內以 resumeToken 找回原玩家；hello 帶了有效且不同的衣裝以它為準，並通知其他人。
+      const old = typeof m.resumeToken === 'string' && [...players.values()].find((p) => p.token === m.resumeToken && !p.ws)
+      if (old) {
+        clearTimeout(old.graceTimer)
+        old.graceTimer = null
+        old.ws = ws
+        old.token = `t-${nextId++}`
+        old.lastPosAt = now()
+        me = old
+        const changed = wanted !== undefined && wanted !== old.outfit
+        if (changed) old.outfit = wanted
+        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot) })
+        if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
+        return
+      }
       const n = allocN()
       if (n === null) return ws.close(1013, 'server busy')
       const id = `p-${nextId++}`
       me = {
+        token: `t-${nextId++}`,
+        outfit: wanted ?? 0,
         id,
         n,
         name: String(m.name || '訪客').slice(0, 16),
@@ -207,7 +236,7 @@ wss.on('connection', (ws) => {
         t: 'welcome',
         selfId: id,
         room: 'mock-1',
-        resumeToken: id,
+        resumeToken: me.token,
         serverTime: now(),
         players: [...players.values()].map(snapshot),
       })
@@ -244,6 +273,11 @@ wss.on('connection', (ws) => {
       case 'chat':
         if (typeof m.text === 'string' && m.text.length <= 512 && takeChatToken(me)) broadcastChat(me, m.text)
         break
+      case 'outfit':
+        if (!takeToken(me, 'outfit') || !validOutfit(m.outfit) || m.outfit === me.outfit) break
+        me.outfit = m.outfit
+        broadcast({ t: 'outfit', id: me.id, outfit: me.outfit })
+        break
       case 'ping':
         send(ws, { t: 'pong', ts: m.ts, serverTime: now() })
         break
@@ -251,10 +285,16 @@ wss.on('connection', (ws) => {
   })
 
   ws.on('close', () => {
-    if (!me) return
-    players.delete(me.id)
-    dirty.delete(me)
-    broadcast({ t: 'leave', id: me.id })
+    if (!me || me.ws !== ws) return // 已被新連線取代
+    const p = me
+    // 斷線保留：保留期內可用 resumeToken 恢復，期滿才廣播 leave。
+    p.ws = null
+    if (p.moving) queueMove(p, false)
+    p.graceTimer = setTimeout(() => {
+      players.delete(p.id)
+      dirty.delete(p)
+      broadcast({ t: 'leave', id: p.id })
+    }, RESUME_GRACE_MS)
   })
 })
 

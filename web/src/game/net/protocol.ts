@@ -57,10 +57,20 @@ export interface PlayerSnapshot {
   action?: { id: string; startedAt: number }
   /** 所在場景（'courtyard'、'hall'…）；省略時視為 'courtyard'。 */
   zone?: string
+  /** 衣裝編號（0..OUTFIT_COUNT-1）。伺服器一律送出；省略（舊伺服器）時視為 0。 */
+  outfit?: number
 }
 
+/** 衣裝數量：編號 0..OUTFIT_COUNT-1。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送；與 Rust 的 OUTFIT_COUNT 由固定資料鎖住。 */
+export const OUTFIT_COUNT = 6
+
+/** 是不是合法的衣裝編號（範圍內的整數）。 */
+export const isOutfit = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < OUTFIT_COUNT
+
 export type ClientMessage =
-  | { t: 'hello'; v: number; name: string; resumeToken?: string }
+  /** outfit：目前衣裝；缺少或無效時伺服器當作 0（恢復連線時缺少則沿用保存的衣裝）。 */
+  | { t: 'hello'; v: number; name: string; resumeToken?: string; outfit?: number }
   | { t: 'move'; x: number; z: number; heading: number; seq: number }
   | { t: 'stop'; x: number; z: number; heading: number; seq: number }
   | { t: 'action'; reqId: string; id: string; data?: Record<string, unknown> }
@@ -69,6 +79,8 @@ export type ClientMessage =
   | { t: 'ping'; ts: number }
   /** 文字聊天：伺服器清理後廣播給同房所有玩家（含發話者，發話者以回音為準）。 */
   | { t: 'chat'; text: string }
+  /** 更換衣裝（不需 reqId／ack）：伺服器驗證、限速（同聊天）、與目前相同不廣播，否則廣播 outfit 給同房所有人（含本人）。 */
+  | { t: 'outfit'; outfit: number }
 
 export type ServerMessage =
   | {
@@ -100,6 +112,8 @@ export type ServerMessage =
   | { t: 'pong'; ts: number; serverTime: number }
   /** 聊天廣播（同房、不分場景、含發話者）。at 是伺服器 Unix 毫秒。 */
   | { t: 'chat'; id: string; text: string; at: number }
+  /** 某玩家更換衣裝（同房、不分場景、含本人）。 */
+  | { t: 'outfit'; id: string; outfit: number }
   | { t: 'error'; code: string; message: string }
 
 /** 聊天訊息的字元上限（Unicode 字元），與伺服器一致。 */
@@ -160,6 +174,7 @@ function isPlayer(v: unknown): v is PlayerSnapshot {
   if (!isObj(v)) return false
   if (!isStr(v.id) || !isShortId(v.n) || !isStr(v.name) || !isNum(v.x) || !isNum(v.z) || !isNum(v.heading)) return false
   if (v.zone !== undefined && !isStr(v.zone)) return false
+  if (v.outfit !== undefined && !isOutfit(v.outfit)) return false
   if (v.action === undefined) return true
   return isObj(v.action) && isStr(v.action.id) && isNum(v.action.startedAt)
 }
@@ -266,6 +281,8 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
       return isNum(m.ts) && isNum(m.serverTime) ? (m as ServerMessage) : null
     case 'chat':
       return isStr(m.id) && isStr(m.text) && isNum(m.at) ? (m as ServerMessage) : null
+    case 'outfit':
+      return isStr(m.id) && isOutfit(m.outfit) ? (m as ServerMessage) : null
     case 'error':
       return isStr(m.code) && isStr(m.message) ? (m as ServerMessage) : null
     default:

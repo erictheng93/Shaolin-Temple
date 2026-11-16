@@ -1,4 +1,5 @@
 import { detectLocale, isLocale, type Locale } from '../../i18n'
+import { DEFAULT_OUTFIT, normalizeOutfit, randomOutfit } from '../world/outfits'
 
 export type QualityLevel = 'low' | 'medium' | 'high'
 export type QualitySetting = 'auto' | QualityLevel
@@ -51,6 +52,8 @@ export interface Settings {
   showStats: boolean
   /** 介面語言。舊存檔沒有這欄時依瀏覽器語言推測（detectLocale）。 */
   locale: Locale
+  /** 衣裝編號（world/outfits.ts 的 OUTFITS 索引）。 */
+  outfit: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -62,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   playerName: '',
   showStats: false,
   locale: 'zh-Hant',
+  outfit: DEFAULT_OUTFIT,
 }
 
 const KEY = 'shaolin-temple:settings:v1'
@@ -71,18 +75,21 @@ const LEGACY_KEY = 'online-temple:settings:v1'
 const clamp01 = (v: unknown, fallback: number): number =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : fallback
 
-/** 讀取設定。私密瀏覽或儲存被封鎖時回傳預設值。 */
-export function loadSettings(): Settings {
+/**
+ * 讀取設定。私密瀏覽或儲存被封鎖時回傳預設值。
+ * 衣裝：存過但無效時回預設；從沒存過（第一次造訪，或舊版設定沒有這個欄位）時隨機挑一套並立即存起來，
+ * 讓場上自然有多樣性，之後每次載入都是同一套。
+ */
+export function loadSettings(random: () => number = Math.random): Settings {
   let raw: unknown
   try {
     raw = JSON.parse(localStorage.getItem(KEY) ?? localStorage.getItem(LEGACY_KEY) ?? 'null')
   } catch {
     raw = null
   }
-  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SETTINGS, locale: detectLocale() }
-  const r = raw as Partial<Record<keyof Settings, unknown>>
+  const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Partial<Record<keyof Settings, unknown>>
   const d = DEFAULT_SETTINGS
-  return {
+  const s: Settings = {
     quality: (['auto', 'low', 'medium', 'high'] as const).includes(r.quality as QualitySetting)
       ? (r.quality as QualitySetting)
       : d.quality,
@@ -93,7 +100,10 @@ export function loadSettings(): Settings {
     playerName: typeof r.playerName === 'string' ? r.playerName.slice(0, 16) : d.playerName,
     showStats: typeof r.showStats === 'boolean' ? r.showStats : d.showStats,
     locale: isLocale(r.locale) ? r.locale : detectLocale(),
+    outfit: r.outfit === undefined ? randomOutfit(random) : normalizeOutfit(r.outfit),
   }
+  if (r.outfit === undefined) saveSettings(s)
+  return s
 }
 
 export function saveSettings(s: Settings): void {
