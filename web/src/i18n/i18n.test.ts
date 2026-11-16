@@ -61,9 +61,9 @@ describe('t()', () => {
   it('代換 {name} 佔位符；沒給的佔位符原樣保留', () => {
     expect(t('top.inTemple', { count: 3 })).toBe('3 人在寺中')
     setLocale('en')
-    expect(t('top.inTemple', { count: 3 })).toBe('In the temple: 3')
+    expect(t('top.inTemple', { count: 3 })).toBe('3 here')
     expect(t('credits.author', { author: 'efyilin' })).toBe('by efyilin')
-    expect(t('top.inTemple')).toBe('In the temple: {count}')
+    expect(t('top.inTemple')).toBe('{count} here')
   })
 
   it('setLocale 立即改變之後 t() 的結果', () => {

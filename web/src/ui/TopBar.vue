@@ -6,6 +6,8 @@ import { t } from '../i18n'
 const props = defineProps<{ ui: UiState; muted: boolean }>()
 defineEmits<{ toggleMute: []; openSettings: [] }>()
 
+const online = computed(() => props.ui.networkEnabled && props.ui.status === 'online')
+
 const status = computed(() => {
   if (!props.ui.networkEnabled) return { text: t('top.solo'), tone: 'idle' }
   switch (props.ui.status) {
@@ -23,17 +25,20 @@ const status = computed(() => {
 
 <template>
   <header class="top">
+    <!--
+      連線中時只顯示綠點與人數，「已連線」字樣改為只給螢幕閱讀器（人數只在連線時出現，本身就表示已連線），
+      360px 寬的手機上連同一項統計也排得成一行。其他狀態（單人、連線中、未連線）照常顯示文字。
+    -->
     <div class="info panel" role="status" aria-live="polite">
       <span class="dot" :data-tone="status.tone" aria-hidden="true" />
-      <span>{{ status.text }}</span>
-      <template v-if="ui.networkEnabled && ui.status === 'online'">
-        <span class="sep" aria-hidden="true">·</span>
-        <span>{{ t('top.inTemple', { count: ui.online }) }}</span>
-      </template>
-      <template v-for="s in ui.stats" :key="s.key">
-        <span class="sep" aria-hidden="true">·</span>
-        <span>{{ s.label }} {{ s.value }}</span>
-      </template>
+      <span v-if="online" class="sr-only">{{ status.text }}</span>
+      <span class="items">
+        <span class="row">
+          <span v-if="!online" class="item">{{ status.text }}</span>
+          <span v-else class="item">{{ t('top.inTemple', { count: ui.online }) }}</span>
+          <span v-for="s in ui.stats" :key="s.key" class="item">{{ s.label }} {{ s.value }}</span>
+        </span>
+      </span>
     </div>
 
     <div class="tools">
@@ -67,7 +72,7 @@ const status = computed(() => {
 
 .info {
   display: flex;
-  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   min-height: 44px;
@@ -77,11 +82,35 @@ const status = computed(() => {
   color: var(--ink-soft);
 }
 
-.sep {
+/*
+ * 分隔點畫在每一項的前面（::before），列的左緣往左拉一個分隔點的寬度並由外層裁掉：
+ * 每一行開頭那一項的分隔點都在裁切範圍外，真的放不下而換行時，不會在行尾或行首留下懸空的點。
+ */
+.items {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  margin-left: -0.9em;
+}
+
+.item {
+  white-space: nowrap;
+}
+
+.item::before {
+  content: '·';
+  display: inline-block;
+  width: 0.9em;
+  text-align: center;
   color: var(--ink-faint);
 }
 
 .dot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;

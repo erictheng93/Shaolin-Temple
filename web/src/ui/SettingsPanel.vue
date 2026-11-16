@@ -306,6 +306,11 @@ legend:is(:lang(en), :lang(vi)) {
   font-size: 0.9rem;
 }
 
+/* 越南文的「Âm lượng chung」較長，標籤欄放寬（360px 寬的手機上滑桿仍有約 90px） */
+.slider:lang(vi) {
+  grid-template-columns: 8.5em 1fr 2.5em;
+}
+
 .slider input {
   width: 100%;
   accent-color: var(--accent);
