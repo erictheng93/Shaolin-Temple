@@ -17,9 +17,9 @@ use std::{
 };
 
 /// 伺服器訊息種類，順序對應 `kind_index`。
-const KINDS: [&str; 13] = [
+const KINDS: [&str; 14] = [
     "welcome", "join", "leave", "move", "moves", "sync", "action", "ack", "zone", "pong", "error",
-    "chat", "outfit",
+    "chat", "outfit", "name",
 ];
 fn kind_index(message: &ServerMessage) -> usize {
     match message {
@@ -36,6 +36,7 @@ fn kind_index(message: &ServerMessage) -> usize {
         ServerMessage::Error { .. } => 10,
         ServerMessage::Chat { .. } => 11,
         ServerMessage::Outfit { .. } => 12,
+        ServerMessage::Name { .. } => 13,
     }
 }
 

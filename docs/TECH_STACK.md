@@ -389,6 +389,19 @@ T7（2026-11-12）以 Rust 後端量到 JSON 協定每連線 1.5 KB/s（房內 1
 
 2026-11-16 協定版本 3 把下行的 `action` 也改為 7 bytes 的二進位幀（原本約 104 bytes）：10% 情境降為約 303 bytes/s，**酬載進入預算**；50% 情境約 1,385 bytes/s，仍超出上限 3.0 倍（幾乎全是 `moves`）。每秒訊息數沒有變，上述線路固定成本仍在。詳見 [LOAD_TEST_2026-11-16_ACTION.md](LOAD_TEST_2026-11-16_ACTION.md)。
 
+### 登入（協定版本 4，2026-11-16）
+
+Google／LINE 的 OpenID Connect 授權碼流程（PKCE S256、state、nonce）與 HMAC 簽章的無狀態 session 權杖，不引入資料庫；設計與已知限制見 [BACKEND_TASKS.md](BACKEND_TASKS.md)「協定版本 4：登入與改名」。新增的後端依賴：
+
+| 依賴 | 版本 | 理由 |
+| --- | --- | --- |
+| `reqwest` | 0.13.5（`default-features = false`，`rustls`、`form`） | callback 要以授權碼向提供者的 token endpoint 換 ID token（HTTPS POST、逾時、不跟隨轉址、逐塊讀取以限制回應大小）。只開 rustls（加密實作為 aws-lc-rs，憑證由 `rustls-platform-verifier` 讀系統 CA；執行映像 `distroless/cc` 內含 CA 憑證）與表單編碼，不開 http2、json、cookies、系統 proxy 等其他功能。會多帶入 `tower-http 0.6`、`aws-lc-sys`（建置時編譯 C 程式碼，需要 C 編譯器；`rust:bookworm` 建置映像與 Windows MSVC 皆可）。 |
+| `hmac` | 0.12.1 | session 權杖、流程 cookie 與 state 的 HMAC-SHA256，`verify_slice` 常數時間比對。選 0.12 而非 0.13：與已在 `Cargo.lock` 的 `sha1 0.10`（tungstenite）共用 `digest 0.10`。 |
+| `sha2` | 0.10.9 | HMAC 的雜湊與 PKCE 的 S256；版本理由同上。 |
+| `base64` | 0.22.1 | url-safe base64（權杖、state、JWT payload）；已是 tungstenite 的間接依賴。 |
+
+沒有採用 OAuth／JWT 的現成 crate（如 `openidconnect`、`jsonwebtoken`）：流程只有兩個端點與四個欄位檢查，ID token 依 OIDC Core §3.1.3.7 以 TLS 直接從 token endpoint 取得、不需驗證簽章（理由見 BACKEND_TASKS.md），用不到 JWKS 與簽章演算法。
+
 ## 多人同步方向
 
 瀏覽器使用原生 WebSocket 封裝，渲染選型與連線協定保持獨立。Rust 伺服器確認座位、房間加入結果及操作合法性。

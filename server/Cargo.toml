@@ -18,6 +18,14 @@ tokio-tungstenite = "0.29"
 rand = "0.9"
 # 負載測試工具（src/bin/loadtest.rs）使用；已是 axum／tokio-tungstenite 的間接依賴。
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# 登入（src/auth.rs）：向 Google／LINE 的 token endpoint 換權杖（HTTPS，rustls；不需要 json／cookies 等功能）。
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "form"] }
+# session 權杖與登入流程 cookie 的 HMAC-SHA256 簽章，以及 PKCE 的 S256。
+# 選 hmac 0.12／sha2 0.10：與已在 Cargo.lock 的 sha1 0.10（tungstenite）共用 digest 0.10，不多一份。
+hmac = "0.12.1"
+sha2 = "0.10.9"
+# url-safe base64；0.22 已是 tungstenite 的間接依賴。
+base64 = "0.22.1"
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["test-util"] }

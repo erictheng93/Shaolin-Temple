@@ -5,20 +5,23 @@ use crate::world;
 
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 /// 協定版本。2（T8）：`moves`／`sync` 改為二進位幀（見 [`encode_batch`]）；
-/// 3：下行的 `action` 也改為二進位幀（見 [`encode_action`]）。其餘訊息與所有上行仍是 JSON。
+/// 3：下行的 `action` 也改為二進位幀（見 [`encode_action`]）；
+/// 4：登入與改名（`hello.session`、`welcome.auth`、上行 `rename`、下行 `name`）。其餘訊息與所有上行仍是 JSON。
 /// `hello.v` 不同時回 `unsupported_version` 並關閉，前端據此提示重新整理。
-pub const PROTOCOL_VERSION: f64 = 3.0;
+pub const PROTOCOL_VERSION: f64 = 4.0;
 /// 客戶端字串欄位上限（UTF-8 bytes）。超過時整則視為無效訊息。
 /// reqId 會被快取做去重（T4），沒有上限時每條連線最壞可佔約 1 MB。
 pub const MAX_REQ_ID_BYTES: usize = 128;
 pub const MAX_RESUME_TOKEN_BYTES: usize = 128;
 pub const MAX_ACTION_ID_BYTES: usize = 32;
 pub const MAX_ZONE_BYTES: usize = 32;
-/// 名稱原始字串上限；清理後仍只保留 16 個字元。
+/// 名稱原始字串上限（`hello.name` 與 `rename.name`）；清理後仍只保留 16 個字元。
 pub const MAX_RAW_NAME_BYTES: usize = 256;
 /// 聊天原始字串上限（UTF-8 bytes）；清理後最多 [`CHAT_MAX_CHARS`] 個字元。
 pub const MAX_CHAT_RAW_BYTES: usize = 512;
 pub const CHAT_MAX_CHARS: usize = 80;
+/// `hello.session`（登入權杖，[`crate::auth`]）上限。空字串不算無效訊息，只是驗證不過、當訪客。
+pub const MAX_SESSION_BYTES: usize = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -31,6 +34,13 @@ pub enum ClientMessage {
         /// 衣裝編號。缺少或無效（非整數、超出範圍）一律當作 0，見 [`parse_outfit`]。
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outfit: Option<Value>,
+        /// 登入後取得的 session 權杖；缺少或驗證不過都當訪客，不拒絕連線。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
+    },
+    /// 進場後改名（須在 `hello` 之後）。清理規則與 `hello.name` 相同（[`clean_name`]）。
+    Rename {
+        name: String,
     },
     Move {
         x: f64,
@@ -70,7 +80,7 @@ pub enum ClientMessage {
 
 /// 衣裝數量：編號 `0..OUTFIT_COUNT`，新增衣裝只能加在尾端。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
 /// 上行（`hello`、`outfit`）維持嚴格驗證；前端的下行驗證較寬鬆（0～255），舊分頁把不認得的編號顯示為預設衣裝。
-/// 與前端 `protocol.ts` 的 `OUTFIT_COUNT` 相同，由固定資料 `tests/protocol-v3.json` 的 `outfitCount` 鎖住。
+/// 與前端 `protocol.ts` 的 `OUTFIT_COUNT` 相同，由固定資料 `tests/protocol-v4.json` 的 `outfitCount` 鎖住。
 pub const OUTFIT_COUNT: u8 = 8;
 
 /// 衣裝編號驗證：必須是 `0..OUTFIT_COUNT` 內的整數（JSON 數字），否則回 `None`。
@@ -129,6 +139,15 @@ impl From<Moving> for u8 {
 }
 /// `[n, x, z, heading, moving]`，`n` 為房內短編號。
 pub type MoveTuple = (u8, f64, f64, f64, Moving);
+
+/// `welcome.auth`：這條連線的身分。`hello.session` 驗證通過時是提供者，否則是訪客。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthKind {
+    Guest,
+    Google,
+    Line,
+}
 /// 單則 `moves`／`sync` 最多筆數，與前端 `MAX_MOVES_PER_MESSAGE` 相同。
 pub const MAX_MOVES_PER_MESSAGE: usize = 200;
 
@@ -140,6 +159,7 @@ pub enum ServerMessage {
         room: String,
         resume_token: String,
         server_time: f64,
+        auth: AuthKind,
         players: Vec<PlayerSnapshot>,
     },
     Join {
@@ -205,6 +225,11 @@ pub enum ServerMessage {
         id: String,
         outfit: u8,
     },
+    /// 玩家改名（含斷線恢復時帶了新名字）：送給同房所有人（含本人、不分場景），`name` 是清理後的結果。
+    Name {
+        id: String,
+        name: String,
+    },
 }
 
 impl ClientMessage {
@@ -213,13 +238,20 @@ impl ClientMessage {
         let id = |v: &str, max: usize| !v.is_empty() && v.len() <= max;
         match self {
             Self::Hello {
-                name, resume_token, ..
+                name,
+                resume_token,
+                session,
+                ..
             } => {
                 name.len() <= MAX_RAW_NAME_BYTES
                     && resume_token
                         .as_deref()
                         .is_none_or(|t| id(t, MAX_RESUME_TOKEN_BYTES))
+                    && session
+                        .as_deref()
+                        .is_none_or(|s| s.len() <= MAX_SESSION_BYTES)
             }
+            Self::Rename { name } => name.len() <= MAX_RAW_NAME_BYTES,
             Self::Action {
                 req_id, id: action, ..
             } => id(req_id, MAX_REQ_ID_BYTES) && id(action, MAX_ACTION_ID_BYTES),
@@ -275,7 +307,7 @@ impl ServerMessage {
 // | 3 | i16 | z，公分，同上 |
 // | 5 | u8 | heading，q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128，範圍 (−π, π] |
 //
-// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v3.json 的 binary 測試向量驗證一致。
+// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v4.json 的 binary 測試向量驗證一致。
 
 /// 幀型：`moves`（增量）。
 pub const FRAME_MOVES: u8 = 0x01;
@@ -480,6 +512,7 @@ pub fn unwrap_started_at(low: u32, reference: f64) -> f64 {
     (reference + i64::from(delta)) as f64
 }
 
+/// 名稱清理（`hello` 與 `rename` 共用）：去控制字元、去前後空白、最多 16 個 Unicode 字元，空白時為「訪客」。
 pub fn clean_name(name: &str) -> String {
     let filtered: String = name.chars().filter(|c| !c.is_control()).collect();
     let name: String = filtered.trim().chars().take(16).collect();
@@ -562,13 +595,26 @@ mod tests {
                 .map(|n| format!(r#","resumeToken":"{}""#, "t".repeat(n)))
                 .unwrap_or_default();
             parse(format!(
-                r#"{{"t":"hello","v":3,"name":"{}"{token}}}"#,
+                r#"{{"t":"hello","v":4,"name":"{}"{token}}}"#,
                 "n".repeat(name)
             ))
         };
         assert!(hello(16, Some(MAX_RESUME_TOKEN_BYTES)).within_limits());
         assert!(!hello(16, Some(MAX_RESUME_TOKEN_BYTES + 1)).within_limits());
         assert!(!hello(MAX_RAW_NAME_BYTES + 1, None).within_limits());
+        let session = |n: usize| {
+            parse(format!(
+                r#"{{"t":"hello","v":4,"name":"a","session":"{}"}}"#,
+                "s".repeat(n)
+            ))
+        };
+        assert!(session(0).within_limits());
+        assert!(session(MAX_SESSION_BYTES).within_limits());
+        assert!(!session(MAX_SESSION_BYTES + 1).within_limits());
+        let rename = |n: usize| parse(format!(r#"{{"t":"rename","name":"{}"}}"#, "n".repeat(n)));
+        assert!(rename(MAX_RAW_NAME_BYTES).within_limits());
+        assert!(rename(0).within_limits());
+        assert!(!rename(MAX_RAW_NAME_BYTES + 1).within_limits());
     }
 
     #[test]

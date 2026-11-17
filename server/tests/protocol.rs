@@ -7,7 +7,7 @@ use temple_server::world;
 #[test]
 fn shared_frontend_fixtures_round_trip() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("protocol-v3.json")).unwrap();
+        serde_json::from_str(include_str!("protocol-v4.json")).unwrap();
     for value in fixtures["server"].as_array().unwrap() {
         let message: ServerMessage = serde_json::from_value(value.clone()).unwrap();
         let actual = serde_json::to_value(message).unwrap();
@@ -26,6 +26,58 @@ fn shared_frontend_fixtures_round_trip() {
             normalize(serde_json::to_value(message).unwrap()),
             normalize(value.clone())
         );
+    }
+}
+/// 固定資料的 invalid.client：伺服器必須視為無效訊息（無法解析，或字串超過上限）。
+/// invalid.server：伺服器自己不會產生這種訊息（無法反序列化成 `ServerMessage`）。
+#[test]
+fn shared_invalid_examples_are_rejected() {
+    let fixtures = fixtures();
+    let client = fixtures["invalid"]["client"].as_array().unwrap();
+    assert!(client.len() >= 5);
+    for case in client {
+        let parsed = serde_json::from_value::<ClientMessage>(case["message"].clone());
+        assert!(
+            parsed.is_err() || !parsed.unwrap().within_limits(),
+            "{}",
+            case["name"]
+        );
+    }
+    let server = fixtures["invalid"]["server"].as_array().unwrap();
+    assert!(server.len() >= 6);
+    for case in server {
+        assert!(
+            serde_json::from_value::<ServerMessage>(case["message"].clone()).is_err(),
+            "{}",
+            case["name"]
+        );
+    }
+    // 有效範例涵蓋 v4 新增的每種訊息與 auth 的三個值
+    let valid = |side: &str, t: &str| {
+        fixtures[side]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["t"] == t)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let auths: Vec<_> = valid("server", "welcome")
+        .iter()
+        .map(|w| w["auth"].clone())
+        .collect();
+    assert_eq!(auths, ["guest", "google", "line"]);
+    assert_eq!(valid("server", "name").len(), 1);
+    assert_eq!(valid("client", "rename").len(), 1);
+    let sessions = valid("client", "hello");
+    assert!(
+        sessions
+            .iter()
+            .any(|h| h["session"].as_str().is_some_and(|s| s.len() == 512))
+    );
+    for message in fixtures["client"].as_array().unwrap() {
+        let parsed: ClientMessage = serde_json::from_value(message.clone()).unwrap();
+        assert!(parsed.within_limits(), "{message}");
     }
 }
 fn normalize(value: serde_json::Value) -> serde_json::Value {
@@ -91,7 +143,7 @@ fn malformed_client_fields_rejected() {
 }
 
 fn fixtures() -> serde_json::Value {
-    serde_json::from_str(include_str!("protocol-v3.json")).unwrap()
+    serde_json::from_str(include_str!("protocol-v4.json")).unwrap()
 }
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())

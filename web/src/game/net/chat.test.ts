@@ -66,7 +66,7 @@ class FakeSocket {
   close() {}
 }
 
-const welcome = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [] }
+const welcome = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, auth: 'guest', players: [] }
 const sock = () => FakeSocket.instances[FakeSocket.instances.length - 1]!
 const chats = () => sock().sent.filter((m) => m.t === 'chat')
 let client: NetworkClient

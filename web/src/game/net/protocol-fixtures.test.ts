@@ -1,4 +1,4 @@
-import fixtures from '../../../../server/tests/protocol-v3.json'
+import fixtures from '../../../../server/tests/protocol-v4.json'
 import { describe, expect, it } from 'vitest'
 import { ACTION_CODES, decodeAction, encodeAction, encodeBatch, unwrapStartedAt, type BatchMessage } from './binaryFrame'
 import { FrameContext, PROTOCOL_VERSION, decode, encode, type ClientMessage, type DecodeContext } from './protocol'
@@ -10,10 +10,25 @@ const fromHex = (hex: string): ArrayBuffer => {
 }
 const toHex = (bytes: Uint8Array): string => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 
-it('Rust 共用 v3 固定資料可由前端收發', () => {
-  expect(fixtures.client.find((m) => m.t === 'hello')?.v).toBe(PROTOCOL_VERSION)
+it('Rust 共用 v4 固定資料可由前端收發', () => {
+  for (const m of fixtures.client) if (m.t === 'hello') expect(m.v).toBe(PROTOCOL_VERSION)
   for (const message of fixtures.server) expect(decode(JSON.stringify(message))).toEqual(message)
   for (const message of fixtures.client) expect(JSON.parse(encode(message as ClientMessage))).toEqual(message)
+})
+
+it('固定資料涵蓋 v4 新增的訊息：welcome.auth 三種身份、name、rename、帶／不帶 session 的 hello', () => {
+  const auths = fixtures.server.flatMap((m) => (m.t === 'welcome' && 'auth' in m ? [m.auth] : []))
+  expect(new Set(auths)).toEqual(new Set(['guest', 'google', 'line']))
+  expect(fixtures.server.some((m) => m.t === 'name')).toBe(true)
+  expect(fixtures.client.some((m) => m.t === 'rename')).toBe(true)
+  const hellos = fixtures.client.filter((m) => m.t === 'hello')
+  expect(hellos.some((m) => 'session' in m)).toBe(true)
+  expect(hellos.some((m) => !('session' in m))).toBe(true)
+})
+
+it('invalid.server：前端 decode() 全部拒絕', () => {
+  expect(fixtures.invalid.server.length).toBeGreaterThanOrEqual(8)
+  for (const v of fixtures.invalid.server) expect(decode(JSON.stringify(v.message)), v.name).toBeNull()
 })
 
 describe('moves／sync 二進位幀（與 Rust 共用的測試向量）', () => {
@@ -81,7 +96,7 @@ describe('action 二進位幀（與 Rust 共用的測試向量）', () => {
   it('FrameContext 以 welcome／pong 的 serverTime 校正時鐘', () => {
     let now = 1000
     const ctx = new FrameContext(() => now)
-    ctx.observe({ t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 5_000_000, players: [] })
+    ctx.observe({ t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 5_000_000, players: [], auth: 'guest' })
     now = 1500
     expect(ctx.serverNow()).toBe(5_000_500)
     ctx.observe({ t: 'pong', ts: 0, serverTime: 6_000_000 })

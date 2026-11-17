@@ -1,4 +1,4 @@
-import fixtures from '../../../../server/tests/protocol-v3.json'
+import fixtures from '../../../../server/tests/protocol-v4.json'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient } from './NetworkClient'
 import { DEFAULT_OUTFIT, normalizeOutfit } from '../world/outfits'
@@ -24,7 +24,7 @@ describe('衣裝協定', () => {
 
   it('上行 outfit 與帶衣裝的 hello 原樣編碼', () => {
     expect(JSON.parse(encode({ t: 'outfit', outfit: 3 }))).toEqual({ t: 'outfit', outfit: 3 })
-    const hello: ClientMessage = { t: 'hello', v: 3, name: 'n', outfit: 2 }
+    const hello: ClientMessage = { t: 'hello', v: 4, name: 'n', outfit: 2 }
     expect(JSON.parse(encode(hello))).toEqual(hello)
   })
 
@@ -39,7 +39,7 @@ describe('衣裝協定', () => {
 
   it('welcome／join 的玩家：outfit 缺少視為合法（舊伺服器），不是 0～255 的整數則整則忽略', () => {
     const welcome = (players: unknown[]) =>
-      decode(JSON.stringify({ t: 'welcome', selfId: 'p', room: 'r', resumeToken: 't', serverTime: 0, players }))
+      decode(JSON.stringify({ t: 'welcome', selfId: 'p', room: 'r', resumeToken: 't', serverTime: 0, auth: 'guest', players }))
     expect(welcome([player])?.t).toBe('welcome')
     expect(welcome([{ ...player, outfit: 5 }])?.t).toBe('welcome')
     for (const outfit of [256, -1, 0.5, '1', null]) {
@@ -52,7 +52,7 @@ describe('衣裝協定', () => {
   it('舊分頁收到新衣裝（outfit: 200）的快照：welcome 不丟、其他玩家照收，顯示為預設衣裝', () => {
     const other = { ...player, id: 'q', n: 2, outfit: 3 }
     const m = decode(
-      JSON.stringify({ t: 'welcome', selfId: 'p', room: 'r', resumeToken: 't', serverTime: 0, players: [{ ...player, outfit: 200 }, other] }),
+      JSON.stringify({ t: 'welcome', selfId: 'p', room: 'r', resumeToken: 't', serverTime: 0, auth: 'guest', players: [{ ...player, outfit: 200 }, other] }),
     ) as Extract<ServerMessage, { t: 'welcome' }> | null
     expect(m?.t).toBe('welcome')
     expect(m!.players.map((p) => p.outfit)).toEqual([200, 3])
@@ -92,7 +92,7 @@ class FakeSocket {
   }
 }
 
-const welcome = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [] }
+const welcome = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, auth: 'guest', players: [] }
 const last = () => FakeSocket.instances[FakeSocket.instances.length - 1]!
 const outfits = (s: FakeSocket) => s.sent.filter((m) => m.t === 'outfit').map((m) => m.outfit)
 const helloOf = (s: FakeSocket) => s.sent.find((m) => m.t === 'hello')!

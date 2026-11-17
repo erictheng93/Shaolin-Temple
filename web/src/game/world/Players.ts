@@ -97,7 +97,7 @@ export class Players {
         this.byN.set(p.n, existing)
       }
       existing.zone = p.zone ?? 'courtyard'
-      // 恢復連線時改了名字：伺服器對同一個 id 再送一次 join。
+      // 同一個 id 的快照帶了不同的名字：以快照為準（v4 的改名走 name 訊息，這裡只是保險）。
       if (p.name !== existing.name) {
         existing.name = p.name
         existing.avatar.setName(p.name)
@@ -107,6 +107,7 @@ export class Players {
         existing.outfit = outfit
         existing.avatar.setOutfit(outfit)
       }
+      this.rename(p.id, p.name)
       this.snapTo(existing, p.x, p.z, p.heading, now)
       return existing
     }
@@ -134,6 +135,15 @@ export class Players {
     this.byN.set(p.n, r)
     this.cullTimer = CULL_INTERVAL_S // 下一幀重新計算可見性
     return r
+  }
+
+  /** 遠端玩家改名：更新名字與名牌（舊名牌貼圖立即釋放）。不認得的 id 或名字沒變時回傳 false。 */
+  rename(id: string, name: string): boolean {
+    const r = this.remotes.get(id)
+    if (!r || r.name === name) return false
+    r.name = name
+    r.avatar.setName(name)
+    return true
   }
 
   remove(id: string): void {
