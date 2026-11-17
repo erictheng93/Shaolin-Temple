@@ -210,8 +210,13 @@ wss.on('connection', (ws) => {
         me = old
         const changed = wanted !== undefined && wanted !== old.outfit
         if (changed) old.outfit = wanted
+        // 重新整理後換了名字：對其他人重送同一個 id 的 join。
+        const name = String(m.name || '訪客').slice(0, 16)
+        const renamed = name !== old.name
+        old.name = name
         send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot) })
-        if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
+        if (renamed) broadcast({ t: 'join', player: snapshot(old) }, old.id)
+        else if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
         return
       }
       const n = allocN()

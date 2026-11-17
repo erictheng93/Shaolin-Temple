@@ -68,6 +68,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家。
 - 伺服器每個 tick 送批次位置 `moves`（解碼後為 `MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`；二進位每筆 6 bytes：座標量化到公分、heading 一格 2π/256）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`，0～127）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
 - 遠端玩家的移動（`world/interp.ts`、`Players`）：收到新位置時從目前顯示的位置等速走過去，花的時間等於位置更新的間隔；差距超過 5 公尺直接套用。移動中超過 1 秒沒有更新視為停止。
+- 重新整理也走斷線恢復：`resumeToken` 存在 `sessionStorage`（`temple.resumeToken`），新頁面的 `hello` 帶上它就接回原本的玩家（同 id、位置、場景），不會在保留期內留下分身。恢復時 `hello` 的名字與保存的不同就改名，伺服器對其他人重送同一個 id 的 `join`（沒有改名訊息；`Players.upsert()` 更新既有玩家的名牌）。
 - `NetworkClient` 負責重連（`backoff.ts`）、心跳、送出節流與 `resumeToken` 恢復，`binaryType` 設為 `arraybuffer`；渲染頻率與網路送出頻率各自獨立。上行座標取到 0.01；切到背景時若在移動會先補送 `stop`；退避計數在收到 `welcome` 才歸零；close code 1013／1008 至少等 5 秒再重連；`unsupported_version` 不再重連並提示重新整理。
 - 後端（`server/`）：每個房間一個 actor task 擁有狀態（`src/room.rs`），連線以 channel 溝通，房間只用 `try_send`。場景邊界與出入口常數在 `src/world.rs`，數值抄自前端的 `world/layout.ts`／`zones.ts`，改場地時兩邊要一起改。障礙物也抄了一份在 `src/world.rs`。
 - 位置由本機先走、伺服器驗證：伺服器以「移動額度」（防瞬移）與障礙物直線檢查（防穿牆）驗證，拒絕時送只含本人短編號的 `sync`，`GameCore.correctLocal()` 把自己拉回該位置。
