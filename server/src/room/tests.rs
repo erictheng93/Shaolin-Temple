@@ -189,10 +189,19 @@ async fn resume(room: &RoomTx, token: &str) -> Option<Client> {
     resume_with(room, token, None).await
 }
 async fn resume_with(room: &RoomTx, token: &str, outfit: Option<u8>) -> Option<Client> {
+    resume_as(room, token, None, outfit).await
+}
+async fn resume_as(
+    room: &RoomTx,
+    token: &str,
+    name: Option<&str>,
+    outfit: Option<u8>,
+) -> Option<Client> {
     let (outbound, rx) = mpsc::channel(64);
     let (reply, received) = oneshot::channel();
     room.send(RoomCommand::Resume {
         token: token.into(),
+        name: name.map(Into::into),
         outfit,
         outbound,
         reply,
@@ -941,6 +950,39 @@ async fn resume_keeps_the_outfit_and_a_different_hello_outfit_wins_and_is_announ
     assert_eq!(a4.outfit, 1);
     sleep(TICK).await;
     assert_eq!(outfit_of(&b.drain()), vec![(a.who.id.clone(), 1)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn resume_with_a_different_name_renames_and_rejoins_for_others() {
+    let room = spawn_room(RoomConfig::new(50));
+    let a = connect(&room).await;
+    let mut b = connect(&room).await;
+    sleep(TICK).await;
+    b.drain();
+    a.disconnect().await;
+    sleep(Duration::from_secs(1)).await;
+    let a2 = resume_as(&room, &a.token, Some("新名字"), Some(3))
+        .await
+        .unwrap();
+    sleep(TICK).await;
+    // join 的快照已含新名字與新衣裝，不另外送 outfit
+    let got: Vec<_> = b
+        .drain()
+        .into_iter()
+        .map(|m| match m {
+            ServerMessage::Join { player } => (player.id, player.name, player.outfit),
+            other => panic!("unexpected {}", kind(&other)),
+        })
+        .collect();
+    assert_eq!(got, vec![(a.who.id.clone(), "新名字".to_string(), 3)]);
+    // 名字相同：不重送
+    a2.disconnect().await;
+    sleep(Duration::from_secs(1)).await;
+    resume_as(&room, &a2.token, Some("新名字"), None)
+        .await
+        .unwrap();
+    sleep(TICK).await;
+    assert!(b.drain().is_empty());
 }
 
 // ---- T6：斷線恢復 ----
