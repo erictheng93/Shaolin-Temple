@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod connection;
 pub mod metrics;
@@ -20,6 +21,8 @@ pub struct AppState {
     pub metrics: std::sync::Arc<metrics::Metrics>,
     /// 設定時 `GET /metrics` 須帶 `Authorization: Bearer <token>`；`None` 為開放。
     pub metrics_token: Option<std::sync::Arc<str>>,
+    /// 登入（`SESSION_SECRET` 有設定時）；`None` 時 `/auth/*` 回 404、`/auth/providers` 回空清單、所有人都是訪客。
+    pub auth: Option<std::sync::Arc<auth::Auth>>,
 }
 
 /// 組裝伺服器所需的選項；測試可縮短各種時間長度。
@@ -31,6 +34,8 @@ pub struct ServerOptions {
     pub rate_close_after: std::time::Duration,
     /// `METRICS_TOKEN`；`None` 表示 `/metrics` 不需授權。
     pub metrics_token: Option<String>,
+    /// 登入元件；`None` 表示不支援登入（純訪客）。
+    pub auth: Option<std::sync::Arc<auth::Auth>>,
 }
 impl ServerOptions {
     pub fn new(allowed_origins: Vec<String>) -> Self {
@@ -40,6 +45,7 @@ impl ServerOptions {
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             rate_close_after: rate_limit::DEFAULT_CLOSE_AFTER,
             metrics_token: None,
+            auth: None,
         }
     }
 }
@@ -53,6 +59,12 @@ pub fn app_with_options(options: ServerOptions) -> axum::Router {
         .route("/healthz", axum::routing::get(|| async { "ok" }))
         .route("/metrics", axum::routing::get(metrics::handler))
         .route("/ws", axum::routing::get(connection::upgrade))
+        .route("/auth/providers", axum::routing::get(auth::providers))
+        .route("/auth/{provider}/start", axum::routing::get(auth::start))
+        .route(
+            "/auth/{provider}/callback",
+            axum::routing::get(auth::callback),
+        )
         .with_state(AppState {
             origins: std::sync::Arc::new(options.allowed_origins),
             lobby: room::Lobby::new(options.room, metrics.clone()),
@@ -60,6 +72,19 @@ pub fn app_with_options(options: ServerOptions) -> axum::Router {
             rate_close_after: options.rate_close_after,
             metrics,
             metrics_token: options.metrics_token.map(Into::into),
+            auth: options.auth,
         })
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        // span 只記 method 與 path：預設的 span 在 DEBUG 等級記完整 URI，會把
+        // `/auth/*/callback?code=…&state=…` 的授權碼與 state 寫進日誌。
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(
+                |request: &axum::http::Request<axum::body::Body>| {
+                    tracing::debug_span!(
+                        "request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                    )
+                },
+            ),
+        )
 }

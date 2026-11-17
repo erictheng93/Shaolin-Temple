@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import { FRAME_MOVES, FRAME_SYNC, MAX_COORD_CM, MOVE_ENTRY_BYTES, encodeBatch, quantizeCoord } from './binaryFrame'
-import { MAX_MESSAGE_BYTES, decode, type MoveTuple } from './protocol'
+import { MAX_MESSAGE_BYTES, decode, encode, type MoveTuple } from './protocol'
 
 describe('decode', () => {
   it('接受合法訊息', () => {
@@ -90,9 +90,39 @@ describe('decode', () => {
 
   it('welcome 內任一玩家不合法就整則拒絕', () => {
     const ok = { id: 'a', n: 0, name: 'n', x: 0, z: 0, heading: 0 }
-    const base = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0 }
+    const base = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, auth: 'guest' }
     expect(decode(JSON.stringify({ ...base, players: [ok] }))).not.toBeNull()
     expect(decode(JSON.stringify({ ...base, players: [ok, { ...ok, x: null }] }))).toBeNull()
+  })
+
+  it('welcome.auth 必填，只接受 guest／google／line', () => {
+    const base = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [] }
+    for (const auth of ['guest', 'google', 'line']) expect(decode(JSON.stringify({ ...base, auth }))).toEqual({ ...base, auth })
+    expect(decode(JSON.stringify(base))).toBeNull()
+    for (const auth of ['admin', 'Google', '', null, 1, ['guest']]) expect(decode(JSON.stringify({ ...base, auth })), String(auth)).toBeNull()
+  })
+
+  it('name：id 與 name 都要是字串', () => {
+    const ok = { t: 'name', id: 'a', name: '慧明' }
+    expect(decode(JSON.stringify(ok))).toEqual(ok)
+    expect(decode(JSON.stringify({ t: 'name', id: 'a' }))).toBeNull()
+    expect(decode(JSON.stringify({ t: 'name', name: 'x' }))).toBeNull()
+    expect(decode(JSON.stringify({ t: 'name', id: 1, name: 'x' }))).toBeNull()
+    expect(decode(JSON.stringify({ t: 'name', id: 'a', name: null }))).toBeNull()
+    expect(decode(JSON.stringify({ t: 'name', id: 'a', name: 'x'.repeat(257) }))).toBeNull()
+  })
+})
+
+describe('encode', () => {
+  it('rename', () => {
+    expect(JSON.parse(encode({ t: 'rename', name: '淨塵' }))).toEqual({ t: 'rename', name: '淨塵' })
+  })
+
+  it('hello 帶 session 時才有這個欄位', () => {
+    expect(JSON.parse(encode({ t: 'hello', v: 4, name: 'n', session: 's' }))).toEqual({ t: 'hello', v: 4, name: 'n', session: 's' })
+    const without = JSON.parse(encode({ t: 'hello', v: 4, name: 'n', resumeToken: undefined, session: undefined }))
+    expect(without).toEqual({ t: 'hello', v: 4, name: 'n' })
+    expect('session' in without).toBe(false)
   })
 })
 
@@ -118,6 +148,19 @@ describe('OutboundQueue', () => {
       { t: 'stop', x: 3, z: 0, heading: 0, seq: 3 },
     ])
     expect(q.size).toBe(0)
+  })
+
+  it('改名只保留最新一筆（可取代），不影響位置與其他訊息', () => {
+    const q = new OutboundQueue()
+    q.push({ t: 'rename', name: 'a' })
+    q.push({ t: 'move', x: 1, z: 0, heading: 0, seq: 1 })
+    q.push({ t: 'rename', name: 'b' })
+    q.push({ t: 'ping', ts: 1 })
+    expect(q.drain()).toEqual([
+      { t: 'move', x: 1, z: 0, heading: 0, seq: 1 },
+      { t: 'rename', name: 'b' },
+      { t: 'ping', ts: 1 },
+    ])
   })
 
   it('超過上限丟棄最舊的', () => {

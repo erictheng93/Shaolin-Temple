@@ -1,13 +1,31 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { PROVIDER_LABELS } from '../game/core/auth'
+import { NAME_MAX_CHARS, randomTempleName } from '../game/core/names'
 import { assetPresetFor, needsReload, saveSettings, type QualityLevel, type QualityPreset, type QualitySetting, type Settings } from '../game/core/settings'
+import type { AuthKind } from '../game/net/protocol'
 import { LOCALES, t, type MessageKey } from '../i18n'
+import IconShuffle from './IconShuffle.vue'
 import LocaleSelect from './LocaleSelect.vue'
 import OutfitPicker from './OutfitPicker.vue'
 
-// settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。
-const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedPreset: QualityPreset }>()
-const emit = defineEmits<{ close: [] }>()
+// settings 是父層的 reactive 物件，直接修改即可（由父層 watch 儲存並套用）。名字例外：
+// 改名經 GameCore（rename 事件），以伺服器確認的結果寫回 settings.playerName。
+const props = defineProps<{ settings: Settings; activeQuality: QualityLevel; loadedPreset: QualityPreset; auth: AuthKind }>()
+const emit = defineEmits<{ close: []; rename: [name: string]; logout: [] }>()
+
+const nameDraft = ref(props.settings.playerName)
+// 伺服器確認（或清理）後的名字回來時更新輸入框
+watch(
+  () => props.settings.playerName,
+  (name) => (nameDraft.value = name),
+)
+const nameChanged = computed(() => nameDraft.value.trim() !== props.settings.playerName)
+
+function submitName() {
+  if (!nameChanged.value) return
+  emit('rename', nameDraft.value)
+}
 
 const dialog = ref<HTMLElement | null>(null)
 const qualityLabel = (q: QualityLevel) => t(`quality.${q}`)
@@ -68,6 +86,24 @@ function reloadNow() {
         <h2 id="settings-title">{{ t('settings.title') }}</h2>
         <button class="icon-btn" type="button" :aria-label="t('settings.close')" @click="emit('close')">✕</button>
       </header>
+
+      <fieldset class="identity">
+        <legend>{{ t('settings.name') }}</legend>
+        <form class="name-row" @submit.prevent="submitName">
+          <input v-model="nameDraft" :maxlength="NAME_MAX_CHARS" :aria-label="t('entry.nameLabel')" autocomplete="nickname" enterkeyhint="done" spellcheck="false" :placeholder="t('entry.namePlaceholder')" />
+          <button class="shuffle" type="button" :aria-label="t('entry.shuffleName')" :title="t('entry.shuffleName')" @click="nameDraft = randomTempleName()">
+            <IconShuffle />
+          </button>
+          <button class="update" type="submit" :disabled="!nameChanged">{{ t('settings.nameUpdate') }}</button>
+        </form>
+        <div class="who">
+          <span>{{ auth === 'guest' ? t('player.visitor') : t('auth.loggedInWith', { provider: PROVIDER_LABELS[auth] }) }}</span>
+          <template v-if="auth !== 'guest'">
+            <button class="text-btn" type="button" aria-describedby="logout-note" @click="emit('logout')">{{ t('auth.logout') }}</button>
+            <span id="logout-note" class="who-note">{{ t('auth.logoutNote') }}</span>
+          </template>
+        </div>
+      </fieldset>
 
       <fieldset>
         <legend class="sr-only">{{ t('locale.label') }}</legend>
@@ -143,6 +179,89 @@ function reloadNow() {
 </template>
 
 <style scoped>
+.name-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* fieldset 預設 min-width: min-content，輸入框的預設寬度會把整列撐出面板；歸零讓輸入框縮 */
+.identity {
+  min-width: 0;
+}
+
+.name-row input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+}
+
+.shuffle {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--ink-soft);
+}
+
+.shuffle:hover {
+  color: var(--accent);
+}
+
+.update {
+  flex: none;
+  height: 44px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.update:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  min-height: 36px;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.who-note {
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+.text-btn {
+  min-height: 36px;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .credits ul {
   display: grid;
   gap: 12px;

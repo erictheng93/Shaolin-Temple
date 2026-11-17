@@ -3,14 +3,26 @@
 // 與正式伺服器相同的行為：房內短編號 n、moves／sync／action 只送同場景、zone／join／leave 送全房、
 // 衣裝 outfit（hello 可帶、執行中以 outfit 訊息更換、斷線保留期內以 resumeToken 恢復並保留）、
 // 切換場景後先廣播 zone 再對切換者送 sync、移動中超過 1 秒沒有位置就視為停止、
-// 協定版本 3：moves／sync／action 以二進位幀送出（與前端共用 src/game/net/binaryFrame.ts 的編碼器），hello.v 不符時回 unsupported_version。
+// 協定版本 4：moves／sync／action 以二進位幀送出（與前端共用 src/game/net/binaryFrame.ts 的編碼器），hello.v 不符時回 unsupported_version；
+// hello.session → welcome.auth、rename → 對同房所有人（含本人、不分場景）廣播 name，名字清理規則與正式伺服器相同。
+//
+// 開發用假登入（同一個埠的 HTTP，讓沒有真實 Google／LINE 憑證時也能在瀏覽器走完登入流程）——沒有任何安全性，不可用於正式環境：
+//   GET /auth/providers            → {"providers":["google","line"]}（含 CORS）
+//   GET /auth/<provider>/start?origin=<origin> → 302 回 <origin>/#session=mock.<provider>&provider=<provider>
+//                                     （origin 只接受 http://localhost:* 與 http://127.0.0.1:*；?fail=cancelled|failed 模擬失敗）
+//   hello.session 是 mock.google／mock.line 時 welcome.auth 回對應值，其他一律 guest（模擬權杖失效）。
 //
 // 用法：node scripts/mock-server.mjs [機器人數量=6] [埠=8080]（需 Node 22.18 以上，直接載入 .ts 的型別移除）
 // 前端：在 web/.env.local 設定 VITE_WS_URL=ws://localhost:8080/ws
+import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
+import { randomTempleName } from '../src/game/core/names.ts'
 import { ACTION_CODES, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch } from '../src/game/net/binaryFrame.ts'
 
-const PROTOCOL_VERSION = 3 // 與 src/game/net/protocol.ts 一致
+const PROTOCOL_VERSION = 4 // 與 src/game/net/protocol.ts 一致
+const PROVIDERS = ['google', 'line']
+/** 改名頻率上限：與正式伺服器相同，約每 2 秒 1 次（超過的直接忽略）。 */
+const RENAME_MIN_INTERVAL_MS = 2000
 
 const BOTS = Number(process.argv[2] ?? 6)
 const PORT = Number(process.argv[3] ?? 8080)
@@ -66,9 +78,49 @@ const broadcastChat = (from, raw) => {
   if (text) broadcast({ t: 'chat', id: from.id, text, at: now() })
 }
 const BOT_LINES = ['阿彌陀佛', '早安', '這裡好安靜', '鐘聲真好聽', '南無觀世音菩薩', '今天天氣真好', '來上炷香吧', '心靜自然涼']
-const NAMES = ['靜心', '晨鐘', '松風', '雲水', '明月', '竹影', '清泉', '山嵐']
+/** 名字清理（與正式伺服器相同）：去控制字元、trim、最多 16 個 Unicode 字元，空白變「訪客」。 */
+const cleanName = (raw) => {
+  const s = [...String(typeof raw === 'string' ? raw : '').replace(/\p{Cc}/gu, '').trim()].slice(0, 16).join('').trim()
+  return s || '訪客'
+}
+const authOf = (session) => (session === 'mock.google' ? 'google' : session === 'mock.line' ? 'line' : 'guest')
+const isDevOrigin = (origin) => {
+  try {
+    const u = new URL(origin)
+    return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1') && u.origin === origin
+  } catch {
+    return false
+  }
+}
 
-const wss = new WebSocketServer({ port: PORT, path: '/ws', maxPayload: 16 * 1024 })
+// 開發用假登入的 HTTP 端點（與 WebSocket 共用同一個埠）
+const http = createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost')
+  const cors = { 'Access-Control-Allow-Origin': '*' }
+  if (req.method === 'GET' && url.pathname === '/auth/providers') {
+    res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify({ providers: PROVIDERS }))
+    return
+  }
+  const m = /^\/auth\/([a-z]+)\/start$/.exec(url.pathname)
+  if (req.method === 'GET' && m && PROVIDERS.includes(m[1])) {
+    const origin = url.searchParams.get('origin') ?? ''
+    if (!isDevOrigin(origin)) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' })
+      res.end('origin 只接受 http://localhost:* 或 http://127.0.0.1:*')
+      return
+    }
+    const fail = url.searchParams.get('fail')
+    const fragment = fail ? `auth_error=${fail === 'cancelled' ? 'cancelled' : 'failed'}` : `session=mock.${m[1]}&provider=${m[1]}`
+    res.writeHead(302, { Location: `${origin}/#${fragment}`, 'Cache-Control': 'no-store' })
+    res.end()
+    return
+  }
+  res.writeHead(404, cors)
+  res.end()
+})
+const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 16 * 1024 })
+http.listen(PORT)
 const STOP_WATCHDOG_MS = 1000
 const players = new Map() // id -> { id, n, name, x, z, heading, zone, moving, lastPosAt, ws?, bot? }
 const seenReq = new Map() // reqId -> ack（模擬伺服器去重）
@@ -118,7 +170,7 @@ for (let i = 0; i < BOTS; i++) {
     n: allocN(),
     moving: false,
     lastPosAt: 0,
-    name: NAMES[i % NAMES.length] + (i >= NAMES.length ? i : ''),
+    name: randomTempleName(),
     x: pick(ROAM[zone].x),
     z: pick(ROAM[zone].z),
     heading: 0,
@@ -199,6 +251,7 @@ wss.on('connection', (ws) => {
         return
       }
       const wanted = validOutfit(m.outfit) ? m.outfit : undefined
+      const auth = authOf(typeof m.session === 'string' ? m.session : undefined)
       // 恢復連線：保留期內以 resumeToken 找回原玩家；hello 帶了有效且不同的衣裝以它為準，並通知其他人。
       const old = typeof m.resumeToken === 'string' && [...players.values()].find((p) => p.token === m.resumeToken && !p.ws)
       if (old) {
@@ -210,13 +263,13 @@ wss.on('connection', (ws) => {
         me = old
         const changed = wanted !== undefined && wanted !== old.outfit
         if (changed) old.outfit = wanted
-        // 重新整理後換了名字：對其他人重送同一個 id 的 join。
-        const name = String(m.name || '訪客').slice(0, 16)
+        // 與正式伺服器相同：恢復時採用 hello.name（清理後不同才改），welcome 已是新名字，再對全房廣播 name。
+        const name = cleanName(m.name)
         const renamed = name !== old.name
-        old.name = name
-        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot) })
-        if (renamed) broadcast({ t: 'join', player: snapshot(old) }, old.id)
-        else if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
+        if (renamed) old.name = name
+        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), auth })
+        if (renamed) for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: old.id, name })
+        if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
         return
       }
       const n = allocN()
@@ -227,7 +280,8 @@ wss.on('connection', (ws) => {
         outfit: wanted ?? 0,
         id,
         n,
-        name: String(m.name || '訪客').slice(0, 16),
+        name: cleanName(m.name),
+        lastRenameAt: 0,
         x: (Math.random() - 0.5) * 4,
         z: 11,
         heading: Math.PI,
@@ -244,6 +298,7 @@ wss.on('connection', (ws) => {
         resumeToken: me.token,
         serverTime: now(),
         players: [...players.values()].map(snapshot),
+        auth,
       })
       broadcast({ t: 'join', player: snapshot(me) }, id)
       return
@@ -283,6 +338,16 @@ wss.on('connection', (ws) => {
         me.outfit = m.outfit
         broadcast({ t: 'outfit', id: me.id, outfit: me.outfit })
         break
+      case 'rename': {
+        if (typeof m.name !== 'string') return
+        const t = now()
+        if (t - me.lastRenameAt < RENAME_MIN_INTERVAL_MS) return
+        me.lastRenameAt = t
+        me.name = cleanName(m.name)
+        // 送給同房所有人（含本人、不分場景）
+        for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: me.id, name: me.name })
+        break
+      }
       case 'ping':
         send(ws, { t: 'pong', ts: m.ts, serverTime: now() })
         break
@@ -303,4 +368,4 @@ wss.on('connection', (ws) => {
   })
 })
 
-console.log(`mock server ws://localhost:${PORT}/ws，機器人 ${BOTS} 個`)
+console.log(`mock server ws://localhost:${PORT}/ws，機器人 ${BOTS} 個；開發用假登入 http://localhost:${PORT}/auth/providers`)

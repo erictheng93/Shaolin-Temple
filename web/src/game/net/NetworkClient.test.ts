@@ -36,7 +36,7 @@ class FakeSocket {
   }
 }
 
-const welcome = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [] }
+const welcome = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [], auth: 'guest' }
 const last = () => FakeSocket.instances[FakeSocket.instances.length - 1]!
 const stops = (s: FakeSocket) => s.sent.filter((m) => m.t === 'stop')
 
@@ -271,5 +271,96 @@ describe('NetworkClient 重連', () => {
     last().drop(1000)
     vi.advanceTimersByTime(499)
     expect(FakeSocket.instances).toHaveLength(2)
+  })
+})
+
+describe('NetworkClient 改名', () => {
+  const hellos = () => FakeSocket.instances.flatMap((s) => s.sent.filter((m) => m.t === 'hello'))
+
+  it('連線中改名：送 rename（未送出的舊改名被蓋掉），之後重連的 hello 帶新名字', () => {
+    connectOnline()
+    client.setName('慧明')
+    client.setName('淨塵')
+    vi.advanceTimersByTime(100)
+    expect(last().sent.filter((m) => m.t === 'rename')).toEqual([{ t: 'rename', name: '淨塵' }])
+    last().drop()
+    vi.advanceTimersByTime(1000)
+    last().open()
+    expect(hellos().at(-1)).toMatchObject({ t: 'hello', name: '淨塵', resumeToken: 't' })
+  })
+
+  it('斷線中改名不送 rename，重連的 hello 直接帶新名字', () => {
+    connectOnline()
+    last().drop()
+    client.setName('悟遠')
+    vi.advanceTimersByTime(1000)
+    last().open()
+    last().receive(welcome)
+    vi.advanceTimersByTime(100)
+    expect(hellos().at(-1)).toMatchObject({ name: '悟遠' })
+    expect(FakeSocket.instances.flatMap((s) => s.sent).filter((m) => m.t === 'rename')).toEqual([])
+  })
+
+  it('hello 送出後、welcome 前改名：welcome 清佇列後仍補送 rename', () => {
+    client.connect()
+    last().open()
+    client.setName('明心')
+    last().receive(welcome)
+    vi.advanceTimersByTime(100)
+    expect(last().sent.filter((m) => m.t === 'rename')).toEqual([{ t: 'rename', name: '明心' }])
+  })
+
+  it('未連線前改名只影響 hello', () => {
+    client.setName('清泉')
+    connectOnline()
+    vi.advanceTimersByTime(100)
+    expect(hellos()).toEqual([{ t: 'hello', v: 4, name: '清泉' }])
+    expect(last().sent.some((m) => m.t === 'rename')).toBe(false)
+  })
+})
+
+describe('NetworkClient 登入權杖', () => {
+  it('沒有權杖時 hello 不帶 session 欄位', () => {
+    connectOnline()
+    expect('session' in last().sent[0]!).toBe(false)
+  })
+
+  it('hello 帶 session；伺服器回 auth 與登入相同時權杖保留', () => {
+    const expired = vi.fn()
+    client.events.on('sessionExpired', expired)
+    client.setSession('tok')
+    client.connect()
+    last().open()
+    expect(last().sent[0]).toMatchObject({ t: 'hello', session: 'tok' })
+    last().receive({ ...welcome, auth: 'google' })
+    last().drop()
+    vi.advanceTimersByTime(1000)
+    last().open()
+    expect(last().sent[0]).toMatchObject({ session: 'tok' })
+    expect(expired).not.toHaveBeenCalled()
+  })
+
+  it('帶了 session 卻收到 guest：權杖失效，發出 sessionExpired，之後的 hello 不再帶 session', () => {
+    const expired = vi.fn()
+    client.events.on('sessionExpired', expired)
+    client.setSession('tok')
+    client.connect()
+    last().open()
+    last().receive({ ...welcome, auth: 'guest' })
+    expect(expired).toHaveBeenCalledTimes(1)
+    last().drop()
+    vi.advanceTimersByTime(1000)
+    last().open()
+    expect('session' in last().sent[0]!).toBe(false)
+    last().receive({ ...welcome, auth: 'guest' })
+    expect(expired).toHaveBeenCalledTimes(1) // 沒帶 session 的訪客不算失效
+  })
+
+  it('建構時的 session 選項同樣生效', () => {
+    client.dispose()
+    client = new NetworkClient({ url: 'ws://x', name: 'n', session: 'abc' })
+    client.connect()
+    last().open()
+    expect(last().sent[0]).toMatchObject({ session: 'abc' })
   })
 })
