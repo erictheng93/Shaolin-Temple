@@ -80,6 +80,23 @@ describe('NetworkClient 下行二進位幀', () => {
   })
 })
 
+describe('NetworkClient resumeToken', () => {
+  it('存進 sessionStorage，重新整理後的新 client 在 hello 帶上', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    })
+    connectOnline()
+    expect(last().sent[0]!.resumeToken).toBeUndefined()
+    client.dispose()
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    client.connect()
+    last().open()
+    expect(last().sent[0]).toMatchObject({ t: 'hello', resumeToken: 't' })
+  })
+})
+
 describe('NetworkClient action 幀', () => {
   const T = 1_794_787_200_000
   const player = (id: string, n: number) => ({ id, n, name: id, x: 0, z: 0, heading: 0 })
