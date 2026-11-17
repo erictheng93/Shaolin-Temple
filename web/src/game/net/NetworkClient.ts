@@ -23,6 +23,25 @@ const OUTFIT_REFILL_MS = 2200
 /** 被限速擋下的衣裝，每隔這段時間檢查一次額度。 */
 const OUTFIT_RETRY_MS = 250
 const round2 = (v: number): number => Math.round(v * 100) / 100
+/**
+ * resumeToken 存在 sessionStorage：重新整理後的新頁面以它接回原本的玩家，
+ * 否則舊的自己會在斷線保留期內留在原地。讀寫失敗（隱私模式、測試環境）就當作沒有。
+ */
+const RESUME_KEY = 'temple.resumeToken'
+function loadResumeToken(): string | undefined {
+  try {
+    return sessionStorage.getItem(RESUME_KEY) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+function saveResumeToken(token: string): void {
+  try {
+    sessionStorage.setItem(RESUME_KEY, token)
+  } catch {
+    // 存不了就只是重新整理後當成新玩家。
+  }
+}
 
 export type ConnectionStatus = 'offline' | 'connecting' | 'online' | 'reconnecting' | 'closed'
 
@@ -75,7 +94,7 @@ export class NetworkClient {
   private attempt = 0
   private seq = 0
   private reqCounter = 0
-  private resumeToken: string | undefined
+  private resumeToken = loadResumeToken()
   private background = false
   /** 收到 unsupported_version：版本不符，重連也不會成功，不再重連。 */
   private versionRejected = false
@@ -280,6 +299,7 @@ export class NetworkClient {
         this.attempt = 0 // 收到 welcome 才算連線成功；只 onopen 就被踢的情況仍要持續退避。
         this.lastPos = null
         this.resumeToken = msg.resumeToken
+        saveResumeToken(msg.resumeToken)
         // 伺服器快照是權威狀態：斷線期間累積的位置與場景訊息已過時。
         this.queue.clear()
         break

@@ -97,6 +97,11 @@ export class Players {
         this.byN.set(p.n, existing)
       }
       existing.zone = p.zone ?? 'courtyard'
+      // 恢復連線時改了名字：伺服器對同一個 id 再送一次 join。
+      if (p.name !== existing.name) {
+        existing.name = p.name
+        existing.avatar.setName(p.name)
+      }
       const outfit = normalizeOutfit(p.outfit)
       if (p.outfit !== undefined && outfit !== existing.outfit) {
         existing.outfit = outfit

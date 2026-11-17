@@ -82,6 +82,8 @@ enum RoomCommand {
     },
     Resume {
         token: String,
+        /// `hello` 帶的名字（已清理）；與保存的不同就改名並對其他人重送 `join`。
+        name: Option<String>,
         /// `hello` 帶的有效衣裝；沒有或無效為 `None`（沿用保存的衣裝）。
         outfit: Option<u8>,
         outbound: mpsc::Sender<ServerMessage>,
@@ -244,7 +246,7 @@ impl Lobby {
                                 .and_then(|no| rooms.get(&no))
                         {
                             let (reply, received) = oneshot::channel();
-                            let command = RoomCommand::Resume { token: token.clone(), outfit: request.outfit, outbound: outbound.clone(), reply };
+                            let command = RoomCommand::Resume { token: token.clone(), name: Some(request.name.clone()), outfit: request.outfit, outbound: outbound.clone(), reply };
                             if room.send(command).await.is_ok() && let Ok(Some(who)) = received.await {
                                 assigned = Some((who, room.clone()));
                             }
@@ -437,6 +439,7 @@ impl Room {
     fn resume(
         &mut self,
         token: &str,
+        name: Option<String>,
         outfit: Option<u8>,
         outbound: mpsc::Sender<ServerMessage>,
         now: Instant,
@@ -467,11 +470,23 @@ impl Room {
         if let Some(o) = changed {
             p.outfit = o;
         }
+        // 重新整理後換了名字：沒有改名訊息，對其他人重送同一個 id 的 join（前端會更新既有玩家）。
+        let renamed = name.filter(|n| *n != p.name);
+        if let Some(n) = &renamed {
+            p.name = n.clone();
+        }
         if !self.send_welcome(&id) {
             self.detach(&id, now);
             return None;
         }
-        if let Some(outfit) = changed {
+        if renamed.is_some()
+            && let Some(p) = self.players.get(&id)
+        {
+            let join = ServerMessage::Join {
+                player: Self::snapshot(p),
+            };
+            self.broadcast(join, now, |q| q.id != id);
+        } else if let Some(outfit) = changed {
             let message = ServerMessage::Outfit {
                 id: id.clone(),
                 outfit,
@@ -798,8 +813,8 @@ async fn run_room(
                             None => { let _ = reply.send(None); }
                         }
                     }
-                    RoomCommand::Resume { token, outfit, outbound, reply } => {
-                        let _ = reply.send(room.resume(&token, outfit, outbound, now));
+                    RoomCommand::Resume { token, name, outfit, outbound, reply } => {
+                        let _ = reply.send(room.resume(&token, name, outfit, outbound, now));
                     }
                     RoomCommand::Disconnect(who) => {
                         if room.live(&who).is_some() { room.detach(&who.id, now); }
