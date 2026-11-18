@@ -162,6 +162,7 @@ describe('NetworkClient.setOutfit', () => {
     expect(outfits(last())).toEqual([1, 2, 3])
     vi.advanceTimersByTime(1500)
     expect(outfits(last())).toEqual([1, 2, 3, 1])
+    last().receive({ t: 'outfit', id: 'a', outfit: 1 }) // 伺服器確認：不再重送
     vi.advanceTimersByTime(60_000)
     expect(outfits(last())).toEqual([1, 2, 3, 1])
   })
@@ -192,6 +193,70 @@ describe('NetworkClient.setOutfit', () => {
     expect(helloOf(second).outfit).toBe(5)
     second.receive(welcome)
     vi.advanceTimersByTime(10_000)
+    expect(outfits(second)).toEqual([])
+  })
+
+  it('送出後沒有收到自己的回音：等確認時間過後重送目前的衣裝', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    connectOnline()
+    client.setOutfit(2)
+    expect(outfits(last())).toEqual([2])
+    vi.advanceTimersByTime(2500)
+    expect(outfits(last())).toEqual([2])
+    vi.advanceTimersByTime(1000)
+    expect(outfits(last())).toEqual([2, 2])
+  })
+
+  it('收到自己且值相同的回音即確認，不重送；其他玩家的同值回音不算', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    connectOnline()
+    client.setOutfit(2)
+    last().receive({ t: 'outfit', id: 'b', outfit: 2 })
+    last().receive({ t: 'outfit', id: 'a', outfit: 2 })
+    vi.advanceTimersByTime(60_000)
+    expect(outfits(last())).toEqual([2])
+  })
+
+  it('較舊值的自己回音不改衣裝、不取消等待：仍重送最新的值；回音照樣交給 GameCore', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    const got: ServerMessage[] = []
+    client.events.on('message', (m) => got.push(m))
+    connectOnline()
+    client.setOutfit(1)
+    client.setOutfit(2)
+    last().receive({ t: 'outfit', id: 'a', outfit: 1 })
+    expect(got.filter((m) => m.t === 'outfit')).toEqual([{ t: 'outfit', id: 'a', outfit: 1 }])
+    vi.advanceTimersByTime(3500)
+    expect(outfits(last())).toEqual([1, 2, 2])
+    last().receive({ t: 'outfit', id: 'a', outfit: 2 })
+    vi.advanceTimersByTime(60_000)
+    expect(outfits(last())).toEqual([1, 2, 2])
+  })
+
+  it('一直沒有回音：同一個值最多重送 2 次；改成別的值重新計數', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    connectOnline()
+    client.setOutfit(2)
+    vi.advanceTimersByTime(60_000)
+    expect(outfits(last())).toEqual([2, 2, 2])
+    client.setOutfit(3)
+    vi.advanceTimersByTime(60_000)
+    expect(outfits(last())).toEqual([2, 2, 2, 3, 3, 3])
+  })
+
+  it('等待確認時斷線：不在斷線中重送；重連的 hello 帶衣裝，之後不再重送', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    connectOnline()
+    client.setOutfit(2)
+    last().drop()
+    vi.advanceTimersByTime(1000)
+    const second = last()
+    expect(second).not.toBe(FakeSocket.instances[0])
+    expect(outfits(FakeSocket.instances[0]!)).toEqual([2])
+    second.open()
+    second.receive(welcome)
+    expect(helloOf(second).outfit).toBe(2)
+    vi.advanceTimersByTime(60_000)
     expect(outfits(second)).toEqual([])
   })
 

@@ -53,9 +53,22 @@ export class AdaptiveQuality {
   /** startLevel：起始等級。minLevel：最高只升到這一級（觸控裝置自動畫質時兩者都是 1，不升到完整解析度）。 */
   constructor(
     startLevel = 0,
-    private readonly minLevel = 0,
+    private minLevel = 0,
   ) {
     this.level = Math.min(Math.max(minLevel, Math.floor(startLevel)), ADAPTIVE_LEVELS.length - 1)
+  }
+
+  /**
+   * 執行中改變下限（例如設定面板切換畫質）。提高到目前等級以上時立即拉到下限並回傳 true；
+   * 降低時不動目前等級，由一般的「順暢約 30 秒」邏輯慢慢升回。
+   */
+  setMinLevel(minLevel: number): boolean {
+    this.minLevel = Math.min(Math.max(0, Math.floor(minLevel)), ADAPTIVE_LEVELS.length - 1)
+    if (this.level >= this.minLevel) return false
+    this.level = this.minLevel
+    this.stableSince = this.windowStart = this.goodSince = -1
+    this.graceUntil = -1
+    return true
   }
 
   /** 每畫一幀呼叫一次。now 與 intervalMs（與上一幀的間隔）單位為毫秒；回傳等級是否改變。 */
