@@ -233,6 +233,38 @@ describe('NetworkClient.setOutfit', () => {
     expect(outfits(last())).toEqual([1, 2, 2])
   })
 
+  it('A→B→A 而最後的 A 被伺服器丟掉：先到的 A 回音不算確認，B 回音後重新等待並重送 A', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    const got: ServerMessage[] = []
+    client.events.on('message', (m) => got.push(m))
+    connectOnline()
+    client.setOutfit(1)
+    client.setOutfit(2)
+    client.setOutfit(1)
+    expect(outfits(last())).toEqual([1, 2, 1])
+    last().receive({ t: 'outfit', id: 'a', outfit: 1 }) // 第一個 A 的回音
+    last().receive({ t: 'outfit', id: 'a', outfit: 2 }) // 伺服器停在 B
+    expect(got.filter((m) => m.t === 'outfit')).toHaveLength(2)
+    vi.advanceTimersByTime(2500)
+    expect(outfits(last())).toEqual([1, 2, 1])
+    vi.advanceTimersByTime(1000)
+    expect(outfits(last())).toEqual([1, 2, 1, 1])
+    last().receive({ t: 'outfit', id: 'a', outfit: 1 })
+    vi.advanceTimersByTime(60_000)
+    expect(outfits(last())).toEqual([1, 2, 1, 1])
+  })
+
+  it('A→B→A 的回音全部到齊：確認，不重送', () => {
+    client = new NetworkClient({ url: 'ws://x', name: 'n' })
+    connectOnline()
+    client.setOutfit(1)
+    client.setOutfit(2)
+    client.setOutfit(1)
+    for (const outfit of [1, 2, 1]) last().receive({ t: 'outfit', id: 'a', outfit })
+    vi.advanceTimersByTime(60_000)
+    expect(outfits(last())).toEqual([1, 2, 1])
+  })
+
   it('一直沒有回音：同一個值最多重送 2 次；改成別的值重新計數', () => {
     client = new NetworkClient({ url: 'ws://x', name: 'n' })
     connectOnline()
