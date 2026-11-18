@@ -116,6 +116,11 @@ export class NetworkClient {
   private helloName = ''
   private helloHadSession = false
   private background = false
+  /**
+   * 這條連線已處理過 welcome。之前不送佇列（位置、場景、改名）也不送 zone：伺服器以 hello 當下的狀態建 welcome，
+   * 之後到的舊訊息會讓伺服器與套用了 welcome 快照的本機不一致。
+   */
+  private welcomed = false
   /** 收到 unsupported_version：版本不符，重連也不會成功，不再重連。 */
   private versionRejected = false
   /** 最後一次排入佇列的位置，進入背景時據此判斷要不要補送 stop。 */
@@ -176,6 +181,7 @@ export class NetworkClient {
     // moves／sync／action 是二進位幀；arraybuffer 讓 onmessage 同步拿到資料（預設的 Blob 要非同步讀取，可能打亂訊息順序）。
     ws.binaryType = 'arraybuffer'
     ws.onopen = () => {
+      this.welcomed = false
       this.helloName = this.opts.name
       this.helloHadSession = !!this.session
       this.sendNow({
@@ -278,9 +284,16 @@ export class NetworkClient {
     this.trySendOutfit()
   }
 
-  /** 收到 outfit 下行：自己 id、與目前相同的值才算確認；較舊的值不取消等待。 */
+  /**
+   * 收到 outfit 下行：自己 id、與目前相同的值才算確認；較舊的值不取消等待。
+   * 已確認後又收到不同值的自己回音（A→B→A 時先到的是第一個 A，伺服器其實停在 B）：重新等待，逾時照常重送。
+   */
   private onOutfitEcho(id: string, outfit: number): void {
-    if (id !== this.selfId || outfit !== this.outfit || this.outfitPending) return
+    if (id !== this.selfId || this.outfitPending) return
+    if (outfit !== this.outfit) {
+      if (!this.outfitConfirmTimer) this.outfitConfirmTimer = setTimeout(this.onOutfitUnconfirmed, OUTFIT_CONFIRM_MS)
+      return
+    }
     if (this.outfitConfirmTimer) clearTimeout(this.outfitConfirmTimer)
     this.outfitConfirmTimer = null
   }
@@ -294,12 +307,12 @@ export class NetworkClient {
 
   /**
    * 切換場景（需送達，但可被更新的場景取代）。離線模式忽略。
-   * 斷線期間會留在佇列，重連後的 hello 之後送出；伺服器以 resumeToken 恢復時也會帶回場景。
+   * 斷線期間或 welcome 之前只放進佇列，由 welcome 清掉：伺服器以 resumeToken 恢復的場景（welcome 快照）為準。
    */
   sendZone(zone: string, x: number, z: number, heading: number): void {
     if (!this.enabled) return
     const msg = { t: 'zone' as const, zone, x, z, heading }
-    if (this.status === 'online' && this.sendNow(msg)) return
+    if (this.welcomed && this.sendNow(msg)) return
     this.queue.push(msg)
   }
 
@@ -309,7 +322,8 @@ export class NetworkClient {
     if (background) {
       // 背景分頁不再送位置；若最後狀態是移動中，先補一則 stop，否則其他人會看到角色一直走。
       const last = this.lastPos
-      if (this.enabled && last?.moving) {
+      // welcome 之前的最後位置是斷線期間的，伺服器以快照為準，不補送。
+      if (this.enabled && this.welcomed && last?.moving) {
         this.sendNow({ t: 'stop', x: last.x, z: last.z, heading: last.heading, seq: ++this.seq })
         last.moving = false
       }
@@ -365,6 +379,7 @@ export class NetworkClient {
         this.queue.clear()
         // hello 送出後、welcome 之前改了名：hello 帶的是舊名字，被清掉的 rename 要補送。
         if (this.opts.name !== this.helloName) this.queue.push({ t: 'rename', name: this.opts.name })
+        this.welcomed = true
         if (this.helloHadSession && msg.auth === 'guest') {
           this.session = undefined
           this.events.emit('sessionExpired', undefined)
@@ -394,6 +409,7 @@ export class NetworkClient {
 
   private onSocketClosed(code: number): void {
     this.ws = null
+    this.welcomed = false
     this.stopTimers()
     // 重連的 hello 會帶最新衣裝，斷線前的補送與等回音都不必留。
     this.clearOutfitTimer()
@@ -426,7 +442,7 @@ export class NetworkClient {
 
   private flush = (): void => {
     const ws = this.ws
-    if (!ws || ws.readyState !== WebSocket.OPEN || this.queue.size === 0) return
+    if (!this.welcomed || !ws || ws.readyState !== WebSocket.OPEN || this.queue.size === 0) return
     // 慢速網路：暫緩送出，讓佇列合併位置，而不是在瀏覽器緩衝區堆積。
     if (ws.bufferedAmount > this.opts.maxBufferedBytes) return
     for (const msg of this.queue.drain()) this.sendNow(msg)
