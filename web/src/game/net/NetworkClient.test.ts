@@ -176,6 +176,56 @@ describe('NetworkClient 上行座標', () => {
   })
 })
 
+describe('NetworkClient hello 到 welcome 之間', () => {
+  const stale = (s: FakeSocket) => s.sent.filter((m) => m.t === 'zone' || m.t === 'move' || m.t === 'stop')
+
+  it('斷線期間排入的場景與位置：welcome 前即使過了送出間隔也不送，welcome 後也不補送', () => {
+    connectOnline()
+    last().drop()
+    client.sendPosition(1, 1, 0, true)
+    client.sendZone('hall', 0, 5, 0)
+    vi.advanceTimersByTime(1000)
+    expect(FakeSocket.instances).toHaveLength(2)
+    last().open()
+    vi.advanceTimersByTime(500)
+    expect(stale(last())).toEqual([])
+    last().receive(welcome)
+    vi.advanceTimersByTime(500)
+    expect(stale(last())).toEqual([])
+  })
+
+  it('onopen 之後、welcome 之前呼叫 sendZone 不送出（welcome 的快照為準）', () => {
+    client.connect()
+    last().open()
+    client.sendZone('hall', 0, 5, 0)
+    client.sendPosition(1, 1, 0, true)
+    vi.advanceTimersByTime(500)
+    expect(stale(last())).toEqual([])
+    last().receive(welcome)
+    vi.advanceTimersByTime(500)
+    expect(stale(last())).toEqual([])
+  })
+
+  it('welcome 之前進入背景不補送斷線期間的 stop', () => {
+    connectOnline()
+    last().drop()
+    client.sendPosition(1, 1, 0, true)
+    vi.advanceTimersByTime(1000)
+    last().open()
+    client.setBackground(true)
+    expect(stale(last())).toEqual([])
+  })
+
+  it('welcome 之後 sendZone 立即送出，位置照常依送出間隔送出', () => {
+    connectOnline()
+    client.sendZone('hall', 0, 5, 0)
+    expect(last().sent.at(-1)).toEqual({ t: 'zone', zone: 'hall', x: 0, z: 5, heading: 0 })
+    client.sendPosition(1, 1, 0, true)
+    vi.advanceTimersByTime(100)
+    expect(last().sent.at(-1)).toMatchObject({ t: 'move', x: 1, z: 1 })
+  })
+})
+
 describe('NetworkClient 進入背景', () => {
   it('最後位置是移動中時，立即補送 stop（用最後已知位置）並清佇列', () => {
     connectOnline()
