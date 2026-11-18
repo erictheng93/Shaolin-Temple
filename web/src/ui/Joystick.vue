@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { stickFromOffset } from '../game/input/stick'
 
 /**
  * 浮動式虛擬搖桿（僅觸控裝置）：手指按下處成為底座中心，拖曳時推桿跟隨，鬆開回到預設位置。
  * 高頻的向量不進 Vue 響應式：直接呼叫 setStick，推桿以 style transform 更新 DOM。
  */
-const props = defineProps<{ setStick: (x: number, y: number) => void }>()
+const props = defineProps<{
+  setStick: (x: number, y: number) => void
+  /** 場景切換中：變成 true 時放開搖桿（同鍵盤清掉按鍵），要重新按下才會再走。 */
+  suspended?: boolean
+}>()
 
 const BASE = 120
 const KNOB = 52
@@ -41,6 +46,13 @@ onBeforeUnmount(() => {
   reset()
 })
 
+watch(
+  () => props.suspended,
+  (s) => {
+    if (s) reset()
+  },
+)
+
 function onHidden() {
   if (document.hidden) reset()
 }
@@ -55,6 +67,8 @@ function moveKnob(dx: number, dy: number) {
 
 function reset() {
   const was = pointerId !== -1
+  // 仍按著時（場景切換、失焦）放掉 capture；同一根手指之後的 pointermove 因 id 不符而忽略
+  if (was && zone.value?.hasPointerCapture(pointerId)) zone.value.releasePointerCapture(pointerId)
   pointerId = -1
   idle.value = true
   moveKnob(0, 0)
@@ -78,22 +92,10 @@ function onDown(e: PointerEvent) {
 function onMoveEvent(e: PointerEvent) {
   if (e.pointerId !== pointerId || !zone.value) return
   const r = zone.value.getBoundingClientRect()
-  let dx = e.clientX - r.left - cx
-  let dy = e.clientY - r.top - cy
-  const len = Math.hypot(dx, dy)
-  if (len > RADIUS) {
-    dx = (dx / len) * RADIUS
-    dy = (dy / len) * RADIUS
-  }
-  moveKnob(dx, dy)
   // 類比輸出：死區內為 0，死區外重新映射到 0～1
-  const m = Math.min(1, len / RADIUS)
-  if (m < DEAD_ZONE) {
-    props.setStick(0, 0)
-  } else {
-    const s = (m - DEAD_ZONE) / (1 - DEAD_ZONE)
-    props.setStick((dx / Math.min(len, RADIUS)) * s, (dy / Math.min(len, RADIUS)) * s)
-  }
+  const s = stickFromOffset(e.clientX - r.left - cx, e.clientY - r.top - cy, RADIUS, DEAD_ZONE)
+  moveKnob(s.knobX, s.knobY)
+  props.setStick(s.x, s.y)
 }
 
 function onEnd(e: PointerEvent) {
@@ -132,6 +134,8 @@ function onEnd(e: PointerEvent) {
   bottom: 0;
   width: 45%;
   height: 45%;
+  /* 橫向手機 45% 太矮：至少要容納閒置提示圈（下緣偏移 + 84px + 圈高 120px + 12px 餘裕） */
+  min-height: calc(max(16px, env(safe-area-inset-bottom)) + 216px);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -152,7 +156,7 @@ function onEnd(e: PointerEvent) {
 .base.idle {
   top: auto;
   bottom: calc(max(16px, env(safe-area-inset-bottom)) + 84px);
-  left: 20px;
+  left: calc(20px + env(safe-area-inset-left));
   transform: none !important;
   opacity: 0.55;
 }

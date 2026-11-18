@@ -108,7 +108,7 @@ function toggleMute() {
         @toggle-mute="toggleMute"
         @open-settings="settingsOpen = true"
       />
-      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" />
+      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" :suspended="ui.fading" />
       <ActionBar :actions="ui.actions" @perform="(id) => core?.performAction(id)" />
       <ChatPanel :chat="ui.chat" :send="(t) => core?.sendChat(t) ?? 'offline'" />
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
