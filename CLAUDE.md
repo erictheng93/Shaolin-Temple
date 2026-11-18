@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - `web/`：Vite 8 + Vue 3.5 + TypeScript + 直接操作 Three.js 的前端，已可運作。
 - `server/`：Rust + Axum 後端，進度見 docs/BACKEND_TASKS.md。前端開發時仍可用 `web/scripts/mock-server.mjs` 測試多人功能，它實作與正式伺服器相同的協定。
-- 移動：觸控裝置（`(any-pointer: coarse)`）用 `ui/Joystick.vue` 浮動式虛擬搖桿（畫面左下約 45%×45% 為觸控區，類比輸出、死區 0.12，直接呼叫 `GameCore.setMoveStick()`，非零時優先於鍵盤）；桌機用 WASD／方向鍵，或滑鼠點擊地面以尋路走過去（顯示目標標記；點到主殿建築時走向殿門）。點擊移動只接受滑鼠與觸控筆（`InputController` 依 `pointerType` 忽略手指點擊），觸控裝置只用搖桿。進出主殿是走進出入口範圍觸發。`stepMover` 的方向輸入長度 ≤ 1 時速度按比例（半推半速），> 1 時正規化（鍵盤對角仍是全速）。
+- 移動：觸控裝置（`(any-pointer: coarse)`）用 `ui/Joystick.vue` 浮動式虛擬搖桿（畫面左下約 45%×45% 為觸控區，橫向時以 `min-height` 保證容納閒置提示圈，類比輸出、死區 0.12，直接呼叫 `GameCore.setMoveStick()`，非零時優先於鍵盤；換算在 `game/input/stick.ts`；場景切換開始時以 `suspended`（`UiState.fading`）放開搖桿，與鍵盤一樣要重新按下才會再走）；桌機用 WASD／方向鍵，或滑鼠點擊地面以尋路走過去（顯示目標標記；點到主殿建築時走向殿門）。點擊移動只接受滑鼠與觸控筆（`InputController` 依 `pointerType` 忽略手指點擊），觸控裝置只用搖桿。進出主殿是走進出入口範圍觸發。`stepMover` 的方向輸入長度 ≤ 1 時速度按比例（半推半速），> 1 時正規化（鍵盤對角仍是全速）。
 - 玩法：參拜（`gameplay/modules/worship.ts`）——合十、跪拜（殿內走到空蒲團叩拜三次）、誦經（殿內走到空蒲團跪坐敲木魚 24 秒，可提前起身，`modules/chant.ts`）、上香（走到最近的香爐前三拜後插香）、敲鐘（庭院走到鐘亭前拉撞木撞鐘，`modules/bell.ts`）。計分、持久化等尚未定義。
 
 ## 指令（皆在 `web/` 執行）
