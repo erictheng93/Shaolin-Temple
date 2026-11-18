@@ -310,6 +310,18 @@ describe('NetworkClient 改名', () => {
     expect(last().sent.filter((m) => m.t === 'rename')).toEqual([{ t: 'rename', name: '明心' }])
   })
 
+  it('改名尚未送出就進入背景：rename 不被清掉，同一條連線上恰好送出一次', () => {
+    connectOnline()
+    client.sendPosition(1, 1, 0, false)
+    client.setName('新名字')
+    client.setBackground(true) // flush 之前
+    client.setBackground(false)
+    vi.advanceTimersByTime(1000)
+    expect(FakeSocket.instances).toHaveLength(1)
+    expect(last().sent.filter((m) => m.t === 'rename')).toEqual([{ t: 'rename', name: '新名字' }])
+    expect(stops(last())).toHaveLength(0) // 過期的位置仍被丟掉
+  })
+
   it('未連線前改名只影響 hello', () => {
     client.setName('清泉')
     connectOnline()

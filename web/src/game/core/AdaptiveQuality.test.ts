@@ -64,6 +64,34 @@ describe('AdaptiveQuality', () => {
     expect(new AdaptiveQuality(0, 2).level).toBe(2)
   })
 
+  it('setMinLevel：提高下限會把等級拉到下限並回報改變；等級已在下限以上則不變', () => {
+    const a = new AdaptiveQuality()
+    expect(a.setMinLevel(1)).toBe(true)
+    expect(a.level).toBe(1)
+    expect(a.setMinLevel(1)).toBe(false)
+    expect(a.setMinLevel(0)).toBe(false) // 降低下限不動等級
+    expect(a.level).toBe(1)
+    const b = new AdaptiveQuality(3)
+    expect(b.setMinLevel(1)).toBe(false)
+    expect(b.level).toBe(3)
+  })
+
+  it('setMinLevel：降低下限後等級不跳回，順暢約 30 秒才升到新下限，且不低於下限', () => {
+    const a = new AdaptiveQuality(1, 1)
+    let now = run(a, 0, 20_000, 33)
+    expect(a.setMinLevel(0)).toBe(false)
+    expect(a.level).toBe(1)
+    now = run(a, now, 10_000, 33)
+    expect(a.level).toBe(1) // 剛放寬，還沒順暢夠久
+    run(a, now, 40_000, 33)
+    expect(a.level).toBe(0)
+
+    const b = new AdaptiveQuality()
+    b.setMinLevel(2)
+    run(b, 0, 300_000, 33)
+    expect(b.level).toBe(2) // 順暢再久也不低於下限
+  })
+
   it('穩定很久之後才變慢視為過熱：隔 10 分鐘才升回，不是 30 秒', () => {
     const a = new AdaptiveQuality()
     let now = run(a, 0, 180_000, 33)

@@ -217,7 +217,7 @@ export class GameCore {
     this.settings = opts.settings
     this.quality = resolveQuality(opts.settings.quality)
     // 自動畫質且為觸控裝置：固定從等級 1 起、最高也只到等級 1。幀率有上限時「順暢」量不出 GPU 餘裕，升到完整解析度只是多發熱。
-    const floor = opts.settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0
+    const floor = this.adaptiveFloor(opts.settings)
     this.adaptive = new AdaptiveQuality(floor, floor)
     const preset = this.assetPreset()
     this.preset = preset
@@ -506,6 +506,11 @@ export class GameCore {
     return effectivePreset(this.quality, this.settings.quality === 'auto' ? readNetworkInfo() : undefined)
   }
 
+  /** 動態畫質的等級下限：自動畫質且為觸控裝置時為 1（不升到完整解析度），其餘為 0。 */
+  private adaptiveFloor(settings: Settings): number {
+    return settings.quality === 'auto' && readDeviceInfo().coarse ? 1 : 0
+  }
+
   applySettings(settings: Settings): void {
     // 等級相同但 auto ↔ 手動切換時，網路降級與否會變（例如 auto 的 high 因 3G 降到 512 貼圖，改選手動 high），也要更新預設。
     const settingChanged = settings.quality !== this.settings.quality
@@ -516,6 +521,12 @@ export class GameCore {
       this.preset = this.assetPreset()
       this.renderer.setQuality(this.preset)
       this.players.maxVisible = this.maxVisibleFor(q)
+    }
+    // 自動 ↔ 手動切換時動態畫質的下限也要跟著變；下限拉高時等級被推上去，同步解析度與完整模型範圍。
+    if (settingChanged && this.adaptive.setMinLevel(this.adaptiveFloor(settings))) {
+      const level = ADAPTIVE_LEVELS[this.adaptive.level]!
+      this.renderer.setResolutionScale(level.resolution)
+      this.players.nearRadius = level.nearRadius
     }
     this.audio.setVolumes(this.volumes())
     // 設定面板的衣裝選擇也可能經由這裡進來（App 的 settings 與 UiState.outfit 同步）
