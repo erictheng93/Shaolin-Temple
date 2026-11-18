@@ -22,6 +22,10 @@ const PENALTY_CLOSE_CODES = [1013, 1008]
 const OUTFIT_REFILL_MS = 2200
 /** 被限速擋下的衣裝，每隔這段時間檢查一次額度。 */
 const OUTFIT_RETRY_MS = 250
+/** 送出衣裝後等伺服器回音（自己 id、相同值）的時間，超過就重送；比補充間隔稍長。 */
+const OUTFIT_CONFIRM_MS = 3000
+/** 同一個衣裝值等不到回音時最多重送幾次（伺服器已是同值時不廣播，回音可能永遠不來）。 */
+const OUTFIT_MAX_RESENDS = 2
 const round2 = (v: number): number => Math.round(v * 100) / 100
 /**
  * resumeToken 存在 sessionStorage：重新整理後的新頁面以它接回原本的玩家，
@@ -91,9 +95,17 @@ export class NetworkClient {
    */
   private outfitLimiter = new ChatLimiter(() => performance.now(), 3, OUTFIT_REFILL_MS)
   private outfit: number | undefined
-  /** 目前的衣裝還沒送給伺服器（被限速擋下或尚未連線）：只留最新的一個值，額度恢復後補送。 */
+  /**
+   * 目前的衣裝還沒送給伺服器（被限速擋下或尚未連線）：只留最新的一個值，額度恢復後補送。
+   * 送出後還要等自己 id、相同值的回音才算送達（outfitConfirmTimer），逾時就再設回待送。
+   */
   private outfitPending = false
   private outfitTimer: ReturnType<typeof setTimeout> | null = null
+  private outfitConfirmTimer: ReturnType<typeof setTimeout> | null = null
+  /** 目前這個衣裝值已因等不到回音重送的次數；換成別的值時歸零。 */
+  private outfitResends = 0
+  /** 這條連線上伺服器給的自己的 id（welcome.selfId），用來辨認 outfit 回音。 */
+  private selfId: string | undefined
   private pending = new Map<string, PendingAck>()
   private attempt = 0
   private seq = 0
@@ -137,7 +149,7 @@ export class NetworkClient {
   }
 
   /**
-   * 設定顯示名稱：之後的 hello（含斷線恢復）都帶這個名字；已連線時另送 rename（可取代，未送出的舊改名被蓋掉）。
+   * 設定顯示名稱：之後的 hello（含斷線恢復）都帶這個名字；已連線時另送 rename（可取代，未送出的舊改名被蓋掉；進入背景清佇列時保留）。
    * 伺服器清理後以 name 訊息回報結果。
    */
   setName(name: string): void {
@@ -174,8 +186,9 @@ export class NetworkClient {
         outfit: this.outfit,
         ...(this.session ? { session: this.session } : {}),
       })
-      // hello 已帶最新衣裝，斷線期間或被限速而待送的值不必再送。
+      // hello 已帶最新衣裝，斷線期間或被限速而待送的值不必再送，也不等回音（hello 不會有回音）。
       this.outfitPending = false
+      this.outfitResends = 0
       this.clearOutfitTimer()
       // 重送尚未確認的操作；伺服器以 reqId 去重。
       for (const p of this.pending.values()) this.sendNow(p.msg)
@@ -228,6 +241,7 @@ export class NetworkClient {
   /**
    * 更換衣裝。記住目前衣裝（之後每次 hello 都帶，含重連）；已連線時送出 outfit 訊息。
    * 超過限速時只保留最新的選擇、不排隊，額度恢復後補送；斷線時不送（重連的 hello 會帶）。
+   * 送出後等不到自己的回音就重送（每個值最多 OUTFIT_MAX_RESENDS 次），補上伺服器限速丟掉的最後一次選擇。
    * 無效編號（非整數或超出範圍）忽略。
    */
   setOutfit(outfit: number): void {
@@ -235,25 +249,47 @@ export class NetworkClient {
     const changed = outfit !== this.outfit
     this.outfit = outfit
     if (!this.enabled) return
-    if (changed) this.outfitPending = true
+    if (changed) {
+      this.outfitPending = true
+      this.outfitResends = 0
+    }
     if (this.outfitPending) this.trySendOutfit()
   }
 
+  /** 送出待送的衣裝；被限速擋下就稍後再試，送出後開始等回音。 */
   private trySendOutfit(): void {
     this.clearOutfitTimer()
     if (!this.outfitPending || this.outfit === undefined || this.status !== 'online') return
     if (this.outfitLimiter.tryTake()) {
       if (this.sendNow({ t: 'outfit', outfit: this.outfit })) {
         this.outfitPending = false
+        this.outfitConfirmTimer = setTimeout(this.onOutfitUnconfirmed, OUTFIT_CONFIRM_MS)
         return
       }
     }
     this.outfitTimer = setTimeout(() => this.trySendOutfit(), OUTFIT_RETRY_MS)
   }
 
+  private onOutfitUnconfirmed = (): void => {
+    this.outfitConfirmTimer = null
+    if (this.outfitResends >= OUTFIT_MAX_RESENDS) return // 可能是伺服器已是同值而不廣播：不再追。
+    this.outfitResends++
+    this.outfitPending = true
+    this.trySendOutfit()
+  }
+
+  /** 收到 outfit 下行：自己 id、與目前相同的值才算確認；較舊的值不取消等待。 */
+  private onOutfitEcho(id: string, outfit: number): void {
+    if (id !== this.selfId || outfit !== this.outfit || this.outfitPending) return
+    if (this.outfitConfirmTimer) clearTimeout(this.outfitConfirmTimer)
+    this.outfitConfirmTimer = null
+  }
+
+  /** 清掉限速補送與等回音兩個計時器。 */
   private clearOutfitTimer(): void {
     if (this.outfitTimer) clearTimeout(this.outfitTimer)
-    this.outfitTimer = null
+    if (this.outfitConfirmTimer) clearTimeout(this.outfitConfirmTimer)
+    this.outfitTimer = this.outfitConfirmTimer = null
   }
 
   /**
@@ -277,7 +313,9 @@ export class NetworkClient {
         this.sendNow({ t: 'stop', x: last.x, z: last.z, heading: last.heading, seq: ++this.seq })
         last.moving = false
       }
-      this.queue.clear()
+      // 只丟過期的位置（與場景）；還沒送出的 rename 留著，否則同一條連線上改名要等到重連才生效。
+      const rename = this.queue.drain().find((m) => m.t === 'rename')
+      if (rename) this.queue.push(rename)
     } else if (this.enabled && !this.ws && !this.disposed && !this.versionRejected) {
       // 回前景時若已斷線，不等退避計時直接重連。
       this.clearReconnectTimer()
@@ -320,6 +358,7 @@ export class NetworkClient {
       case 'welcome':
         this.attempt = 0 // 收到 welcome 才算連線成功；只 onopen 就被踢的情況仍要持續退避。
         this.lastPos = null
+        this.selfId = msg.selfId
         this.resumeToken = msg.resumeToken
         saveResumeToken(msg.resumeToken)
         // 伺服器快照是權威狀態：斷線期間累積的位置與場景訊息已過時。
@@ -346,6 +385,9 @@ export class NetworkClient {
       case 'pong':
         this.events.emit('rtt', Math.max(0, performance.now() - msg.ts))
         break
+      case 'outfit':
+        this.onOutfitEcho(msg.id, msg.outfit)
+        break
     }
     this.events.emit('message', msg)
   }
@@ -353,6 +395,8 @@ export class NetworkClient {
   private onSocketClosed(code: number): void {
     this.ws = null
     this.stopTimers()
+    // 重連的 hello 會帶最新衣裝，斷線前的補送與等回音都不必留。
+    this.clearOutfitTimer()
     if (this.disposed) return
     if (this.versionRejected) {
       this.setStatus('closed')
