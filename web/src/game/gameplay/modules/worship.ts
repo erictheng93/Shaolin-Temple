@@ -23,11 +23,12 @@ const BOW_HOLD = 0.6
 const KNEEL_DROP = 0.3
 const BOW_TILT = 1.0
 
-/** 每次叩拜到底的時間（秒），引磬對齊這些時間敲。 */
-export const PROSTRATE_STRIKES = Array.from({ length: BOWS }, (_, k) => {
-  const p = KNEEL_IN + ((k + (BOW_DOWN + BOW_HOLD) / 2) / BOWS) * (KNEEL_OUT - KNEEL_IN)
-  return (p * PROSTRATE_MS) / 1000
-})
+/**
+ * 引磬帶領每一拜（秒）：down 是開始前傾的那一刻，敞著敲一聲、餘韻伴隨拜下與停住；
+ * up 是開始起身的那一刻，壓磬一聲把餘韻收掉。
+ */
+const bowTime = (k: number, phase: number) => ((KNEEL_IN + ((k + phase) / BOWS) * (KNEEL_OUT - KNEEL_IN)) * PROSTRATE_MS) / 1000
+export const PROSTRATE_BOWS = Array.from({ length: BOWS }, (_, k) => ({ down: bowTime(k, 0), up: bowTime(k, BOW_HOLD) }))
 
 const bowShape = (phase: number) =>
   phase < BOW_DOWN ? smooth(phase / BOW_DOWN) : phase < BOW_HOLD ? 1 : smooth((1 - phase) / (1 - BOW_HOLD))
@@ -80,7 +81,7 @@ export const worshipModule: GameplayModule = {
       api.animations.registerClip('incense', incenseClip),
       api.audio.defineSfx('qing', (ctx) => synthesizeQing(ctx)),
       api.audio.defineSfx('qing1', (ctx) => synthesizeQing(ctx, [BOW_STRIKE])),
-      api.audio.defineSfx('qing3',(ctx) => synthesizeQing(ctx, PROSTRATE_STRIKES)),
+      api.audio.defineSfx('qing3',(ctx) => synthesizeQing(ctx, PROSTRATE_BOWS.map((b) => b.down), PROSTRATE_BOWS.map((b) => b.up))),
       api.audio.defineSfx('incense', (ctx) => synthesizeIncenseOffering(ctx, (INCENSE_MS * PLANT_AT) / 1000)),
       api.actions.register({
         id: 'bow',

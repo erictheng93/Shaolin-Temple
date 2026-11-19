@@ -3,7 +3,7 @@ import { PIVOT_HEIGHT, PROP_INCENSE, PROP_NONE } from '../../render/AvatarFactor
 import { t } from '../../../i18n'
 import { HALL_CENSERS } from '../../world/zones'
 import { pose, setup } from './testHarness'
-import { INCENSE_MS, PLANT_AT, PROSTRATE_MS, PROSTRATE_STRIKES } from './worship'
+import { INCENSE_MS, PLANT_AT, PROSTRATE_BOWS, PROSTRATE_MS } from './worship'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -39,15 +39,17 @@ describe('worship 模組', () => {
     const { anim } = setup()
     expect(pose(anim, 'prostrate', PROSTRATE_MS, 0).pivot.rotation.x).toBeCloseTo(0)
     expect(pose(anim, 'prostrate', PROSTRATE_MS, 0.999).pivot.position.y).toBeCloseTo(PIVOT_HEIGHT, 2)
-    expect(PROSTRATE_STRIKES).toHaveLength(3)
-    for (const s of PROSTRATE_STRIKES) {
-      const rig = pose(anim, 'prostrate', PROSTRATE_MS, (s * 1000) / PROSTRATE_MS)
-      expect(rig.pivot.rotation.x).toBeCloseTo(1.0, 1)
-      expect(rig.pivot.position.y).toBeCloseTo(PIVOT_HEIGHT - 0.3)
+    expect(PROSTRATE_BOWS).toHaveLength(3)
+    for (const b of PROSTRATE_BOWS) {
+      // 壓磬（起身的號令）那一刻還叩在底
+      const low = pose(anim, 'prostrate', PROSTRATE_MS, (b.up * 1000) / PROSTRATE_MS)
+      expect(low.pivot.rotation.x).toBeCloseTo(1.0, 1)
+      expect(low.pivot.position.y).toBeCloseTo(PIVOT_HEIGHT - 0.3)
+      // 引磬（拜下的號令）那一刻是跪姿（前傾小、仍跪著），兩次叩拜之間會回到這裡
+      const kneeling = pose(anim, 'prostrate', PROSTRATE_MS, (b.down * 1000) / PROSTRATE_MS)
+      expect(kneeling.pivot.rotation.x).toBeLessThan(0.3)
+      expect(kneeling.pivot.position.y).toBeCloseTo(PIVOT_HEIGHT - 0.3)
     }
-    // 兩次叩拜之間回到跪姿（前傾小、仍跪著）
-    const between = pose(anim, 'prostrate', PROSTRATE_MS, (PROSTRATE_STRIKES[0]! + PROSTRATE_STRIKES[1]!) / 2 / (PROSTRATE_MS / 1000))
-    expect(between.pivot.rotation.x).toBeLessThan(0.3)
   })
 
   it('上香動畫：插香前手上有香，插香後沒有', () => {
