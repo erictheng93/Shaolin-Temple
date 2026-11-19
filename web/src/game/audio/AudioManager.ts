@@ -71,27 +71,46 @@ function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
   return buffer
 }
 
+/** 壓磬：餘韻收掉與「嘀」聲本身的衰減時間（秒），以及「嘀」相對於敞著敲的音量。 */
+const QING_DAMP_SECONDS = 0.04
+const QING_DAMP_GAIN = 0.55
+
 /**
  * 合成引磬（手持的小磬）：清亮的高音、餘韻約 2 秒。strikes 是每一聲的起點（秒），可在一段音效裡敲數下，
  * 例如對齊叩拜的動畫。音量為每聲疊加後再正規化。
+ * damps 是壓磬的時間（秒）：手指壓住磬再敲，之前的餘韻在那一刻收掉，只留一聲短促的「嘀」（禮佛時起身的號令）。
  */
-export function synthesizeQing(ctx: BaseAudioContext, strikes: readonly number[] = [0]): AudioBuffer {
+export function synthesizeQing(ctx: BaseAudioContext, strikes: readonly number[] = [0], damps: readonly number[] = []): AudioBuffer {
   const sr = ctx.sampleRate
   const f0 = 1320
   const partials: Array<[ratio: number, amp: number, decay: number]> = [[1, 1, 1.4], [2.32, 0.35, 0.6], [4.1, 0.18, 0.3], [6.3, 0.08, 0.15]]
   const tail = 2.6
-  const len = Math.floor(sr * ((strikes.length ? Math.max(...strikes) : 0) + tail))
+  const len = Math.floor(sr * (Math.max(0, ...strikes, ...damps) + tail))
   const buffer = ctx.createBuffer(1, len, sr)
   const data = buffer.getChannelData(0)
   const attack = Math.floor(sr * 0.002)
   for (const start of strikes) {
     const s0 = Math.floor(start * sr)
+    // 這一聲之後最早的壓磬：從那一刻起餘韻以 QING_DAMP_SECONDS 收掉
+    const damp = Math.min(Infinity, ...damps.filter((d) => d > start)) - start
     for (let i = 0; i < len - s0; i++) {
       const t = i / sr
       let v = 0
       for (const [ratio, amp, decay] of partials) v += amp * Math.sin(2 * Math.PI * f0 * ratio * t) * Math.exp(-t / decay)
       if (i < attack) v *= i / attack
+      if (t > damp) v *= Math.exp(-(t - damp) / QING_DAMP_SECONDS)
       data[s0 + i]! += v
+    }
+  }
+  // 壓磬本身：同樣的分音但幾乎沒有餘韻，音量較小
+  for (const start of damps) {
+    const s0 = Math.floor(start * sr)
+    const n = Math.min(len - s0, Math.floor(sr * QING_DAMP_SECONDS * 8))
+    for (let i = 0; i < n; i++) {
+      const t = i / sr
+      let v = 0
+      for (const [ratio, amp] of partials) v += amp * Math.sin(2 * Math.PI * f0 * ratio * t)
+      data[s0 + i]! += QING_DAMP_GAIN * v * Math.exp(-t / QING_DAMP_SECONDS) * Math.min(1, i / attack)
     }
   }
   let peak = 0
