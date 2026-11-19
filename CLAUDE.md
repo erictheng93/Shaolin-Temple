@@ -98,7 +98,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 ### 音訊
 
 - 沒有背景音樂，聲音留白大於填滿：環境音（風聲、鳥叫、遠處頌缽、隨機 90～210 秒一聲的遠處鐘聲）全部由 `AudioManager` 在執行時合成，走環境音軌（「環境與音樂」音量）。風聲是可循環的雜訊 AudioBuffer 加 lowpass 與緩慢 LFO；遠鐘純本機播放，不經網路、不觸發鐘亭動畫、不喚醒渲染。沒有音檔或音訊相關環境變數。
-- 短音效（鐘、木魚、頌缽、鳥叫）同樣由 `AudioManager` 即時合成為 AudioBuffer；玩法模組以 `defineSfx()` 加自己的合成音效（參拜模組的引磬 `synthesizeQing()`，跪拜時對齊三次叩拜敲三聲）。誦經的木魚由 `modules/chant.ts` 以伺服器時間的節拍格預排，每拍只發一聲（多人同時誦經也只有一個節奏）。
+- 短音效（鐘、木魚、頌缽、鳥叫）同樣由 `AudioManager` 即時合成為 AudioBuffer；玩法模組以 `defineSfx()` 加自己的合成音效（參拜模組的引磬 `synthesizeQing()`：合十在彎腰到底時敲一聲、跪拜對齊三次叩拜敲三聲；上香是 `synthesizeIncenseOffering()`：三拜留白，插香那一刻香腳入灰的沙聲接一聲大磬；敲點都燒進 buffer，動作開始時播一次）。誦經的木魚由 `modules/chant.ts` 以伺服器時間的節拍格預排，每拍只發一聲（多人同時誦經也只有一個節奏）。
 - 靜音或音量為 0 時淡出後暫停 AudioContext，風聲、鳥叫與遠鐘停止；背景時同靜音。
 
 ## 驗證注意
