@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall } from './AudioManager'
+import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall, synthesizeIncenseOffering } from './AudioManager'
 
 // 只實作 synthesizeBirdCall 用到的 createBuffer，node 環境沒有 Web Audio。
 const fakeCtx = (sampleRate = 8000) =>
@@ -26,6 +26,18 @@ describe('synthesizeBirdCall', () => {
   })
 })
 
+describe('synthesizeIncenseOffering', () => {
+  it('插香前留白，只有入灰的沙聲，磬聲落在插香那一刻', () => {
+    const sr = 8000
+    const data = synthesizeIncenseOffering(fakeCtx(sr), 2, seeded(7)).getChannelData(0)
+    const peak = (from: number, to: number) => data.slice(from * sr, to * sr).reduce((m, v) => Math.max(m, Math.abs(v)), 0)
+    expect(peak(0, 1.7)).toBe(0)
+    expect(peak(1.7, 2)).toBeGreaterThan(0)
+    expect(peak(1.7, 2)).toBeLessThan(0.15)
+    expect(peak(2, 2.2)).toBeCloseTo(0.6, 1)
+    expect(Math.abs(data[data.length - 1]!)).toBeLessThan(0.01)
+  })
+})
 
 describe('nextFarBellDelayMs', () => {
   it('間隔落在遠鐘的最小與最大值之間', () => {

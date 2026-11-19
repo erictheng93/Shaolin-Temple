@@ -1,11 +1,15 @@
 import { envelope, smooth, type ClipFn } from '../../anim/AnimationSystem'
-import { synthesizeQing } from '../../audio/AudioManager'
+import { synthesizeIncenseOffering, synthesizeQing } from '../../audio/AudioManager'
 import { FACE_SMILE, PIVOT_HEIGHT, PROP_INCENSE } from '../../render/AvatarFactory'
 import { censerForPosition, pickCenserSpot, pickCushion } from '../../world/worship'
 import { t } from '../../../i18n'
 import type { GameplayModule } from '../types'
 import { installBell } from './bell'
 import { installChant } from './chant'
+
+/** 合十：引磬敲在彎腰到底的那一刻（秒；bow 片段的 envelope 預設在 30% 進度到底）。 */
+const BOW_MS = 2200
+const BOW_STRIKE = (0.3 * BOW_MS) / 1000
 
 /** 跪拜：跪下（前 KNEEL_IN）→ 叩拜三次 → 起身（最後 1 - KNEEL_OUT）。 */
 export const PROSTRATE_MS = 8000
@@ -75,16 +79,18 @@ export const worshipModule: GameplayModule = {
       api.animations.registerClip('prostrate', prostrateClip),
       api.animations.registerClip('incense', incenseClip),
       api.audio.defineSfx('qing', (ctx) => synthesizeQing(ctx)),
-      api.audio.defineSfx('qing3', (ctx) => synthesizeQing(ctx, PROSTRATE_STRIKES)),
+      api.audio.defineSfx('qing1', (ctx) => synthesizeQing(ctx, [BOW_STRIKE])),
+      api.audio.defineSfx('qing3',(ctx) => synthesizeQing(ctx, PROSTRATE_STRIKES)),
+      api.audio.defineSfx('incense', (ctx) => synthesizeIncenseOffering(ctx, (INCENSE_MS * PLANT_AT) / 1000)),
       api.actions.register({
         id: 'bow',
         label: 'action.bow',
         glyph: '🙏',
         cooldownMs: 2500,
         animation: 'bow',
-        durationMs: 2200,
+        durationMs: BOW_MS,
         locksMovement: true,
-        sound: 'wood',
+        sound: 'qing1',
         onConfirmed: counted,
       }),
       api.actions.register({
@@ -109,7 +115,7 @@ export const worshipModule: GameplayModule = {
         animation: 'incense',
         durationMs: INCENSE_MS,
         locksMovement: true,
-        sound: 'qing',
+        sound: 'incense',
         approach: pickCenserSpot,
         onConfirmed: counted,
       }),
