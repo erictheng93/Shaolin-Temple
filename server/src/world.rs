@@ -6,7 +6,7 @@
 //!   （`COURTYARD_DOOR` 第 77 行、`HALL_DOOR` 第 84 行、`ZONES` 第 86～112 行）
 //! - 移動速度 3.2 m/s：`web/src/game/GameCore.ts` 的 `MOVE_SPEED`（第 57 行）
 //! - 動作允許清單：`web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（同時是 action 幀的動作編號，mock 伺服器也用它；
-//!   前端玩法模組 `gameplay/modules/worship.ts`）。兩份由固定資料 `tests/protocol-v4.json` 的 `binary.action.codes` 鎖住。
+//!   前端玩法模組 `gameplay/modules/worship.ts`）。兩份由固定資料 `tests/protocol-v5.json` 的 `binary.action.codes` 鎖住。
 //!
 //! - 障礙物：`layout.ts` 的 `OBSTACLES`（主殿、鐘亭、香爐、石燈籠、樹）與 `zones.ts` 殿內的神龕、供桌、柱子，
 //!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。

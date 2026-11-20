@@ -1,8 +1,7 @@
-# 獨立的第三份實作（Python），用來產生 protocol-v4.json 的 binary 一段（二進位測試向量）。
+# 獨立的第三份實作（Python），用來產生 protocol-v5.json 的 binary 一段（二進位測試向量）。
 # 不 import 前端或 Rust 的任何程式；要增修向量時改這個腳本，執行後把輸出貼回固定資料的 "binary"。
-# 協定版本 4 只新增 JSON 訊息（hello.session、welcome.auth、rename、name），二進位幀與 v3 完全相同，
-# 所以這個腳本的輸出與 v3 相同（只改了檔名）。
-# 用法：python server/tests/protocol-v4-vectors.py > binary.json
+# 協定版本 5 新增 cars 幀（0x04），原本未知的 0x04 標籤改成 0x05。
+# 用法：python server/tests/protocol-v5-vectors.py > binary.json
 import json, math, struct, sys
 PI = math.pi
 
@@ -41,7 +40,7 @@ entry = enc('moves', [[0, 0, 0, 0, 0]])[1:].hex()
 invalid = [
     {'name': '空的幀', 'hex': ''},
     {'name': '未知幀型 0x00', 'hex': '00'},
-    {'name': '未知幀型 0x04', 'hex': '04' + entry},
+    {'name': '未知幀型 0x05', 'hex': '05' + entry},
     {'name': '未知幀型 0x7b（JSON 的「{」）', 'hex': '7b'},
     {'name': '長度不是 1 + 6N（少 1 byte）', 'hex': '01' + entry[:-2]},
     {'name': '長度不是 1 + 6N（多 1 byte）', 'hex': '02' + entry + '00'},
@@ -51,7 +50,6 @@ invalid = [
 ]
 
 # ---- action（0x03，協定版本 3）----
-# 幀 = 0x03, n (u8, 0～127), 動作編號 (u8, CODES 的索引), startedAt mod 2^32 (u32 little-endian)，固定 7 bytes。
 CODES = ['bow', 'prostrate', 'chant', 'chant_end', 'incense', 'bell']
 WRAP = 2 ** 32
 def enc_action(n, action, started_at):
@@ -90,8 +88,6 @@ action_invalid = [
     {'name': f'未知動作編號 {len(CODES)}（對照表之外）', 'hex': '0300' + bytes([len(CODES)]).hex() + good[6:]},
     {'name': '未知動作編號 255', 'hex': '0300ff' + good[6:]},
 ]
-# 還原絕對 startedAt：取「與參考時間（客戶端估計的伺服器現在時間）距離最近、且 mod 2^32 相同」的值，
-# startedAt − 參考時間 落在 [−2^31, 2^31) 毫秒（約 ±24.8 天）內都還原正確。
 unwrap_cases = [
     ('80 ms 前開始（一般的轉送延遲）', T + 123, T + 203),
     ('客戶端時鐘估計慢了 30 ms：startedAt 在參考時間之後', T + 123, T + 93),
@@ -108,7 +104,6 @@ for name, started_at, reference in unwrap_cases:
     got = unwrap(low, reference)
     assert got == started_at, name
     action_unwrap.append({'name': name, 'low': low, 'reference': reference, 'startedAt': got})
-# 範圍外的行為也固定下來：startedAt 比參考時間晚 2^31 ms 時解成早 2^31 ms（真值 − 2^32）。
 edge = [
     ('範圍外：startedAt 比參考時間晚剛好 2^31 ms，解成早 2^31 ms', T + WRAP // 2, T),
 ]
@@ -116,9 +111,101 @@ for name, started_at, reference in edge:
     low = started_at % WRAP
     action_unwrap.append({'name': name, 'low': low, 'reference': reference, 'startedAt': unwrap(low, reference)})
 
+# ---- cars（0x04，協定版本 5）----
+def q_heading(h):
+    q = int(rnd(h * 32768.0 / PI))
+    return ((q + 32768) % 65536) - 32768
+def d_heading(q):
+    return q * PI / 32768.0
+def q_vel(v):
+    cm = rnd(v * 100.0)
+    return int(max(-3000, min(3000, cm)))
+def q_angvel(w):
+    val = rnd(w * 16.0)
+    return int(max(-127, min(127, val)))
+
+def enc_cars(ack, cars):
+    out = bytes([4]) + struct.pack('<H', ack)
+    for car in cars:
+        c = car['c']
+        occ = 1 if car['occupied'] else 0
+        bump = 1 if car['bumped'] else 0
+        flags = (c & 0x0F) | (occ << 4) | (bump << 5)
+        hx = qc(car['x'])
+        hz = qc(car['z'])
+        hh = q_heading(car['heading'])
+        hvx = q_vel(car['vx'])
+        hvz = q_vel(car['vz'])
+        hw = q_angvel(car['w'])
+        out += bytes([flags]) + struct.pack('<hhhhhb', hx, hz, hh, hvx, hvz, hw)
+    return out
+
+def dec_car(car):
+    return {
+        'c': car['c'],
+        'occupied': car['occupied'],
+        'bumped': car['bumped'],
+        'x': qc(car['x']) / 100.0,
+        'z': qc(car['z']) / 100.0,
+        'heading': d_heading(q_heading(car['heading'])),
+        'vx': q_vel(car['vx']) / 100.0,
+        'vz': q_vel(car['vz']) / 100.0,
+        'w': q_angvel(car['w']) / 16.0,
+    }
+
+cars_cases = [
+    ('空幀（ack = 0）', 0, []),
+    ('一台車：c=3, occupied, x=1.25, z=-3, heading=π/2, vx=8, vz=-2.5, w=1.5, ack=65535', 65535, [
+        {'c': 3, 'occupied': True, 'bumped': False, 'x': 1.25, 'z': -3.0, 'heading': PI / 2.0, 'vx': 8.0, 'vz': -2.5, 'w': 1.5}
+    ]),
+    ('朝向 π（須編成 -32768）', 100, [
+        {'c': 0, 'occupied': False, 'bumped': True, 'x': 0.0, 'z': 0.0, 'heading': PI, 'vx': 0.0, 'vz': 0.0, 'w': 0.0}
+    ]),
+    ('16 台車（滿員狀態）', 1234, [
+        {
+            'c': i,
+            'occupied': (i % 2 == 1),
+            'bumped': (i % 3 == 0),
+            'x': (i - 8) * 1.0,
+            'z': (i - 8) * 1.0,
+            'heading': (i - 8) * PI / 8.0,
+            'vx': (i - 8) * 1.5,
+            'vz': -(i - 8) * 1.5,
+            'w': (i - 8) * 0.5,
+        } for i in range(16)
+    ]),
+    ('速度與角速度夾限', 42, [
+        {'c': 7, 'occupied': True, 'bumped': False, 'x': 150.0, 'z': -200.0, 'heading': 0.0, 'vx': 50.0, 'vz': -60.0, 'w': 20.0}
+    ]),
+]
+
+cars_valid = []
+for name, ack, clist in cars_cases:
+    cars_valid.append({
+        'name': name,
+        'input': {'ack': ack, 'cars': clist},
+        'hex': enc_cars(ack, clist).hex(),
+        'decoded': {'ack': ack, 'cars': [dec_car(c) for c in clist]},
+    })
+
+single_car_bytes = enc_cars(0, [{'c': 0, 'occupied': False, 'bumped': False, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0}])[3:]
+cars_invalid = [
+    {'name': '長度 4（不是 3 + 12N）', 'hex': '04000000'},
+    {'name': '17 台車（超過 16 台上限）', 'hex': enc_cars(0, [{'c': i % 16, 'occupied': False, 'bumped': False, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0} for i in range(17)]).hex()},
+    {'name': '保留位元 bit 6 為 1', 'hex': '040000' + bytes([0x40]).hex() + single_car_bytes[1:].hex()},
+    {'name': '保留位元 bit 7 為 1', 'hex': '040000' + bytes([0x80]).hex() + single_car_bytes[1:].hex()},
+    {'name': 'x 超出 ±100 公尺（10001 公分）', 'hex': '040000' + '00' + struct.pack('<hh', 10001, 0).hex() + single_car_bytes[5:].hex()},
+    {'name': 'z 超出 ±100 公尺（−32768 公分）', 'hex': '040000' + '00' + struct.pack('<hh', 0, -32768).hex() + single_car_bytes[5:].hex()},
+    {'name': '同一幀內 c 重複', 'hex': enc_cars(0, [
+        {'c': 2, 'occupied': False, 'bumped': False, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0},
+        {'c': 2, 'occupied': True, 'bumped': False, 'x': 1.0, 'z': 1.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0},
+    ]).hex()},
+]
+
 sys.stdout.reconfigure(encoding='utf-8')
 print(json.dumps({
     'valid': valid,
     'invalid': invalid,
     'action': {'codes': CODES, 'valid': action_valid, 'invalid': action_invalid, 'unwrap': action_unwrap},
+    'cars': {'valid': cars_valid, 'invalid': cars_invalid},
 }, ensure_ascii=False))

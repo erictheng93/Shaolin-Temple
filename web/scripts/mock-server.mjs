@@ -19,7 +19,7 @@ import { WebSocketServer } from 'ws'
 import { randomTempleName } from '../src/game/core/names.ts'
 import { ACTION_CODES, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch } from '../src/game/net/binaryFrame.ts'
 
-const PROTOCOL_VERSION = 4 // 與 src/game/net/protocol.ts 一致
+const PROTOCOL_VERSION = 5 // 與 src/game/net/protocol.ts 一致
 const PROVIDERS = ['google', 'line']
 /** 改名頻率上限：與正式伺服器相同，約每 2 秒 1 次（超過的直接忽略）。 */
 const RENAME_MIN_INTERVAL_MS = 2000
@@ -267,7 +267,7 @@ wss.on('connection', (ws) => {
         const name = cleanName(m.name)
         const renamed = name !== old.name
         if (renamed) old.name = name
-        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), auth })
+        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), cars: [], auth })
         if (renamed) for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: old.id, name })
         if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
         return
@@ -298,6 +298,7 @@ wss.on('connection', (ws) => {
         resumeToken: me.token,
         serverTime: now(),
         players: [...players.values()].map(snapshot),
+        cars: [],
         auth,
       })
       broadcast({ t: 'join', player: snapshot(me) }, id)
@@ -350,6 +351,12 @@ wss.on('connection', (ws) => {
       }
       case 'ping':
         send(ws, { t: 'pong', ts: m.ts, serverTime: now() })
+        break
+      case 'claim':
+      case 'ride':
+        send(ws, { t: 'error', code: 'car_unavailable', message: '碰碰車暫未開放' })
+        break
+      case 'drive':
         break
     }
   })

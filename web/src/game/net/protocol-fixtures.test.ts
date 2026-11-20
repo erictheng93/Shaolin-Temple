@@ -1,7 +1,16 @@
-import fixtures from '../../../../server/tests/protocol-v4.json'
+import fixtures from '../../../../server/tests/protocol-v5.json'
 import { describe, expect, it } from 'vitest'
-import { ACTION_CODES, decodeAction, encodeAction, encodeBatch, unwrapStartedAt, type BatchMessage } from './binaryFrame'
-import { FrameContext, PROTOCOL_VERSION, decode, encode, type ClientMessage, type DecodeContext } from './protocol'
+import {
+  ACTION_CODES,
+  decodeAction,
+  decodeCars,
+  encodeAction,
+  encodeBatch,
+  encodeCars,
+  unwrapStartedAt,
+  type BatchMessage,
+} from './binaryFrame'
+import { FrameContext, KIND_COUNT, PROTOCOL_VERSION, decode, encode, type ClientMessage, type DecodeContext } from './protocol'
 
 const fromHex = (hex: string): ArrayBuffer => {
   const out = new Uint8Array(hex.length / 2)
@@ -10,17 +19,27 @@ const fromHex = (hex: string): ArrayBuffer => {
 }
 const toHex = (bytes: Uint8Array): string => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 
-it('Rust 共用 v4 固定資料可由前端收發', () => {
+it('Rust 共用 v5 固定資料可由前端收發', () => {
   for (const m of fixtures.client) if (m.t === 'hello') expect(m.v).toBe(PROTOCOL_VERSION)
   for (const message of fixtures.server) expect(decode(JSON.stringify(message))).toEqual(message)
   for (const message of fixtures.client) expect(JSON.parse(encode(message as ClientMessage))).toEqual(message)
 })
 
-it('固定資料涵蓋 v4 新增的訊息：welcome.auth 三種身份、name、rename、帶／不帶 session 的 hello', () => {
+it('車種數量與固定資料 kindCount 相同', () => {
+  expect(KIND_COUNT).toBe(fixtures.kindCount)
+})
+
+it('固定資料涵蓋 v4/v5 新增的訊息：welcome.auth 三種身份、name、rename、帶／不帶 session 的 hello、car、carGone、knock', () => {
   const auths = fixtures.server.flatMap((m) => (m.t === 'welcome' && 'auth' in m ? [m.auth] : []))
   expect(new Set(auths)).toEqual(new Set(['guest', 'google', 'line']))
   expect(fixtures.server.some((m) => m.t === 'name')).toBe(true)
+  expect(fixtures.server.some((m) => m.t === 'car')).toBe(true)
+  expect(fixtures.server.some((m) => m.t === 'carGone')).toBe(true)
+  expect(fixtures.server.some((m) => m.t === 'knock')).toBe(true)
   expect(fixtures.client.some((m) => m.t === 'rename')).toBe(true)
+  expect(fixtures.client.some((m) => m.t === 'claim')).toBe(true)
+  expect(fixtures.client.some((m) => m.t === 'ride')).toBe(true)
+  expect(fixtures.client.some((m) => m.t === 'drive')).toBe(true)
   const hellos = fixtures.client.filter((m) => m.t === 'hello')
   expect(hellos.some((m) => 'session' in m)).toBe(true)
   expect(hellos.some((m) => !('session' in m))).toBe(true)
@@ -96,11 +115,52 @@ describe('action 二進位幀（與 Rust 共用的測試向量）', () => {
   it('FrameContext 以 welcome／pong 的 serverTime 校正時鐘', () => {
     let now = 1000
     const ctx = new FrameContext(() => now)
-    ctx.observe({ t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 5_000_000, players: [], auth: 'guest' })
+    ctx.observe({ t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 5_000_000, players: [], cars: [], auth: 'guest' })
     now = 1500
     expect(ctx.serverNow()).toBe(5_000_500)
     ctx.observe({ t: 'pong', ts: 0, serverTime: 6_000_000 })
     now = 1600
     expect(ctx.serverNow()).toBe(6_000_100)
+  })
+})
+
+describe('cars 二進位幀（與 Rust 共用的測試向量）', () => {
+  const { cars } = fixtures.binary
+
+  it('編碼結果等於 hex，解碼結果等於 decoded', () => {
+    for (const v of cars.valid) {
+      expect(toHex(encodeCars(v.input.ack, v.input.cars)!), v.name).toBe(v.hex)
+      const decoded = decodeCars(fromHex(v.hex))
+      expect(decoded, v.name).not.toBeNull()
+      expect(decoded!.ack, v.name).toBe(v.decoded.ack)
+      expect(decoded!.cars.length, v.name).toBe(v.decoded.cars.length)
+      for (let i = 0; i < decoded!.cars.length; i++) {
+        const actual = decoded!.cars[i]!
+        const expected = v.decoded.cars[i]!
+        expect(actual.c, v.name).toBe(expected.c)
+        expect(actual.occupied, v.name).toBe(expected.occupied)
+        expect(actual.bumped, v.name).toBe(expected.bumped)
+        expect(actual.x, v.name).toBeCloseTo(expected.x, 2)
+        expect(actual.z, v.name).toBeCloseTo(expected.z, 2)
+        let d = ((actual.heading - expected.heading) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)
+        if (d > Math.PI) d = 2 * Math.PI - d
+        expect(d, v.name).toBeLessThan(1e-4)
+        expect(actual.vx, v.name).toBeCloseTo(expected.vx, 2)
+        expect(actual.vz, v.name).toBeCloseTo(expected.vz, 2)
+        expect(actual.w, v.name).toBeCloseTo(expected.w, 2)
+      }
+      expect(decode(fromHex(v.hex)), v.name).toEqual({
+        t: 'cars',
+        ack: v.decoded.ack,
+        cars: decoded!.cars,
+      })
+    }
+  })
+
+  it('格式不符或超出限制回傳 null', () => {
+    for (const v of cars.invalid) {
+      expect(decodeCars(fromHex(v.hex)), v.name).toBeNull()
+      expect(decode(fromHex(v.hex)), v.name).toBeNull()
+    }
   })
 })
