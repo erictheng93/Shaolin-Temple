@@ -24,7 +24,7 @@ impl Rect {
     pub fn contains(&self, x: f64, z: f64) -> bool {
         (self.min_x..=self.max_x).contains(&x) && (self.min_z..=self.max_z).contains(&z)
     }
-    pub fn grow(&self, m: f64) -> Rect {
+    pub const fn grow(&self, m: f64) -> Rect {
         Rect {
             min_x: self.min_x - m,
             max_x: self.max_x + m,
@@ -87,6 +87,8 @@ pub struct Zone {
     pub portals: &'static [Portal],
     /// 不可走的矩形（已含角色半徑）。
     pub obstacles: &'static [Rect],
+    /// 未加角色半徑的原始矩形。
+    pub solids: &'static [Rect],
 }
 impl Zone {
     /// 從 (x0,z0) 直線走到 (x1,z1) 是否會穿過障礙物。障礙物先內縮 `OBSTACLE_TOLERANCE`，
@@ -104,23 +106,48 @@ const PLAYER_RADIUS: f64 = 0.35;
 /// 障礙物檢查的容許誤差（公尺）。
 pub const OBSTACLE_TOLERANCE: f64 = 0.1;
 
-const fn solid(min_x: f64, max_x: f64, min_z: f64, max_z: f64) -> Rect {
-    Rect {
-        min_x: min_x - PLAYER_RADIUS,
-        max_x: max_x + PLAYER_RADIUS,
-        min_z: min_z - PLAYER_RADIUS,
-        max_z: max_z + PLAYER_RADIUS,
+const fn raw_solid(min_x: f64, max_x: f64, min_z: f64, max_z: f64) -> Rect {
+    Rect { min_x, max_x, min_z, max_z }
+}
+const fn raw_square(x: f64, z: f64, half: f64) -> Rect {
+    raw_solid(x - half, x + half, z - half, z + half)
+}
+const fn raw_tree(x: f64, z: f64, scale: f64) -> Rect {
+    raw_square(x, z, 0.5 * scale)
+}
+
+const fn pad_rects<const N: usize>(solids: &[Rect; N]) -> [Rect; N] {
+    let mut out = [Rect { min_x: 0.0, max_x: 0.0, min_z: 0.0, max_z: 0.0 }; N];
+    let mut i = 0;
+    while i < N {
+        out[i] = solids[i].grow(PLAYER_RADIUS);
+        i += 1;
     }
-}
-const fn square(x: f64, z: f64, half: f64) -> Rect {
-    solid(x - half, x + half, z - half, z + half)
-}
-const fn tree(x: f64, z: f64, scale: f64) -> Rect {
-    square(x, z, 0.5 * scale)
+    out
 }
 
 /// 出入口範圍的容許誤差（公尺）。
 pub const PORTAL_TOLERANCE: f64 = 0.5;
+
+pub static COURTYARD_SOLIDS: [Rect; 16] = [
+    raw_solid(-7.5, 7.5, -18.0, -6.2), // 主殿
+    raw_solid(10.0, 14.0, -6.0, -2.0), // 鐘亭
+    raw_square(0.0, -1.5, 0.9),        // 香爐
+    raw_square(-4.0, 3.0, 0.35),       // 石燈籠
+    raw_square(4.0, 3.0, 0.35),
+    raw_square(-4.0, -4.0, 0.35),
+    raw_square(4.0, -4.0, 0.35),
+    raw_tree(-16.0, -14.0, 1.3),
+    raw_tree(-15.0, -4.0, 1.0),
+    raw_tree(-17.0, 6.0, 1.2),
+    raw_tree(-14.0, 14.0, 0.9),
+    raw_tree(16.0, -14.0, 1.2),
+    raw_tree(17.0, 5.0, 1.1),
+    raw_tree(14.0, 14.0, 1.0),
+    raw_tree(-9.0, 16.0, 0.8),
+    raw_tree(9.0, 16.5, 0.9),
+];
+pub static COURTYARD_OBSTACLES: [Rect; 16] = pad_rects(&COURTYARD_SOLIDS);
 
 pub static COURTYARD: Zone = Zone {
     id: "courtyard",
@@ -149,25 +176,21 @@ pub static COURTYARD: Zone = Zone {
             heading: PI,
         },
     }],
-    obstacles: &[
-        solid(-7.5, 7.5, -18.0, -6.2), // 主殿
-        solid(10.0, 14.0, -6.0, -2.0), // 鐘亭
-        square(0.0, -1.5, 0.9),        // 香爐
-        square(-4.0, 3.0, 0.35),       // 石燈籠
-        square(4.0, 3.0, 0.35),
-        square(-4.0, -4.0, 0.35),
-        square(4.0, -4.0, 0.35),
-        tree(-16.0, -14.0, 1.3),
-        tree(-15.0, -4.0, 1.0),
-        tree(-17.0, 6.0, 1.2),
-        tree(-14.0, 14.0, 0.9),
-        tree(16.0, -14.0, 1.2),
-        tree(17.0, 5.0, 1.1),
-        tree(14.0, 14.0, 1.0),
-        tree(-9.0, 16.0, 0.8),
-        tree(9.0, 16.5, 0.9),
-    ],
+    obstacles: &COURTYARD_OBSTACLES,
+    solids: &COURTYARD_SOLIDS,
 };
+
+pub static HALL_SOLIDS: [Rect; 8] = [
+    raw_solid(-7.6, 7.6, -9.0, -5.2), // 神龕台基
+    raw_solid(-4.6, 4.6, -4.8, -4.0), // 供桌
+    raw_square(-5.2, 5.0, 0.32),      // 柱子
+    raw_square(-5.2, 1.0, 0.32),
+    raw_square(-5.2, -3.0, 0.32),
+    raw_square(5.2, 5.0, 0.32),
+    raw_square(5.2, 1.0, 0.32),
+    raw_square(5.2, -3.0, 0.32),
+];
+pub static HALL_OBSTACLES: [Rect; 8] = pad_rects(&HALL_SOLIDS);
 
 pub static HALL: Zone = Zone {
     id: "hall",
@@ -196,16 +219,8 @@ pub static HALL: Zone = Zone {
             heading: 0.0,
         },
     }],
-    obstacles: &[
-        solid(-7.6, 7.6, -9.0, -5.2), // 神龕台基
-        solid(-4.6, 4.6, -4.8, -4.0), // 供桌
-        square(-5.2, 5.0, 0.32),      // 柱子
-        square(-5.2, 1.0, 0.32),
-        square(-5.2, -3.0, 0.32),
-        square(5.2, 5.0, 0.32),
-        square(5.2, 1.0, 0.32),
-        square(5.2, -3.0, 0.32),
-    ],
+    obstacles: &HALL_OBSTACLES,
+    solids: &HALL_SOLIDS,
 };
 
 pub static ZONES: [&Zone; 2] = [&COURTYARD, &HALL];
@@ -297,5 +312,26 @@ mod tests {
         assert_eq!(normalize_heading(PI), PI);
         assert_eq!(normalize_heading(-PI), PI);
         assert!(normalize_heading(1e300).abs() <= PI);
+    }
+
+    #[test]
+    fn padded_obstacles_equal_solids_grown_by_player_radius() {
+        for z in ZONES {
+            assert_eq!(z.obstacles.len(), z.solids.len(), "zone: {}", z.id);
+            for (i, (obs, sol)) in z.obstacles.iter().zip(z.solids.iter()).enumerate() {
+                let grown = sol.grow(0.35);
+                assert!(
+                    (obs.min_x - grown.min_x).abs() < 1e-9
+                        && (obs.max_x - grown.max_x).abs() < 1e-9
+                        && (obs.min_z - grown.min_z).abs() < 1e-9
+                        && (obs.max_z - grown.max_z).abs() < 1e-9,
+                    "zone {} obstacle {} does not match solid grown by 0.35: obs={:?}, grown={:?}",
+                    z.id,
+                    i,
+                    obs,
+                    grown
+                );
+            }
+        }
     }
 }
