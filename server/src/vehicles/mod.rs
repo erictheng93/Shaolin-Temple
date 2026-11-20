@@ -5,9 +5,11 @@
 pub mod params;
 pub mod drive;
 pub mod world;
+pub mod knock;
 pub use params::*;
 pub use drive::*;
 pub use world::*;
+pub use knock::*;
 
 #[cfg(test)]
 mod tests {

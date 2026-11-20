@@ -79,6 +79,18 @@ impl Client {
             .unwrap();
     }
 
+    async fn action(&self, req_id: &str, action: &str, data_ok: bool) {
+        self.room
+            .send(RoomCommand::Action {
+                who: self.who.clone(),
+                req_id: req_id.into(),
+                action: action.into(),
+                data_ok,
+            })
+            .await
+            .unwrap();
+    }
+
     async fn position(&mut self, x: f64, z: f64) {
         self.x = x;
         self.z = z;
@@ -142,13 +154,13 @@ impl Client {
 }
 
 async fn connect(room: &RoomTx) -> Client {
-    let (out, rx) = mpsc::channel(64);
+    let (out, rx) = mpsc::channel(2048);
     let who = super::join(room, "測試", AuthKind::Guest, 0, out).await.unwrap();
     Client::from_welcome(room, who, rx)
 }
 
 async fn resume(room: &RoomTx, token: &str) -> Option<Client> {
-    let (outbound, rx) = mpsc::channel(64);
+    let (outbound, rx) = mpsc::channel(2048);
     let (reply, received) = oneshot::channel();
     room.send(RoomCommand::Resume {
         token: token.into(),
@@ -197,6 +209,71 @@ fn find_car_msg(msgs: &[ServerMessage]) -> Option<CarMsg> {
         }),
         _ => None,
     })
+}
+
+async fn connect_with_welcome(room: &RoomTx) -> (Client, Vec<PlayerSnapshot>) {
+    let (out, mut rx) = mpsc::channel(2048);
+    let who = super::join(room, "測試", AuthKind::Guest, 0, out).await.unwrap();
+    let ServerMessage::Welcome {
+        players,
+        resume_token,
+        ..
+    } = rx.try_recv().unwrap()
+    else {
+        panic!("first message must be welcome");
+    };
+    let me = players.iter().find(|p| p.id == who.id).unwrap();
+    let client = Client {
+        room: room.clone(),
+        x: me.x,
+        z: me.z,
+        token: resume_token,
+        who,
+        rx,
+    };
+    (client, players)
+}
+
+fn find_knock_msg(msgs: &[ServerMessage]) -> Option<(String, f64, f64, f64, f64, f64)> {
+    for msg in msgs {
+        if let ServerMessage::Knock {
+            id,
+            x,
+            z,
+            to_x,
+            to_z,
+            at,
+        } = msg
+        {
+            return Some((id.clone(), *x, *z, *to_x, *to_z, *at));
+        }
+    }
+    None
+}
+
+fn find_ack_msg(msgs: &[ServerMessage], req_id: &str) -> Option<(bool, Option<String>)> {
+    for msg in msgs {
+        if let ServerMessage::Ack {
+            req_id: r,
+            ok,
+            reason,
+        } = msg
+        {
+            if r == req_id {
+                return Some((*ok, reason.clone()));
+            }
+        }
+    }
+    None
+}
+
+fn find_sync_msg(msgs: &[ServerMessage]) -> Option<Vec<MoveTuple>> {
+    for msg in msgs {
+        if let ServerMessage::Sync { m } = msg {
+            return Some(m.clone());
+        }
+    }
+    None
 }
 
 // 1. claim_spawns_at_free_bay_and_mounts: 領車成功，生在 bay 0、玩家 riding=Some(c)、廣播 car
@@ -779,4 +856,346 @@ async fn resumed_player_is_on_foot() {
     sleep(Duration::from_millis(50)).await;
     let msgs = a2.drain();
     assert!(find_car_msg(&msgs).is_some());
+}
+
+// ==========================================
+// 任務 7：碰碰車撞飛測試
+// ==========================================
+
+// 21. a_fast_occupied_car_knocks_a_walker_and_broadcasts_knock:
+// 高速有人車撞擊步行者，廣播 knock 且 knock.toX/toZ 等於伺服器記錄的玩家座標
+#[tokio::test(start_paused = true)]
+async fn a_fast_occupied_car_knocks_a_walker_and_broadcasts_knock() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    b.walk_to_bay0().await; // b 位於 (-10.5, 7.5)
+    sleep(Duration::from_millis(50)).await;
+    a.drain();
+    b.drain();
+
+    let mut knock_info = None;
+    for seq in 1..=30 {
+        a.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+        let msgs = b.drain();
+        if let Some(k) = find_knock_msg(&msgs) {
+            println!("knock at seq {}", seq);
+            knock_info = Some(k);
+            break;
+        }
+    }
+
+    let (id, from_x, from_z, to_x, to_z, _at) = knock_info.expect("b should be knocked");
+    assert_eq!(id, b.who.id);
+    assert_eq!(from_x, -10.5);
+    assert_eq!(from_z, 7.5);
+
+    // a 也應收到 knock 廣播
+    let msgs_a = a.drain();
+    assert!(find_knock_msg(&msgs_a).is_some());
+
+    // knock.toX/toZ 等於伺服器記錄的玩家座標
+    let (_, players) = connect_with_welcome(&room).await;
+    let b_rec = players.iter().find(|p| p.id == b.who.id).unwrap();
+    assert_eq!(b_rec.x, to_x);
+    assert_eq!(b_rec.z, to_z);
+}
+
+// 22. slow_empty_or_unoccupied_cars_do_not_knock: 速率 2.0 的有人車、速率 5 的空車各一皆不撞飛
+#[tokio::test(start_paused = true)]
+async fn slow_empty_or_unoccupied_cars_do_not_knock() {
+    // 1. 速率 2.0 的有人車不撞飛
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    let mut b = connect(&room).await;
+    b.walk_to_counter().await;
+    b.position(-11.2, 7.5).await; // 緊鄰車輛 (-12.0, 7.5) 前方，車剛起步即接觸
+    sleep(Duration::from_millis(50)).await;
+    b.drain();
+
+    // 輕踩油門 2 個步進（速度 < 2.5 m/s 即停止受力）
+    for seq in 1..=2 {
+        a.drive(seq, 0, 100).await;
+        sleep(Duration::from_millis(33)).await;
+    }
+    // 檢查 b 沒有收到 knock
+    assert!(find_knock_msg(&b.drain()).is_none());
+
+    // 2. 速率 5.0 的空車不撞飛
+    let room2 = spawn_room(RoomConfig::new(50));
+    let mut a2 = connect(&room2).await;
+    a2.walk_to_counter().await;
+    a2.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    let mut b2 = connect(&room2).await;
+    b2.walk_to_counter().await;
+    b2.position(-7.0, 7.5).await;
+    sleep(Duration::from_millis(50)).await;
+    b2.drain();
+
+    // a2 加速至高速 (~5 m/s) 後下車
+    for seq in 1..=12 {
+        a2.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+    }
+    a2.ride(None).await;
+    sleep(Duration::from_millis(10)).await;
+
+    // 空車滑行穿過 b2 所在位置
+    for _ in 0..15 {
+        sleep(Duration::from_millis(33)).await;
+    }
+    assert!(find_knock_msg(&b2.drain()).is_none());
+}
+
+// 23. knocked_player_cannot_move_or_act_until_recovered_then_gets_a_sync:
+// 撞飛期間無法移動或動作，恢復時本人收到 sync
+#[tokio::test(start_paused = true)]
+async fn knocked_player_cannot_move_or_act_until_recovered_then_gets_a_sync() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    b.walk_to_bay0().await;
+    sleep(Duration::from_millis(50)).await;
+    b.drain();
+
+    for seq in 1..=30 {
+        a.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+        if find_knock_msg(&b.drain()).is_some() {
+            break;
+        }
+    }
+
+    // 撞飛期間：發送 move 與 action 皆被拒絕或忽略
+    b.position(-5.0, 7.5).await;
+    b.action("req-1", "bow", true).await;
+    sleep(Duration::from_millis(50)).await;
+
+    let msgs = b.drain();
+    let (ok, reason) = find_ack_msg(&msgs, "req-1").expect("should receive ack");
+    assert!(!ok);
+    assert_eq!(reason.as_deref(), Some("knocked"));
+
+    // 等待 1.8 秒（flightMs 900 + recoverMs 900）到期
+    let mut sync_received = false;
+    for _ in 0..25 {
+        sleep(Duration::from_millis(100)).await;
+        let msgs = b.drain();
+        if let Some(m) = find_sync_msg(&msgs) {
+            assert!(!m.is_empty());
+            assert_eq!(m[0].4, Moving::Stopped);
+            sync_received = true;
+            break;
+        }
+    }
+    assert!(sync_received, "knocked_until 到期的那個物理步應對本人送一筆 sync");
+
+    // 恢復後可正常 action
+    b.action("req-2", "bow", true).await;
+    sleep(Duration::from_millis(50)).await;
+    let msgs = b.drain();
+    let (ok, reason) = find_ack_msg(&msgs, "req-2").expect("should receive ack");
+    assert!(ok);
+    assert!(reason.is_none());
+}
+
+// 24. immune_player_is_not_knocked_again_for_3s_after_recovery:
+// 恢復後 3 秒內免疫：第 4.7 秒仍免疫、第 4.9 秒可再被撞
+#[tokio::test(start_paused = true)]
+async fn immune_player_is_not_knocked_again_for_3s_after_recovery() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut c = connect(&room).await;
+
+    // a, c 先就定位到檔口
+    a.walk_to_counter().await;
+    c.walk_to_counter().await;
+
+    // a 領車 0
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    // b 走到 Bay 0 前方 (-10.5, 7.5)
+    b.walk_to_bay0().await;
+    sleep(Duration::from_millis(50)).await;
+    b.drain();
+
+    // 第一次撞飛（t = 0 附近）
+    let mut knock_occurred = false;
+    for seq in 1..=30 {
+        a.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+        let msgs = b.drain();
+        if find_knock_msg(&msgs).is_some() {
+            knock_occurred = true;
+            break;
+        }
+    }
+    assert!(knock_occurred, "first knock should occur");
+
+    // a 開走清空 Bay 0
+    for seq in 31..=45 {
+        a.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+    }
+
+    // 等待 1.8 秒恢復期（飛行 900ms + 起身 900ms）
+    for _ in 0..15 {
+        sleep(Duration::from_millis(100)).await;
+        b.drain();
+    }
+
+    // b 走回 Bay 0 前方 (-10.5, 7.5)（從落點 ~9.5 走 2 公尺花 1 秒，速度 2.0 < 3.2 合法）
+    sleep(Duration::from_secs(1)).await;
+    b.drain();
+    b.position(-10.5, 7.5).await;
+    sleep(Duration::from_millis(50)).await;
+
+    // 司機 c 在空的 Bay 0 領車
+    c.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    // 推進至撞飛後約 3.8 秒
+    for _ in 0..8 {
+        sleep(Duration::from_millis(100)).await;
+        b.drain();
+    }
+
+    // 司機 c 於 3.8 秒開始衝刺，約在第 4.7 秒撞上 b
+    for seq in 1..=25 {
+        c.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+    }
+    let msgs_at_4_7 = b.drain();
+    // 第 4.7 秒仍處於 4.8 秒無敵期內，未被撞飛
+    assert!(
+        find_knock_msg(&msgs_at_4_7).is_none(),
+        "player should be immune at 4.7s"
+    );
+
+    // 司機 c 繼續衝撞推進至第 4.9 秒（越過 4.8 秒無敵期截止線）
+    let mut knock2 = false;
+    for seq in 26..=40 {
+        c.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+        let msgs = b.drain();
+        if find_knock_msg(&msgs).is_some() {
+            knock2 = true;
+            break;
+        }
+    }
+    // 第 4.9 秒無敵失效，再次被撞飛
+    assert!(knock2, "second knock should occur after immunity expires");
+}
+
+// 25. knocking_clears_the_stored_action:
+// 被撞後新加入者的 welcome 快照中該玩家沒有 action
+#[tokio::test(start_paused = true)]
+async fn knocking_clears_the_stored_action() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+
+    b.walk_to_bay0().await;
+    b.action("act-1", "bow", true).await;
+    sleep(Duration::from_millis(50)).await;
+
+    // 檢查撞飛前 action 存在
+    let (_, players_before) = connect_with_welcome(&room).await;
+    let b_before = players_before.iter().find(|p| p.id == b.who.id).unwrap();
+    assert_eq!(
+        b_before.action.as_ref().map(|a| a.id.as_str()),
+        Some("bow")
+    );
+
+    // a 高速撞飛 b
+    let mut knock_received = false;
+    for seq in 1..=40 {
+        a.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+        let msgs = b.drain();
+        if find_knock_msg(&msgs).is_some() {
+            knock_received = true;
+            break;
+        }
+    }
+    assert!(knock_received, "knock should have occurred!");
+
+    // 檢查撞飛後新加入者的 welcome 快照中該玩家沒有 action
+    let (_, players_after) = connect_with_welcome(&room).await;
+    let b_after = players_after.iter().find(|p| p.id == b.who.id).unwrap();
+    assert!(b_after.action.is_none());
+}
+
+// 26. riders_and_grace_players_are_never_knocked:
+// 騎士與斷線保留期中的玩家永不被撞飛
+#[tokio::test(start_paused = true)]
+async fn riders_and_grace_players_are_never_knocked() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+
+    a.walk_to_counter().await;
+    a.claim(0).await; // Bay 0 (-12.0, 7.5)
+    sleep(Duration::from_millis(50)).await;
+
+    b.walk_to_counter().await;
+    b.claim(1).await; // Bay 1 (-12.0, 5.0)
+    sleep(Duration::from_millis(50)).await;
+    a.drain();
+    b.drain();
+
+    // 1. 車輛互撞（騎士永不被撞飛）
+    // a 車轉向衝撞 b 車
+    for seq in 1..=30 {
+        a.drive(seq, 64, 255).await;
+        sleep(Duration::from_millis(33)).await;
+    }
+    assert!(find_knock_msg(&a.drain()).is_none());
+    assert!(find_knock_msg(&b.drain()).is_none());
+
+    // 2. 斷線保留期（grace）中的玩家永不被撞飛
+    let mut c = connect(&room).await;
+    c.walk_to_bay0().await; // 位於 (-10.5, 7.5)
+    c.disconnect().await;
+    sleep(Duration::from_millis(50)).await;
+
+    // 由另一司機 d 高速衝過 (-10.5, 7.5)
+    let mut d = connect(&room).await;
+    d.walk_to_counter().await;
+    d.claim(2).await;
+    sleep(Duration::from_millis(50)).await;
+    for seq in 1..=30 {
+        d.drive(seq, 0, 255).await;
+        sleep(Duration::from_millis(33)).await;
+    }
+    // 全場不應出現 c 的 knock 事件
+    let msgs_d = d.drain();
+    for msg in msgs_d {
+        if let ServerMessage::Knock { id, .. } = msg {
+            assert_ne!(id, c.who.id);
+        }
+    }
 }

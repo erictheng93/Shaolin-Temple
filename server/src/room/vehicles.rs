@@ -365,7 +365,8 @@ impl Room {
             return false;
         }
         let has_rider = self.cars.values().any(|c| c.driver.is_some());
-        has_rider || self.vehicles.any_awake()
+        let has_knocked = self.players.values().any(|p| p.knocked_until.is_some());
+        has_rider || has_knocked || self.vehicles.any_awake()
     }
 
     pub(crate) fn cleanup_expired_cars(&mut self, now: Instant) {
@@ -397,6 +398,29 @@ impl Room {
     /// 物理步進：30Hz
     pub(crate) fn physics_step(&mut self, now: Instant) {
         let p_params = params();
+
+        // 0. 到期的被撞玩家恢復並發送 sync
+        let recovered: Vec<(String, ServerMessage)> = self
+            .players
+            .values_mut()
+            .filter_map(|pl| {
+                if let Some(t) = pl.knocked_until {
+                    if now >= t {
+                        pl.knocked_until = None;
+                        return Some((
+                            pl.id.clone(),
+                            ServerMessage::Sync {
+                                m: vec![tuple(pl)],
+                            },
+                        ));
+                    }
+                }
+                None
+            })
+            .collect();
+        for (id, msg) in recovered {
+            self.send_to(&id, msg, now);
+        }
 
         // 1. 超過 inputTimeoutMs 沒有 drive 的車輸入歸零
         let timeout = Duration::from_millis(p_params.physics.input_timeout_ms);
@@ -451,6 +475,80 @@ impl Room {
         // 5. 物理模擬步進
         self.vehicles.step();
         self.physics_steps += 1;
+
+        // 5.5. 撞飛判定：
+        // 每個物理步，對每台有人開且速率 ≥ minSpeed 的車、每位庭院在線且未騎乘、
+        // now ≥ knocked_until、now ≥ immune_until 的玩家：distance_to_car ≤ hitRadius 即撞飛。
+        let flight_dur = Duration::from_millis(p_params.knock.flight_ms);
+        let recover_dur = Duration::from_millis(p_params.knock.recover_ms);
+        let immune_dur = Duration::from_millis(p_params.knock.immune_ms);
+
+        let mut knocks = Vec::new();
+
+        for (&c, car) in &self.cars {
+            if car.driver.is_none() {
+                continue;
+            }
+            let Some(st) = self.vehicles.car(c) else {
+                continue;
+            };
+            let speed = st.vx.hypot(st.vz);
+            if speed < p_params.knock.min_speed {
+                continue;
+            }
+            let dx = (st.vx / speed) as f64;
+            let dz = (st.vz / speed) as f64;
+
+            for pl in self.players.values_mut() {
+                if pl.zone.id != world::COURTYARD.id
+                    || pl.link.is_none()
+                    || pl.grace_until.is_some()
+                    || pl.riding.is_some()
+                    || pl.knocked_until.is_some_and(|t| now < t)
+                    || pl.immune_until.is_some_and(|t| now < t)
+                {
+                    continue;
+                }
+
+                if self
+                    .vehicles
+                    .distance_to_car(c, pl.x as f32, pl.z as f32)
+                    .is_some_and(|d| d <= p_params.knock.hit_radius)
+                {
+                    let dist = crate::vehicles::knock_distance(speed, &p_params.knock);
+                    let to = crate::vehicles::knock_landing(
+                        &world::COURTYARD,
+                        pl.x,
+                        pl.z,
+                        dx,
+                        dz,
+                        dist as f64,
+                    );
+                    let knocked_until = now + flight_dur + recover_dur;
+                    let immune_until = knocked_until + immune_dur;
+                    let msg = ServerMessage::Knock {
+                        id: pl.id.clone(),
+                        x: pl.x,
+                        z: pl.z,
+                        to_x: to.0,
+                        to_z: to.1,
+                        at: now_ms(),
+                    };
+                    pl.knocked_until = Some(knocked_until);
+                    pl.immune_until = Some(immune_until);
+                    pl.x = to.0;
+                    pl.z = to.1;
+                    pl.action = None;
+                    pl.moving = false;
+                    pl.dirty = false;
+                    knocks.push(msg);
+                }
+            }
+        }
+
+        for msg in knocks {
+            self.broadcast(msg, now, |_| true);
+        }
 
         // 6. 空車清理
         self.cleanup_expired_cars(now);
