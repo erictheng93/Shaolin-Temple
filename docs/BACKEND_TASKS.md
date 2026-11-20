@@ -414,6 +414,25 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 - 沒有建置 Docker 映像（本機 Docker 沒有執行）；`aws-lc-sys` 需要 C 編譯器，`rust:1.95.0-bookworm` 應該具備，CI 的 `docker build` 會驗證。
 - 沒有在瀏覽器實測登入與改名（前端由另一個任務實作）。
 
+### 協定版本 5 完成紀錄（2026-11-21，後端：庭院碰碰車）
+
+`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（116 個測試：lib 65、gameplay 14、loadtest 1、login 10、logging 1、metrics 4、protocol 9、websocket 13）在本機（Ubuntu Linux，rustc 1.93.1）通過。
+負載測試報告見 [LOAD_TEST_2026-11-21_VEHICLES.md](LOAD_TEST_2026-11-21_VEHICLES.md)。
+
+| 驗收項目 | 測試／驗證 |
+| --- | --- |
+| 剛體模擬與碰撞：Rapier2d 整合、邊界與 16 個庭院障礙物阻擋、車車彈性碰撞（restitution 0.6）、動態阻尼 | `src/vehicles/world.rs` `vehicle_world_simulation_and_collision` 等單元測試；`tests/gameplay.rs` |
+| 車輛駕駛動力學：純函式轉向 Gain、車速與倒車判定、側向抓地力衰減、阻尼衰減 | `src/vehicles/drive.rs` `drive_step_forward_and_turn` 等單元測試 |
+| 協定版本 5：二進位 `cars` 幀（0x04，10 bytes/車）、`claim`、`dismount`、`drive`、`car`、`carGone`、`knock` | `tests/protocol.rs`（二進位往返、JSON 往返、shared 向量檔驗證）、`tests/websocket.rs` |
+| 房間整合：檔口借車範圍驗證（2.5m 內）、冷卻時間（20s）、閒置下車（60s）、停放車輛淡出回收（15s）、下車位置偏移（1.1m） | `src/room/vehicles.rs`、`tests/websocket.rs` |
+| 撞飛與無敵機制：大於 2.5 m/s 撞擊步行動作者、拋物線飛行與恢復（各 900ms）、無敵保護（3000ms）、打斷當前動作 | `tests/gameplay.rs`、`src/room/vehicles.rs` |
+| 物理耗時指標：`temple_physics_step_seconds` 直方圖與 `temple_physics_step_seconds_max` 測量 | `tests/metrics.rs`、`/metrics` 端點實測 |
+| 負載工具與壓測：`loadtest --drivers <N>` 司機狀態機、10 房 100 車 500 連線 60 秒量測 | `tests/loadtest.rs`、[LOAD_TEST_2026-11-21_VEHICLES.md](LOAD_TEST_2026-11-21_VEHICLES.md)（平均每步 105 µs，cars 幀約 24 bytes/s） |
+
+未做到／限制：
+- **僅完成後端實作**：前端視覺（Three.js 車輛渲染、輪胎與車身擺動、粒子煙霧火花、檔口互動 UI、操縱桿駕駛控制）屬於任務 9–12，待下階段 PR 實作。
+- **負載測試為本機迴路**：未經外網公網延遲與丟包抖動測試。
+
 ## T9 部署與正式環境壓測（P1）
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。
