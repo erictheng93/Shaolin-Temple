@@ -20,6 +20,7 @@
     "build:avatar": "node scripts/build-avatar.mjs public/models/monk.glb 1 && node scripts/build-avatar.mjs public/models/monk-lod.glb 0"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "0.21.0",
     "three": "0.187.0",
     "vue": "3.5.44"
   },
