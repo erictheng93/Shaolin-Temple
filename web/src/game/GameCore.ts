@@ -231,6 +231,7 @@ export class GameCore {
   private fps = 0
   private frameMs = 0
   private fpsWindowStart = performance.now()
+  private readonly isTouch = readDeviceInfo().coarse
 
   constructor(private readonly opts: GameCoreOptions) {
     this.settings = opts.settings
@@ -241,18 +242,26 @@ export class GameCore {
     const preset = this.assetPreset()
     this.preset = preset
 
-    this.renderer = new SceneRenderer(opts.canvas, preset, {
-      onContextLost: () => {
-        this.contextLost = true
-        this.stopLoop()
-        this.pushUi(true)
+    // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
+    const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
+
+    this.renderer = new SceneRenderer(
+      opts.canvas,
+      preset,
+      {
+        onContextLost: () => {
+          this.contextLost = true
+          this.stopLoop()
+          this.pushUi(true)
+        },
+        onContextRestored: () => {
+          this.contextLost = false
+          this.pushUi(true)
+          this.wake()
+        },
       },
-      onContextRestored: () => {
-        this.contextLost = false
-        this.pushUi(true)
-        this.wake()
-      },
-    })
+      startLevel.resolution,
+    )
     this.renderer.onResize = () => this.wake()
 
     this.temple = buildTempleScene(this.renderer.renderer, this.tracker, preset, () => this.wake())
@@ -271,9 +280,6 @@ export class GameCore {
     this.renderer.scene.add(this.marker)
 
     this.players = new Players(this.renderer.scene, this.anim, this.maxVisibleFor(this.quality), opts.settings.outfit)
-    // 起始等級的解析度與完整模型範圍（等級 0 時等於預設值）。
-    const startLevel = ADAPTIVE_LEVELS[this.adaptive.level]!
-    this.renderer.setResolutionScale(startLevel.resolution)
     this.players.nearRadius = startLevel.nearRadius
 
     this.input = new InputController(opts.canvas, {
@@ -622,7 +628,12 @@ export class GameCore {
     const preset = this.preset
 
     // 依目標幀率略過多餘的 rAF（高更新率螢幕上限制在 30/60 FPS）。
-    const fps = frameCap({ activeFps: preset.activeFps, idleMs: time - this.lastInputAt, lowBattery: this.lowBattery })
+    const fps = frameCap({
+      activeFps: preset.activeFps,
+      idleMs: time - this.lastInputAt,
+      lowBattery: this.lowBattery,
+      touch: this.isTouch,
+    })
     const minInterval = 1000 / fps - 1
     if (!this.dirty && time - this.lastRender < minInterval) {
       this.raf = requestAnimationFrame(this.frame)

@@ -60,6 +60,8 @@ export class Players {
   nearRadius = 14
   /** 本機玩家所在場景；只顯示同場景的遠端玩家。 */
   localZone = 'courtyard'
+  /** 復用篩選陣列，避免 cull() 每半秒分配新陣列。 */
+  private cullList: RemotePlayer[] = []
 
   constructor(
     private readonly parent: THREE.Object3D,
@@ -287,18 +289,20 @@ export class Players {
   /** 依距離決定哪些遠端玩家要畫出來、哪些要顯示名牌。 */
   private cull(): void {
     const { x, z } = this.local.mover
-    const list: RemotePlayer[] = []
+    this.cullList.length = 0
     for (const r of this.remotes.values()) {
-      if (r.zone === this.localZone) list.push(r)
+      if (r.zone === this.localZone) this.cullList.push(r)
       else r.avatar.root.visible = false
     }
-    if (list.length > this.maxVisible || list.length > LABEL_LIMIT) {
-      list.sort((a, b) => (a.x - x) ** 2 + (a.z - z) ** 2 - ((b.x - x) ** 2 + (b.z - z) ** 2))
+    const len = this.cullList.length
+    if (len > this.maxVisible || len > LABEL_LIMIT) {
+      this.cullList.sort((a, b) => (a.x - x) ** 2 + (a.z - z) ** 2 - ((b.x - x) ** 2 + (b.z - z) ** 2))
     }
-    list.forEach((r, i) => {
+    for (let i = 0; i < len; i++) {
+      const r = this.cullList[i]!
       r.avatar.root.visible = i < this.maxVisible
       r.avatar.setLabelVisible(i < LABEL_LIMIT)
-    })
+    }
   }
 
   dispose(): void {
