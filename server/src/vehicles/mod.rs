@@ -3,7 +3,9 @@
 //! 車輛世界與規則見 docs/superpowers/plans/2026-11-21-bumper-cars.md。
 
 pub mod params;
+pub mod drive;
 pub use params::*;
+pub use drive::*;
 
 #[cfg(test)]
 mod tests {
