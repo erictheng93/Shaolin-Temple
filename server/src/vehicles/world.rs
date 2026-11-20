@@ -447,6 +447,13 @@ impl VehicleWorld {
         })
     }
 
+    pub fn is_awake(&self, c: u8) -> bool {
+        let Some(slot) = self.cars.get(c as usize).and_then(|s| s.as_ref()) else {
+            return false;
+        };
+        self.bodies.get(slot.body_handle).map_or(false, |b| !b.is_sleeping())
+    }
+
     /// 點 (x, z) 到車身長方體（平面 2D 邊界）的歐幾里得距離。在長方體內部為 0。
     pub fn distance_to_car(&self, c: u8, x: f32, z: f32) -> Option<f32> {
         let slot = self.cars.get(c as usize)?.as_ref()?;
