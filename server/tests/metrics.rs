@@ -88,6 +88,10 @@ async fn open_without_token_and_names_present() {
         "temple_tick_seconds_sum ",
         "temple_tick_seconds_count ",
         "temple_tick_seconds_max ",
+        "temple_physics_step_seconds_bucket{le=\"+Inf\"}",
+        "temple_physics_step_seconds_sum ",
+        "temple_physics_step_seconds_count ",
+        "temple_physics_step_seconds_max ",
     ] {
         assert!(body.contains(name), "missing {name}\n{body}");
     }

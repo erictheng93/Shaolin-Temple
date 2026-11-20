@@ -1044,7 +1044,9 @@ async fn run_room(
                     burst_steps = 1;
                 }
                 if room.should_physics_step() {
+                    let started = std::time::Instant::now();
                     room.physics_step(now);
+                    room.metrics.physics_done(started.elapsed());
                 }
             }
             _ = tick.tick() => {
