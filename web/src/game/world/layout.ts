@@ -20,6 +20,8 @@ export const HALL: Rect = { minX: -7.5, maxX: 7.5, minZ: -18, maxZ: -6.2 }
 export const CENSER = { x: 0, z: -1.5, radius: 0.9 }
 /** 鐘亭。 */
 export const BELL_PAVILION: Rect = { minX: 10, maxX: 14, minZ: -6, maxZ: -2 }
+/** 碰碰車檔口建築（原始尺寸）。 */
+export const BOOTH: Rect = { minX: -15.5, maxX: -12.5, minZ: 8.0, maxZ: 10.5 }
 /** 石燈籠位置。 */
 export const LANTERNS: ReadonlyArray<{ x: number; z: number }> = [
   { x: -4, z: 3 },
@@ -59,6 +61,7 @@ export const PLAYER_RADIUS = 0.35
 export const OBSTACLES: ReadonlyArray<Rect> = [
   HALL,
   BELL_PAVILION,
+  BOOTH,
   square(CENSER.x, CENSER.z, CENSER.radius),
   ...LANTERNS.map((l) => square(l.x, l.z, 0.35)),
   ...TREES.map((t) => square(t.x, t.z, 0.5 * t.scale)),
