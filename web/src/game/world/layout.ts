@@ -56,13 +56,16 @@ const square = (x: number, z: number, half: number): Rect => ({
   maxZ: z + half,
 })
 
-/** 碰撞用的障礙物（已含角色半徑的餘量）。 */
-export const PLAYER_RADIUS = 0.35
-export const OBSTACLES: ReadonlyArray<Rect> = [
+/** 庭院建築與障礙物的原始邊界（未加上角色半徑）。 */
+export const SOLIDS: ReadonlyArray<Rect> = [
   HALL,
   BELL_PAVILION,
   BOOTH,
   square(CENSER.x, CENSER.z, CENSER.radius),
   ...LANTERNS.map((l) => square(l.x, l.z, 0.35)),
   ...TREES.map((t) => square(t.x, t.z, 0.5 * t.scale)),
-].map((r) => pad(r, PLAYER_RADIUS))
+]
+
+/** 碰撞用的障礙物（已含角色半徑的餘量）。 */
+export const PLAYER_RADIUS = 0.35
+export const OBSTACLES: ReadonlyArray<Rect> = SOLIDS.map((r) => pad(r, PLAYER_RADIUS))
