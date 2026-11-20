@@ -206,7 +206,26 @@ export class GameCore {
   private rtt: number | null = null
   private stats = new Map<string, { label: MessageKey; value: string | number }>()
   private uiTimer: ReturnType<typeof setInterval>
-  private lastUiJson = ''
+  private lastUiStatus: ConnectionStatus | '' = ''
+  private lastUiNetworkEnabled = false
+  private lastUiRoom: string | null = null
+  private lastUiOnline = -1
+  private lastUiQuality: QualityLevel | '' = ''
+  private lastUiAdaptiveLevel = -1
+  private lastUiContextLost = false
+  private lastUiFading = false
+  private lastUiZone: ZoneId | '' = ''
+  private lastUiOutfit = -1
+  private lastUiAuth: AuthKind = 'guest'
+  private lastUiChatLen = 0
+  private lastUiStatsSize = -1
+  private lastUiPendingCooldowns = 0
+  private lastUiPerfFps = -1
+  private lastUiPerfFrameMs = -1
+  private lastUiPerfCalls = -1
+  private lastUiPerfTriangles = -1
+  private lastUiPerfRtt: number | null = null
+  private lastUiPerfPosKey = ''
   private frames = 0
   private frameMsSum = 0
   private fps = 0
@@ -1038,21 +1057,112 @@ export class GameCore {
 
   private pushUi(force: boolean): void {
     if (this.disposed) return
+    const now = performance.now()
+    const curOnline = this.net.enabled ? this.players.count : 1
+    const curStatus = this.net.connectionStatus
+    const curNetworkEnabled = this.net.enabled
+    const curRoom = this.room
+    const curQuality = this.quality
+    const curAdaptiveLevel = this.adaptive.level
+    const curContextLost = this.contextLost
+    const curFading = this.fading
+    const curZone = this.zone
+    const curOutfit = this.players.local.outfit
+    const curAuth = this.auth
+    const curChatLen = this.chatLog.length
+    const curStatsSize = this.stats.size
+
+    // 檢查冷卻中的動作數量是否有變化（例如冷卻到期）
+    let activeCooldowns = 0
+    const actionList = this.actions.list()
+    for (let i = 0; i < actionList.length; i++) {
+      if (this.actions.readyAt(actionList[i]!.id) > now) {
+        activeCooldowns++
+      }
+    }
+
+    let dirty = force
+    if (!dirty) {
+      if (
+        curStatus !== this.lastUiStatus ||
+        curNetworkEnabled !== this.lastUiNetworkEnabled ||
+        curRoom !== this.lastUiRoom ||
+        curOnline !== this.lastUiOnline ||
+        curQuality !== this.lastUiQuality ||
+        curAdaptiveLevel !== this.lastUiAdaptiveLevel ||
+        curContextLost !== this.lastUiContextLost ||
+        curFading !== this.lastUiFading ||
+        curZone !== this.lastUiZone ||
+        curOutfit !== this.lastUiOutfit ||
+        curAuth !== this.lastUiAuth ||
+        curChatLen !== this.lastUiChatLen ||
+        curStatsSize !== this.lastUiStatsSize ||
+        activeCooldowns !== this.lastUiPendingCooldowns
+      ) {
+        dirty = true
+      }
+    }
+
+    const showStats = this.settings.showStats
+    const curFps = now - this.lastRender > 1500 ? 0 : this.fps
     const r = this.renderer.stats
+    const curCalls = r.calls
+    const curTriangles = r.triangles
+    const curFrameMs = this.frameMs
+    const curRtt = this.rtt
+    const curPos = this.debugPos()
+    const curPosKey = curPos ? `${curPos.zone}:${curPos.x}:${curPos.z}:${curPos.heading}` : ''
+
+    if (!dirty && showStats) {
+      if (
+        curFps !== this.lastUiPerfFps ||
+        curFrameMs !== this.lastUiPerfFrameMs ||
+        curCalls !== this.lastUiPerfCalls ||
+        curTriangles !== this.lastUiPerfTriangles ||
+        curRtt !== this.lastUiPerfRtt ||
+        curPosKey !== this.lastUiPerfPosKey
+      ) {
+        dirty = true
+      }
+    }
+
+    if (!dirty) return
+
+    this.lastUiStatus = curStatus
+    this.lastUiNetworkEnabled = curNetworkEnabled
+    this.lastUiRoom = curRoom
+    this.lastUiOnline = curOnline
+    this.lastUiQuality = curQuality
+    this.lastUiAdaptiveLevel = curAdaptiveLevel
+    this.lastUiContextLost = curContextLost
+    this.lastUiFading = curFading
+    this.lastUiZone = curZone
+    this.lastUiOutfit = curOutfit
+    this.lastUiAuth = curAuth
+    this.lastUiChatLen = curChatLen
+    this.lastUiStatsSize = curStatsSize
+    this.lastUiPendingCooldowns = activeCooldowns
+    this.lastUiPerfFps = curFps
+    this.lastUiPerfFrameMs = curFrameMs
+    this.lastUiPerfCalls = curCalls
+    this.lastUiPerfTriangles = curTriangles
+    this.lastUiPerfRtt = curRtt
+    this.lastUiPerfPosKey = curPosKey
+
     const state: UiState = {
-      status: this.net.connectionStatus,
-      networkEnabled: this.net.enabled,
-      room: this.room,
-      online: this.net.enabled ? this.players.count : 1,
-      quality: this.quality,
-      adaptive: { level: this.adaptive.level, max: ADAPTIVE_LEVELS.length - 1 },
-      contextLost: this.contextLost,
-      fading: this.fading,
-      zone: this.zone,
-      outfit: this.players.local.outfit,
-      auth: this.auth,
-      actions: this.actions.list().filter((a) => !a.hidden).map((a) => {
-        const unavailable = a.unavailableReason?.(this.zone)
+      status: curStatus,
+      networkEnabled: curNetworkEnabled,
+      room: curRoom,
+      online: curOnline,
+      quality: curQuality,
+      adaptive: { level: curAdaptiveLevel, max: ADAPTIVE_LEVELS.length - 1 },
+      contextLost: curContextLost,
+      fading: curFading,
+      zone: curZone,
+      outfit: curOutfit,
+      auth: curAuth,
+      actions: actionList.filter((a) => !a.hidden).map((a) => {
+        const unavailable = a.unavailableReason?.(curZone)
         return {
           id: a.id,
           label: t(a.label),
@@ -1064,12 +1174,16 @@ export class GameCore {
       }),
       chat: this.chatLog,
       stats: [...this.stats].map(([key, s]) => ({ key, label: t(s.label), value: s.value })),
-      // 迴圈停止時不再計幀，顯示 0 而非最後一次的數值。
-      perf: { fps: performance.now() - this.lastRender > 1500 ? 0 : this.fps, frameMs: this.frameMs, calls: r.calls, triangles: r.triangles, rttMs: this.rtt, pos: this.debugPos() },
+      perf: {
+        fps: curFps,
+        frameMs: curFrameMs,
+        calls: curCalls,
+        triangles: curTriangles,
+        rttMs: curRtt,
+        pos: curPos,
+      },
     }
-    const json = JSON.stringify(state)
-    if (!force && json === this.lastUiJson) return
-    this.lastUiJson = json
+
     this.opts.onUi(state)
   }
 
