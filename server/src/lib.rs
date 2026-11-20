@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod rate_limit;
 pub mod room;
 pub mod shutdown;
+pub mod vehicles;
 pub mod world;
 
 /// 握手後沒有任何輸入就關閉連線的時間。前端每 20 秒送心跳；但 Chrome 會把背景分頁的計時器

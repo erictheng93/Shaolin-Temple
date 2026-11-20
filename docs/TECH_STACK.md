@@ -21,7 +21,7 @@
 | 部署 | Dokploy、Linux VPS | 保留使用者選定方式 |
 | 物件儲存 | Cloudflare R2 | 模型、貼圖與音訊等素材 |
 | Phase 2 | Tauri Mobile | 尚未開始實作 |
-| 物理 | Rapier（前端 `@dimforge/rapier3d`，後端 `rapier3d` crate） | 已選定，尚未引入；見下方「物理引擎」 |
+| 物理 | Rapier（前端 `@dimforge/rapier3d-compat` 0.21.0，後端 `rapier3d` crate 0.36.0） | 依賴已引入（2026-11-21），尚無玩法使用；見下方「物理引擎」 |
 
 前端依賴全部以精確版本寫入 `web/package.json`，並提交 `web/package-lock.json`：
 
@@ -336,7 +336,18 @@ swiftshader 的幀時間沒有參考價值，手機 GPU 的幀率、發熱與耗
 
 ## 物理引擎
 
-**決定（2026-11-15）**：需要物理時採用 Rapier；目前不引入任何物理引擎，也不改用 Godot、Bevy 等遊戲引擎。
+**決定（2026-11-15）**：需要物理時採用 Rapier；不改用 Godot、Bevy 等遊戲引擎。
+
+**引入（2026-11-21）**：為了庭院碰碰車（多人共享物理，見 `docs/superpowers/specs/2026-11-20-bumper-cars-design.md`），前後端的依賴已加入，各有一個相同情境的冒煙測試（無重力、初速 1 m/s、以 1/30 秒步進 30 次，前進 1 公尺）：`server/src/vehicles/mod.rs` 與 `web/src/game/vehicles/rapier.test.ts`。目前只有測試使用，正式程式還沒有 import，所以不影響建置產物。
+
+**版本配對**：兩邊必須是同一版核心，否則前端預測與伺服器結果會有落差。
+
+| 端 | 套件 | 版本 |
+| --- | --- | --- |
+| 前端 | `@dimforge/rapier3d-compat`（WASM 內嵌，瀏覽器與 Node 都能直接載入，mock 伺服器因此可用同一套件） | 0.21.0 |
+| 後端 | `rapier3d`（預設功能：dim3、f32、std） | =0.36.0 |
+
+查證方式：npm 套件的 `gitHead`（`npm view @dimforge/rapier3d-compat@0.21.0 gitHead`）指向 `dimforge/rapier` 的提交，該提交的 `[workspace.package] version` 是 0.36.0，`bindings/typescript` 的 Cargo 範本也要求 `rapier3d = "0.36.0"`（0.20.0 起 JS 綁定已併入 rapier 主倉庫，舊的 `rapier.js` 倉庫停在 0.19.3）。crates.io 另有 0.36.1，不採用。**升級時兩邊一起升，並用同樣的方式重新查證。**
 
 現況：角色是平地上的運動學角色，碰撞由 `world/zones.ts` 的 2D 障礙物＋尋路處理，伺服器以移動額度與直線檢查驗證，沒有重力或剛體的需求。敲鐘、上香、木魚、坐禪等互動都是動畫片段，不是物理。
 
