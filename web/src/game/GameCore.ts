@@ -22,6 +22,8 @@ import { buildHallScene, type HallScene } from './render/HallScene'
 import { IncenseSystem } from './render/IncenseSystem'
 import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
+import { CarFleet } from './render/CarFleet'
+import { Vehicles, type RideUi } from './vehicles/Vehicles'
 import { resolveCollisions, stepMover, type MoveConfig } from './world/movement'
 import { findPath, type Point } from './world/pathfind'
 import { normalizeOutfit } from './world/outfits'
@@ -99,6 +101,7 @@ export interface UiState {
   actions: UiAction[]
   chat: ChatEntry[]
   stats: Array<{ key: string; label: string; value: string | number }>
+  ride: RideUi
   /**
    * pos：本機玩家的場景與座標（取整到 0.1 公尺），只在開啟「顯示效能資訊」時帶出；
    * 沒開時為 null，走路不會讓 UiState 的內容改變而多推送。
@@ -158,6 +161,9 @@ export class GameCore {
   private incense: IncenseSystem
   /** 鐘亭的撞木（只在庭院顯示）。 */
   private striker: BellStriker
+  readonly fleet: CarFleet
+  readonly vehicles: Vehicles
+  private lastPortalToastAt = -Infinity
   private fading = false
   private anim = new AnimationSystem()
   private players: Players
@@ -230,6 +236,7 @@ export class GameCore {
   private lastUiPerfTriangles = -1
   private lastUiPerfRtt: number | null = null
   private lastUiPerfPosKey = ''
+  private lastUiRideKey = ''
   private frames = 0
   private frameMsSum = 0
   private fps = 0
@@ -302,11 +309,22 @@ export class GameCore {
         if (this.audio.audible && !this.audio.running && !this.paused) void this.audio.resume()
         this.wake()
       },
+      onKey: (code) => {
+        if (code === 'KeyE') {
+          this.toggleRide()
+        }
+      },
     })
 
     this.watchBattery()
 
     this.net = new NetworkClient({ url: opts.wsUrl, name: '', outfit: this.players.local.outfit })
+    this.fleet = new CarFleet(this.renderer.scene, this.tracker)
+    this.vehicles = new Vehicles({
+      fleet: this.fleet,
+      net: this.net,
+      selfId: () => this.selfId,
+    })
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
     this.net.events.on('rtt', (ms) => (this.rtt = ms))
@@ -409,6 +427,17 @@ export class GameCore {
     this.wake()
   }
 
+  /** 切換上下車。 */
+  toggleRide(): void {
+    const local = this.players.local.mover
+    this.vehicles.toggleRide(local.x, local.z)
+  }
+
+  /** 向檔口領取碰碰車。 */
+  claimCar(kind: number): void {
+    this.vehicles.claim(kind)
+  }
+
   /**
    * 玩家按下動作。不能在目前場景使用時提示原因；需要先走到定點的動作（approach）先自動走過去，抵達後才開始。
    * 正在做可提前結束的動作（endAction，例如誦經）時，按任何動作都先起身；按的是同一個動作就只起身。
@@ -416,6 +445,10 @@ export class GameCore {
   performAction(id: string): void {
     const now = performance.now()
     this.lastInputAt = now
+    if (this.vehicles.riding !== null) {
+      this.toast('reason.dismountFirst')
+      return
+    }
     const local = this.players.local
     const def = this.actions.get(id)
     if (!def || def.hidden || this.fading) return
@@ -578,6 +611,8 @@ export class GameCore {
     this.input.dispose()
     this.incense.dispose()
     this.striker.dispose()
+    this.vehicles.dispose()
+    this.fleet.dispose()
     this.net.dispose()
     void this.audio.dispose()
     this.players.dispose()
@@ -672,60 +707,98 @@ export class GameCore {
     // 有移動意圖就保持迴圈運作；喚醒後第一幀 dt=0 不會位移，不能只看本幀是否移動。
     let wantsMove = false
 
-    // 可提前結束的動作（誦經）進行中按方向鍵：起身，接著照常移動
-    if (now < local.lockedUntil) {
+    const riding = this.vehicles.riding !== null
+    if (riding) {
+      this.lastInputAt = now
+      this.path = []
+      this.pending = null
       const k = this.moveInput()
-      if (k.x !== 0 || k.y !== 0) this.interruptLocal()
-    }
-    if (now >= local.lockedUntil) {
-      const k = this.moveInput()
-      if (k.x !== 0 || k.y !== 0) {
-        // 鍵盤／搖桿操作取消尋路路徑與正在走向定點的動作
-        this.path = []
-        this.pending = null
-      }
-      wantsMove = k.x !== 0 || k.y !== 0 || local.mover.target !== null
+      wantsMove = k.x !== 0 || k.y !== 0
       const yaw = this.renderer.yaw
-      // 鏡頭在角色後方 (sin yaw, cos yaw) 方向，畫面「上」= 遠離鏡頭。
       const dirX = Math.cos(yaw) * k.x + Math.sin(yaw) * k.y
       const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
-      const target = local.mover.target
-      moving = stepMover(local.mover, { dirX, dirZ }, dt, this.moveCfg)
-      if (target && !local.mover.target) {
-        // 抵達轉折點就接著走下一段；被擋住（離轉折點仍遠）則放棄整條路徑。
-        const arrived = Math.hypot(target.x - local.mover.x, target.z - local.mover.z) < 0.2
-        local.mover.target = arrived ? (this.path.shift() ?? null) : null
-        if (!arrived) this.path = []
+      this.vehicles.setStick(dirX, dirZ)
+
+      const rider = this.vehicles.riderCar(this.selfId ?? '')
+      if (rider) {
+        local.mover.x = rider.x
+        local.mover.z = rider.z
+        local.mover.heading = rider.heading
+        local.mover.target = null
       }
-      // 走向定點的動作：路走完（或被擋住）時，抵達就開始，沒抵達就提示
-      if (this.pending && !local.mover.target) {
-        const { id, pose } = this.pending
-        this.pending = null
-        if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) <= APPROACH_ARRIVE) {
-          this.beginAction(id, pose)
-          moving = false
-        } else {
-          this.toast('move.blocked')
+      moving = false
+      local.anim.moving = false
+      if (this.wasMoving) {
+        this.net.sendPosition(local.mover.x, local.mover.z, local.mover.heading, false)
+        this.wasMoving = false
+      }
+    } else {
+      // 可提前結束的動作（誦經）進行中按方向鍵：起身，接著照常移動
+      if (now < local.lockedUntil) {
+        const k = this.moveInput()
+        if (k.x !== 0 || k.y !== 0) this.interruptLocal()
+      }
+      if (now >= local.lockedUntil) {
+        const k = this.moveInput()
+        if (k.x !== 0 || k.y !== 0) {
+          // 鍵盤／搖桿操作取消尋路路徑與正在走向定點的動作
+          this.path = []
+          this.pending = null
+        }
+        wantsMove = k.x !== 0 || k.y !== 0 || local.mover.target !== null
+        const yaw = this.renderer.yaw
+        // 鏡頭在角色後方 (sin yaw, cos yaw) 方向，畫面「上」= 遠離鏡頭。
+        const dirX = Math.cos(yaw) * k.x + Math.sin(yaw) * k.y
+        const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
+        const target = local.mover.target
+        moving = stepMover(local.mover, { dirX, dirZ }, dt, this.moveCfg)
+        if (target && !local.mover.target) {
+          // 抵達轉折點就接著走下一段；被擋住（離轉折點仍遠）則放棄整條路徑。
+          const arrived = Math.hypot(target.x - local.mover.x, target.z - local.mover.z) < 0.2
+          local.mover.target = arrived ? (this.path.shift() ?? null) : null
+          if (!arrived) this.path = []
+        }
+        // 走向定點的動作：路走完（或被擋住）時，抵達就開始，沒抵達就提示
+        if (this.pending && !local.mover.target) {
+          const { id, pose } = this.pending
+          this.pending = null
+          if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) <= APPROACH_ARRIVE) {
+            this.beginAction(id, pose)
+            moving = false
+          } else {
+            this.toast('move.blocked')
+          }
         }
       }
-    }
-    local.anim.moving = moving
+      local.anim.moving = moving
 
-    if (moving) {
-      this.net.sendPosition(local.mover.x, local.mover.z, local.mover.heading, true)
-    } else if (this.wasMoving) {
-      this.net.sendPosition(local.mover.x, local.mover.z, local.mover.heading, false)
+      if (moving) {
+        this.net.sendPosition(local.mover.x, local.mover.z, local.mover.heading, true)
+      } else if (this.wasMoving) {
+        this.net.sendPosition(local.mover.x, local.mover.z, local.mover.heading, false)
+      }
+      this.wasMoving = moving
     }
-    this.wasMoving = moving
 
     // 走進出入口（從外面踏入，避免出生點剛好在出入口時來回觸發）
     const portal = portalAt(this.zone, local.mover.x, local.mover.z)
-    if (portal && !this.inPortal && !this.fading) this.beginZoneTransition(portal)
-    this.inPortal = portal !== null
+    if (portal) {
+      if (riding) {
+        if (now - this.lastPortalToastAt > 4000) {
+          this.toast('ride.dismountFirst')
+          this.lastPortalToastAt = now
+        }
+      } else if (!this.inPortal && !this.fading) {
+        this.beginZoneTransition(portal)
+      }
+    }
+    this.inPortal = portal !== null && !riding
 
-    const playersActive = this.players.update(now, dt, t)
+    const playersActive = this.players.update(now, dt, t, (id) => this.vehicles.riderCar(id))
     this.incense.update(now, t)
     const striking = this.zone === 'courtyard' && this.striker.update(now)
+    const serverNow = now + this.serverOffset
+    const vehiclesActive = this.vehicles.update(now, serverNow, dt)
     if (this.zone === 'hall') this.hall?.update(t, dt)
     else this.temple.update(t, dt)
     // 殿內越靠近神龕（z 從 1 到 -3.5），鏡頭注視點越往上抬，像抬頭仰望神像。
@@ -747,7 +820,8 @@ export class GameCore {
       }
     }
 
-    const sceneMotion = this.zone === 'courtyard' && (this.temple.hasTransientMotion() || striking)
+    const sceneMotion =
+      this.zone === 'courtyard' && (this.temple.hasTransientMotion() || striking || vehiclesActive)
     if (moving || wantsMove) this.lastInputAt = now
     return moving || wantsMove || playersActive || cameraMoving || markerActive || sceneMotion
   }
@@ -776,6 +850,7 @@ export class GameCore {
 
   /** 滑鼠點擊地面：尋路走過去（桌機；觸控裝置用搖桿，InputController 不會送出手指點擊）。 */
   private onTap(ndcX: number, ndcY: number): void {
+    if (this.vehicles.riding !== null) return
     // 鎖定中只有可提前結束的動作（誦經）能被點擊打斷：起身並走向點擊處
     if (performance.now() < this.players.local.lockedUntil && !this.interruptLocal()) return
     this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.renderer.camera)
@@ -832,6 +907,10 @@ export class GameCore {
 
   /** 立即切換到指定場景與位置（無過場）。 */
   private applyZone(zone: ZoneId, pose: Pose): void {
+    if (this.vehicles.riding !== null) {
+      this.net.sendRide(null)
+    }
+    this.vehicles.setLocalZone(zone)
     if (zone === 'hall' && !this.hall) {
       this.hall = buildHallScene(this.renderer.renderer, this.tracker, this.assetPreset(), () => this.wake())
       this.renderer.scene.add(this.hall.root)
@@ -883,6 +962,9 @@ export class GameCore {
 
   private onVisibility = (): void => {
     if (document.hidden) {
+      if (this.vehicles.riding !== null) {
+        this.net.sendRide(null)
+      }
       this.paused = true
       this.stopLoop()
       this.input.clearKeys()
@@ -932,6 +1014,7 @@ export class GameCore {
             }
           }
         }
+        this.vehicles.onWelcome(m.cars ?? [])
         break
       }
       case 'join':
@@ -984,11 +1067,25 @@ export class GameCore {
       case 'pong':
         this.serverOffset = m.serverTime - performance.now()
         break
+      case 'car':
+        this.vehicles.onCar(m)
+        this.pushUi(true)
+        this.wake()
+        break
+      case 'carGone':
+        this.vehicles.onCarGone(m.c)
+        this.pushUi(true)
+        this.wake()
+        break
+      case 'cars':
+        this.vehicles.onCars(m.ack, m.cars, performance.now())
+        this.wake()
+        break
       case 'error':
         this.toast(SERVER_ERRORS.get(m.code) ?? 'server.error')
         break
     }
-    if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave' || m.t === 'name') this.pushUi(true)
+    if (m.t === 'welcome' || m.t === 'join' || m.t === 'leave' || m.t === 'name' || m.t === 'car' || m.t === 'carGone') this.pushUi(true)
     this.wake()
   }
 
@@ -1096,6 +1193,9 @@ export class GameCore {
       }
     }
 
+    const curRide = this.vehicles.ui(this.players.local.mover.x, this.players.local.mover.z)
+    const curRideKey = `${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}`
+
     let dirty = force
     if (!dirty) {
       if (
@@ -1112,7 +1212,8 @@ export class GameCore {
         curAuth !== this.lastUiAuth ||
         curChatLen !== this.lastUiChatLen ||
         curStatsSize !== this.lastUiStatsSize ||
-        activeCooldowns !== this.lastUiPendingCooldowns
+        activeCooldowns !== this.lastUiPendingCooldowns ||
+        curRideKey !== this.lastUiRideKey
       ) {
         dirty = true
       }
@@ -1157,6 +1258,7 @@ export class GameCore {
     this.lastUiChatLen = curChatLen
     this.lastUiStatsSize = curStatsSize
     this.lastUiPendingCooldowns = activeCooldowns
+    this.lastUiRideKey = curRideKey
     this.lastUiPerfFps = curFps
     this.lastUiPerfFrameMs = curFrameMs
     this.lastUiPerfCalls = curCalls
@@ -1189,6 +1291,7 @@ export class GameCore {
       }),
       chat: this.chatLog,
       stats: [...this.stats].map(([key, s]) => ({ key, label: t(s.label), value: s.value })),
+      ride: curRide,
       perf: {
         fps: curFps,
         frameMs: curFrameMs,

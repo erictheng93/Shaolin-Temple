@@ -7,6 +7,8 @@ export interface InputCallbacks {
   onZoom(delta: number): void
   /** 鍵盤方向改變或有任何輸入，需要喚醒渲染迴圈。 */
   onActivity(): void
+  /** 一般按鍵按下（例如 KeyE 觸發上下車互動）。 */
+  onKey?(code: string): void
 }
 
 const TAP_SLOP_PX = 8
@@ -132,7 +134,9 @@ export class InputController {
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
-    if (!(e.code in MOVE_KEYS) || this.isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return
+    if (this.isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return
+    this.cb.onKey?.(e.code)
+    if (!(e.code in MOVE_KEYS)) return
     e.preventDefault()
     if (!this.keys.has(e.code)) {
       this.keys.add(e.code)
