@@ -16,8 +16,12 @@
 // 前端：在 web/.env.local 設定 VITE_WS_URL=ws://localhost:8080/ws
 import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
+import RAPIER from '@dimforge/rapier3d-compat'
+import { createSimWorld } from '../src/game/vehicles/simCore.ts'
+import { VEHICLES } from '../src/game/world/vehicles.ts'
+import { SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
-import { ACTION_CODES, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch } from '../src/game/net/binaryFrame.ts'
+import { ACTION_CODES, MAX_CARS, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch, encodeCars } from '../src/game/net/binaryFrame.ts'
 
 const PROTOCOL_VERSION = 5 // 與 src/game/net/protocol.ts 一致
 const PROVIDERS = ['google', 'line']
@@ -122,7 +126,7 @@ const http = createServer((req, res) => {
 const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: 16 * 1024 })
 http.listen(PORT)
 const STOP_WATCHDOG_MS = 1000
-const players = new Map() // id -> { id, n, name, x, z, heading, zone, moving, lastPosAt, ws?, bot? }
+const players = new Map() // id -> { id, n, name, x, z, heading, zone, moving, lastPosAt, riding?, lastDriveSeq?, lastActiveDrive?, claimAt?, ws?, bot? }
 const seenReq = new Map() // reqId -> ack（模擬伺服器去重）
 const dirty = new Set() // 本 tick 有變動的玩家，tick 內合併成 moves
 const r2 = (v) => Math.round(v * 100) / 100
@@ -132,6 +136,241 @@ const queueMove = (p, moving) => {
 }
 const tuple = (p) => [p.n, r2(p.x), r2(p.z), r2(p.heading), p.moving ? 1 : 0]
 let nextId = 1
+
+await RAPIER.init()
+const sim = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES)
+const cars = new Map() // c -> { c, kind, driver, emptySince, fadeAt, lastInputAt, lastActiveDrive }
+
+const carSnapshot = (c) => {
+  const car = cars.get(c)
+  if (!car) return null
+  const st = sim.state(c)
+  if (!st) return null
+  return {
+    c,
+    kind: car.kind,
+    driver: car.driver,
+    x: r2(st.x),
+    z: r2(st.z),
+    heading: r2(st.heading),
+    fadeAt: car.fadeAt,
+  }
+}
+
+const carSnapshots = () => {
+  const list = []
+  for (const c of cars.keys()) {
+    const s = carSnapshot(c)
+    if (s) list.push(s)
+  }
+  return list
+}
+
+const bayIsFree = (bx, bz) => {
+  for (const c of cars.keys()) {
+    const st = sim.state(c)
+    if (st && Math.hypot(st.x - bx, st.z - bz) < 1.2) {
+      return false
+    }
+  }
+  return true
+}
+
+const claimCar = (p, kind) => {
+  if (p.zone !== 'courtyard' || (p.riding !== undefined && p.riding !== null)) return null
+  const dx = p.x - VEHICLES.booth.counter.x
+  const dz = p.z - VEHICLES.booth.counter.z
+  if (Math.hypot(dx, dz) > VEHICLES.ride.boothRadius) return null
+  if (p.claimAt && now() - p.claimAt < VEHICLES.ride.claimCooldownMs) return null
+  if (kind < 0 || kind >= VEHICLES.kinds.length) return null
+  let count = 0
+  for (const car of cars.values()) if (car.kind === kind) count++
+  if (count >= VEHICLES.kinds[kind].count) return null
+
+  const bay = VEHICLES.booth.bays.find((b) => bayIsFree(b.x, b.z))
+  if (!bay) return null
+
+  let c = -1
+  for (let i = 0; i < MAX_CARS; i++) {
+    if (!cars.has(i)) {
+      c = i
+      break
+    }
+  }
+  if (c < 0) return null
+
+  sim.spawn(c, bay.x, bay.z, bay.heading)
+  sim.setOccupied(c, true)
+  cars.set(c, {
+    c,
+    kind,
+    driver: p.id,
+    emptySince: null,
+    fadeAt: null,
+    lastInputAt: now(),
+    lastActiveDrive: now(),
+  })
+
+  p.riding = c
+  p.claimAt = now()
+  p.lastDriveSeq = 0
+  p.lastActiveDrive = now()
+  p.moving = false
+  dirty.delete(p)
+  p.x = bay.x
+  p.z = bay.z
+  p.heading = bay.heading
+
+  broadcast({
+    t: 'car',
+    c,
+    kind,
+    driver: p.id,
+    x: bay.x,
+    z: bay.z,
+    heading: bay.heading,
+    fadeAt: null,
+  })
+  return c
+}
+
+const mountCar = (p, c) => {
+  if (p.zone !== 'courtyard' || (p.riding !== undefined && p.riding !== null)) return false
+  const car = cars.get(c)
+  if (!car || car.driver) return false
+  const st = sim.state(c)
+  if (!st) return false
+  const dist = Math.hypot(st.x - p.x, st.z - p.z)
+  if (dist > VEHICLES.ride.mountRadius) return false
+
+  sim.setOccupied(c, true)
+  car.driver = p.id
+  car.emptySince = null
+  car.fadeAt = null
+  car.lastInputAt = now()
+  car.lastActiveDrive = now()
+
+  p.riding = c
+  p.lastActiveDrive = now()
+  p.moving = false
+  dirty.delete(p)
+  p.x = st.x
+  p.z = st.z
+  p.heading = st.heading
+
+  broadcast({
+    t: 'car',
+    c,
+    kind: car.kind,
+    driver: p.id,
+    x: st.x,
+    z: st.z,
+    heading: st.heading,
+    fadeAt: null,
+  })
+  return true
+}
+
+const dismountPlayer = (p) => {
+  const c = p.riding
+  if (c === null || c === undefined) return
+  p.riding = null
+
+  const st = sim.state(c)
+  const cx = st ? st.x : p.x
+  const cz = st ? st.z : p.z
+  const ch = st ? st.heading : p.heading
+
+  const offset = VEHICLES.ride.dismountOffset
+  const candidates = [
+    { x: cx - offset * Math.cos(ch), z: cz + offset * Math.sin(ch) },
+    { x: cx + offset * Math.cos(ch), z: cz - offset * Math.sin(ch) },
+    { x: cx - offset * Math.sin(ch), z: cz - offset * Math.cos(ch) },
+  ]
+  let landing = { x: cx, z: cz }
+  for (const cand of candidates) {
+    if (
+      cand.x >= WORLD_BOUNDS.minX &&
+      cand.x <= WORLD_BOUNDS.maxX &&
+      cand.z >= WORLD_BOUNDS.minZ &&
+      cand.z <= WORLD_BOUNDS.maxZ &&
+      SOLIDS.every((s) => cand.x < s.minX || cand.x > s.maxX || cand.z < s.minZ || cand.z > s.maxZ)
+    ) {
+      landing = cand
+      break
+    }
+  }
+
+  p.x = landing.x
+  p.z = landing.z
+  p.heading = ch
+  p.moving = false
+  dirty.delete(p)
+
+  if (p.ws && p.ws.readyState === 1) {
+    sendTuples(p.ws, 'sync', [tuple(p)])
+  }
+
+  sim.setOccupied(c, false)
+  sim.setInput(c, { dir: 0, mag: 0 })
+
+  const car = cars.get(c)
+  const fadeAt = now() + VEHICLES.fade.idleMs
+  if (car) {
+    car.driver = null
+    car.emptySince = now()
+    car.fadeAt = fadeAt
+  }
+
+  broadcast({
+    t: 'car',
+    c,
+    kind: car ? car.kind : 0,
+    driver: null,
+    x: cx,
+    z: cz,
+    heading: ch,
+    fadeAt,
+  })
+}
+
+// 物理世界模擬循環：30Hz
+setInterval(() => {
+  const t = now()
+  for (const car of cars.values()) {
+    if (car.driver && t - car.lastInputAt > VEHICLES.physics.inputTimeoutMs) {
+      sim.setInput(car.c, { dir: 0, mag: 0 })
+    }
+  }
+  for (const p of players.values()) {
+    if (p.riding !== null && p.riding !== undefined) {
+      const car = cars.get(p.riding)
+      if (car && t - car.lastActiveDrive > VEHICLES.ride.idleDismountMs) {
+        dismountPlayer(p)
+      }
+    }
+  }
+  for (const p of players.values()) {
+    if (p.riding !== null && p.riding !== undefined) {
+      const st = sim.state(p.riding)
+      if (st) {
+        p.x = st.x
+        p.z = st.z
+        p.heading = st.heading
+        p.moving = false
+      }
+    }
+  }
+  sim.step()
+  const maxEmpty = VEHICLES.fade.idleMs + VEHICLES.fade.fadeMs
+  for (const [c, car] of cars.entries()) {
+    if (!car.driver && car.emptySince && t - car.emptySince >= maxEmpty) {
+      sim.remove(c)
+      cars.delete(c)
+      broadcast({ t: 'carGone', c })
+    }
+  }
+}, 1000 / 30)
 /** 房內短編號：取目前未使用的最小值，玩家離開後回收。超過 MAX_SHORT_ID（二進位幀只有 7 位元）時回傳 null。 */
 const allocN = () => {
   const used = new Set([...players.values()].map((p) => p.n))
@@ -161,7 +400,7 @@ const sendTuples = (ws, t, list) => {
 }
 const snapshot = (p) => ({ id: p.id, n: p.n, name: p.name, x: p.x, z: p.z, heading: p.heading, zone: p.zone, outfit: p.outfit })
 
-// 機器人：在廣場上隨機走動，偶爾做動作。
+// 機器人：在廣場上隨機走動，偶爾做動作；每 4 個庭院機器人有 1 個會去檔口領車。
 for (let i = 0; i < BOTS; i++) {
   const id = `bot-${i}`
   const zone = i % 3 === 2 ? 'hall' : 'courtyard'
@@ -176,7 +415,18 @@ for (let i = 0; i < BOTS; i++) {
     heading: 0,
     zone,
     outfit: Math.floor(Math.random() * OUTFIT_COUNT),
-    bot: { tx: 0, tz: 0, wait: Math.random() * 3, chatIn: 5 + Math.random() * 40 },
+    riding: null,
+    bot: {
+      tx: 0,
+      tz: 0,
+      wait: Math.random() * 3,
+      chatIn: 5 + Math.random() * 40,
+      canDrive: zone === 'courtyard' && i % 4 === 0,
+      driveTime: 0,
+      driveDir: 0,
+      steerIn: 0,
+      nextClaimAt: now() + 2000 + Math.random() * 6000,
+    },
   })
 }
 
@@ -189,6 +439,50 @@ setInterval(() => {
     if ((b.chatIn -= dt) <= 0) {
       b.chatIn = 40 + Math.random() * 50
       broadcastChat(p, BOT_LINES[Math.floor(Math.random() * BOT_LINES.length)])
+    }
+    // 機器人開車邏輯
+    if (p.riding !== null && p.riding !== undefined) {
+      b.driveTime = (b.driveTime ?? 0) - dt
+      b.steerIn = (b.steerIn ?? 0) - dt
+      if (b.steerIn <= 0) {
+        b.steerIn = 1 + Math.random() * 2
+        b.driveDir = (Math.random() - 0.5) * Math.PI
+      }
+      sim.setInput(p.riding, { dir: b.driveDir, mag: 1.0 })
+      const car = cars.get(p.riding)
+      if (car) {
+        car.lastInputAt = now()
+        car.lastActiveDrive = now()
+      }
+      if (b.driveTime <= 0) {
+        console.log(`[mock] 機器人 ${p.name} (${p.id}) 開車結束下車`)
+        dismountPlayer(p)
+        b.wait = 5 + Math.random() * 10
+        b.nextClaimAt = now() + 25_000
+      }
+      continue
+    }
+    // 機器人領車邏輯：每 4 個庭院機器人有 1 個會去檔口領車
+    if (p.zone === 'courtyard' && b.canDrive && now() > (b.nextClaimAt ?? 0)) {
+      const dx = VEHICLES.booth.counter.x - p.x
+      const dz = (VEHICLES.booth.counter.z + 1.5) - p.z
+      const dist = Math.hypot(dx, dz)
+      if (dist > VEHICLES.ride.boothRadius * 0.7) {
+        b.tx = VEHICLES.booth.counter.x + (Math.random() - 0.5) * 1.5
+        b.tz = VEHICLES.booth.counter.z + 1.2 + Math.random() * 0.8
+        b.wait = 0
+      } else {
+        const kind = Math.floor(Math.random() * VEHICLES.kinds.length)
+        const c = claimCar(p, kind)
+        if (c !== null) {
+          b.driveTime = 20 + Math.random() * 20
+          b.driveDir = 0
+          b.steerIn = 1.5
+          console.log(`[mock] 機器人 ${p.name} (${p.id}) 於檔口領車 ${c} (車種 ${kind})，預計行駛 ${b.driveTime.toFixed(0)} 秒`)
+        } else {
+          b.nextClaimAt = now() + 10_000
+        }
+      }
     }
     if (b.wait > 0) {
       b.wait -= dt
@@ -222,14 +516,25 @@ setInterval(() => {
   // 停止看門狗：真人最後一則位置是 move 且超過 1 秒沒有新位置，視為停止。
   const t = now()
   for (const p of players.values()) if (p.ws && p.moving && t - p.lastPosAt > STOP_WATCHDOG_MS) queueMove(p, false)
-  // 每個 tick 對每位真人送一則批次位置：只含有變動、且與收件人同場景的其他玩家。
+  // 每個 tick 對每位真人送一則批次位置：只含有變動、且與收件人同場景的其他未騎乘玩家。
   if (dirty.size) {
     for (const to of players.values()) {
       if (!to.ws) continue
-      const list = [...dirty].filter((p) => p !== to && p.zone === to.zone && players.get(p.id) === p).map(tuple)
+      const list = [...dirty].filter((p) => p !== to && p.zone === to.zone && players.get(p.id) === p && !p.riding).map(tuple)
       if (list.length) sendTuples(to.ws, 'moves', list)
     }
     dirty.clear()
+  }
+  // 廣播碰碰車狀態（10Hz）：送給所有在庭院的真人玩家
+  const allCars = sim.cars()
+  if (allCars.length) {
+    for (const to of players.values()) {
+      if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
+        const ack = to.lastDriveSeq ?? 0
+        const frame = encodeCars(ack, allCars)
+        if (frame) to.ws.send(frame)
+      }
+    }
   }
 }, 100)
 
@@ -267,7 +572,7 @@ wss.on('connection', (ws) => {
         const name = cleanName(m.name)
         const renamed = name !== old.name
         if (renamed) old.name = name
-        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), cars: [], auth })
+        send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), cars: carSnapshots(), auth })
         if (renamed) for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: old.id, name })
         if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
         return
@@ -287,6 +592,7 @@ wss.on('connection', (ws) => {
         heading: Math.PI,
         zone: 'courtyard',
         moving: false,
+        riding: null,
         lastPosAt: now(),
         ws,
       }
@@ -298,7 +604,7 @@ wss.on('connection', (ws) => {
         resumeToken: me.token,
         serverTime: now(),
         players: [...players.values()].map(snapshot),
-        cars: [],
+        cars: carSnapshots(),
         auth,
       })
       broadcast({ t: 'join', player: snapshot(me) }, id)
@@ -308,10 +614,15 @@ wss.on('connection', (ws) => {
     switch (m.t) {
       case 'move':
       case 'stop':
+        if (me.riding !== null && me.riding !== undefined) break
         Object.assign(me, { x: m.x, z: m.z, heading: m.heading, lastPosAt: now() })
         queueMove(me, m.t === 'move')
         break
       case 'zone':
+        if (me.riding !== null && me.riding !== undefined) {
+          send(ws, { t: 'error', code: 'dismount_first', message: '請先下車再離開' })
+          return
+        }
         // 正式伺服器應驗證玩家確實站在出入口，並以伺服器端的落點為準。
         if (!ZONES.includes(m.zone)) return
         Object.assign(me, { zone: m.zone, x: m.x, z: m.z, heading: m.heading })
@@ -319,7 +630,7 @@ wss.on('connection', (ws) => {
         dirty.delete(me)
         // 先對同房所有人廣播 zone，再把新場景所有其他玩家的目前位置整批送給切換者。
         broadcast({ t: 'zone', id: me.id, zone: m.zone, x: m.x, z: m.z, heading: m.heading })
-        sendTuples(ws, 'sync', [...players.values()].filter((p) => p !== me && p.zone === me.zone).map(tuple))
+        sendTuples(ws, 'sync', [...players.values()].filter((p) => p !== me && p.zone === me.zone && !p.riding).map(tuple))
         break
       case 'action': {
         const cached = seenReq.get(m.reqId)
@@ -353,17 +664,50 @@ wss.on('connection', (ws) => {
         send(ws, { t: 'pong', ts: m.ts, serverTime: now() })
         break
       case 'claim':
+      case 'ride_claim': {
+        const kind = typeof m.kind === 'number' ? m.kind : 0
+        const c = claimCar(me, kind)
+        if (c === null) {
+          send(ws, { t: 'error', code: 'car_unavailable', message: '目前無法領車' })
+        }
+        break
+      }
       case 'ride':
-        send(ws, { t: 'error', code: 'car_unavailable', message: '碰碰車暫未開放' })
+      case 'ride_mount':
+      case 'ride_dismount': {
+        if (m.car === null || m.car === undefined || m.t === 'ride_dismount') {
+          dismountPlayer(me)
+        } else {
+          const ok = mountCar(me, m.car)
+          if (!ok) {
+            send(ws, { t: 'error', code: 'car_unavailable', message: '無法上車' })
+          }
+        }
         break
-      case 'drive':
+      }
+      case 'drive': {
+        if (me.riding !== null && me.riding !== undefined) {
+          me.lastDriveSeq = m.seq ?? 0
+          const dir = typeof m.dir === 'number' ? m.dir : 0
+          const mag = typeof m.mag === 'number' ? m.mag : 0
+          sim.setInput(me.riding, { dir, mag })
+          const car = cars.get(me.riding)
+          if (car) {
+            car.lastInputAt = now()
+            if (mag > 0) car.lastActiveDrive = now()
+          }
+        }
         break
+      }
     }
   })
 
   ws.on('close', () => {
     if (!me || me.ws !== ws) return // 已被新連線取代
     const p = me
+    if (p.riding !== null && p.riding !== undefined) {
+      dismountPlayer(p)
+    }
     // 斷線保留：保留期內可用 resumeToken 恢復，期滿才廣播 leave。
     p.ws = null
     if (p.moving) queueMove(p, false)
