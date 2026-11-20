@@ -92,8 +92,10 @@ export class SceneRenderer {
     private readonly canvas: HTMLCanvasElement,
     preset: QualityPreset,
     private readonly callbacks: RendererCallbacks,
+    initialResolutionScale = 1,
   ) {
     this.preset = preset
+    this.resolutionScale = initialResolutionScale
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: preset.antialias,
