@@ -163,7 +163,12 @@ export class IncenseSystem {
 
   /** 每幀更新香的長度與煙。now 為 performance.now 毫秒，t 為秒。 */
   update(now: number, t: number): void {
-    this.sticks = this.sticks.filter((s) => s.permanent || now - s.plantedAt < STICK_LIFE_MS)
+    for (let i = this.sticks.length - 1; i >= 0; i--) {
+      const s = this.sticks[i]!
+      if (!s.permanent && now - s.plantedAt >= STICK_LIFE_MS) {
+        this.sticks.splice(i, 1)
+      }
+    }
     let n = 0
     let puffs = 0
     for (const s of this.sticks) {
@@ -197,9 +202,16 @@ export class IncenseSystem {
     this.smokeMesh.count = puffs
     this.stickMesh.visible = n > 0
     this.smokeMesh.visible = puffs > 0
-    this.stickMesh.instanceMatrix.needsUpdate = true
-    this.smokeMesh.instanceMatrix.needsUpdate = true
-    this.smokeAlpha.needsUpdate = true
+    if (n > 0) {
+      this.stickMesh.instanceMatrix.updateRanges = [{ start: 0, count: n * 16 }]
+      this.stickMesh.instanceMatrix.needsUpdate = true
+    }
+    if (puffs > 0) {
+      this.smokeMesh.instanceMatrix.updateRanges = [{ start: 0, count: puffs * 16 }]
+      this.smokeMesh.instanceMatrix.needsUpdate = true
+      this.smokeAlpha.updateRanges = [{ start: 0, count: puffs }]
+      this.smokeAlpha.needsUpdate = true
+    }
   }
 
   /** 移出場景；GPU 資源由建構時的 tracker 釋放。 */
