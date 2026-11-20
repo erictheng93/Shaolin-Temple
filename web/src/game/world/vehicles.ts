@@ -1,7 +1,7 @@
-import type { MessageKey } from '../../i18n'
-import { BOOTH, type Rect } from './layout'
-import type { ZoneDef } from './zones'
-import VEHICLES_JSON from '../../../../shared/vehicles.json'
+import type { MessageKey } from '../../i18n/index.ts'
+import { BOOTH, type Rect } from './layout.ts'
+import type { ZoneDef } from './zones.ts'
+import VEHICLES_JSON from '../../../../shared/vehicles.json' with { type: 'json' }
 
 export { BOOTH }
 
