@@ -4,8 +4,10 @@
 
 pub mod params;
 pub mod drive;
+pub mod world;
 pub use params::*;
 pub use drive::*;
+pub use world::*;
 
 #[cfg(test)]
 mod tests {
