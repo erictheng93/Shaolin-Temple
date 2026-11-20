@@ -106,7 +106,7 @@ async fn counters_follow_connections_and_messages() {
             .headers_mut()
             .insert("origin", "http://localhost:5173".parse().unwrap());
         let (mut ws, _) = connect_async(request).await.unwrap();
-        let hello = format!(r#"{{"t":"hello","v":4,"name":"m{i}"}}"#);
+        let hello = format!(r#"{{"t":"hello","v":5,"name":"m{i}"}}"#);
         ws.send(Message::Text(hello.into())).await.unwrap();
         let welcome = timeout(Duration::from_secs(5), ws.next())
             .await

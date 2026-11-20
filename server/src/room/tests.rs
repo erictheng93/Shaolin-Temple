@@ -37,6 +37,7 @@ fn full_room_welcome_fits_message_limit() {
         server_time: n,
         auth: AuthKind::Google,
         players: vec![player; MAX_ROOM_CAPACITY],
+        cars: Vec::new(),
     };
     let bytes = serde_json::to_string(&welcome).unwrap().len();
     assert!(bytes <= MAX_MESSAGE_BYTES, "{bytes} > {MAX_MESSAGE_BYTES}");
@@ -239,6 +240,10 @@ fn kind(m: &ServerMessage) -> &'static str {
         ServerMessage::Chat { .. } => "chat",
         ServerMessage::Outfit { .. } => "outfit",
         ServerMessage::Name { .. } => "name",
+        ServerMessage::Car { .. } => "car",
+        ServerMessage::CarGone { .. } => "carGone",
+        ServerMessage::Knock { .. } => "knock",
+        ServerMessage::Cars { .. } => "cars",
     }
 }
 fn kinds(messages: &[ServerMessage]) -> Vec<&'static str> {

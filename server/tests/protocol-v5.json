@@ -1,0 +1,4275 @@
+{
+  "_comment": "協定版本 5 的共用固定資料。server／client 為有效的 JSON 訊息；invalid.server 是前端 decode() 必須拒絕（回傳 null）的伺服器訊息，invalid.client 是伺服器必須視為無效訊息的上行訊息（每筆的 message 是訊息本身）；binary 為二進位幀（hex）：valid／invalid 是 moves／sync，input 是伺服器編碼前的 tuple、decoded 是解碼後的 tuple；action 是動作廣播（codes 為動作編號對照表，索引即編號；unwrap 為由 32 位元 startedAt 還原絕對時間的案例）；cars 為碰碰車狀態廣播。binary 由 server/tests/protocol-v5-vectors.py 產生，見 docs/superpowers/plans/2026-11-21-bumper-cars.md 任務 5。",
+  "outfitCount": 8,
+  "kindCount": 4,
+  "server": [
+    {
+      "t": "chat",
+      "id": "a",
+      "text": "阿彌陀佛",
+      "at": 123
+    },
+    {
+      "t": "welcome",
+      "selfId": "a",
+      "room": "r",
+      "resumeToken": "t",
+      "serverTime": 0,
+      "auth": "guest",
+      "players": [
+        {
+          "id": "a",
+          "n": 0,
+          "name": "n",
+          "x": 0,
+          "z": 0,
+          "heading": 0,
+          "zone": "courtyard",
+          "outfit": 2
+        }
+      ],
+      "cars": []
+    },
+    {
+      "t": "welcome",
+      "selfId": "a",
+      "room": "r",
+      "resumeToken": "t",
+      "serverTime": 0,
+      "auth": "google",
+      "players": [],
+      "cars": []
+    },
+    {
+      "t": "welcome",
+      "selfId": "a",
+      "room": "r",
+      "resumeToken": "t",
+      "serverTime": 0,
+      "auth": "line",
+      "players": [],
+      "cars": []
+    },
+    {
+      "t": "join",
+      "player": {
+        "id": "a",
+        "n": 7,
+        "name": "n",
+        "x": 0,
+        "z": 0,
+        "heading": 0,
+        "action": {
+          "id": "bow",
+          "startedAt": 123
+        },
+        "outfit": 5
+      }
+    },
+    {
+      "t": "outfit",
+      "id": "a",
+      "outfit": 3
+    },
+    {
+      "t": "leave",
+      "id": "a"
+    },
+    {
+      "t": "move",
+      "id": "a",
+      "x": 1,
+      "z": 2,
+      "heading": 0,
+      "moving": true
+    },
+    {
+      "t": "ack",
+      "reqId": "r1",
+      "ok": true
+    },
+    {
+      "t": "ack",
+      "reqId": "r2",
+      "ok": false,
+      "reason": "unknown_action"
+    },
+    {
+      "t": "pong",
+      "ts": 123.25,
+      "serverTime": 456
+    },
+    {
+      "t": "error",
+      "code": "unsupported_version",
+      "message": "Protocol version 5 required"
+    },
+    {
+      "t": "zone",
+      "id": "a",
+      "zone": "hall",
+      "x": 0,
+      "z": 0,
+      "heading": 0
+    },
+    {
+      "t": "name",
+      "id": "a",
+      "name": "小明"
+    },
+    {
+      "t": "car",
+      "c": 3,
+      "kind": 1,
+      "driver": "user_123",
+      "x": 1.25,
+      "z": -3.0,
+      "heading": 1.57,
+      "fadeAt": null
+    },
+    {
+      "t": "car",
+      "c": 5,
+      "kind": 0,
+      "driver": null,
+      "x": 0.0,
+      "z": 8.0,
+      "heading": 0.0,
+      "fadeAt": 1794787260000
+    },
+    {
+      "t": "carGone",
+      "c": 5
+    },
+    {
+      "t": "knock",
+      "id": "user_123",
+      "x": 1.0,
+      "z": 2.0,
+      "toX": 3.0,
+      "toZ": 4.0,
+      "at": 1794787201000
+    },
+    {
+      "t": "error",
+      "code": "car_unavailable",
+      "message": "Car is not available"
+    },
+    {
+      "t": "error",
+      "code": "booth_crowded",
+      "message": "Booth is crowded"
+    },
+    {
+      "t": "error",
+      "code": "claim_cooldown",
+      "message": "Claim is on cooldown"
+    },
+    {
+      "t": "error",
+      "code": "dismount_first",
+      "message": "Dismount first"
+    }
+  ],
+  "client": [
+    {
+      "t": "chat",
+      "text": "阿彌陀佛"
+    },
+    {
+      "t": "outfit",
+      "outfit": 4
+    },
+    {
+      "t": "hello",
+      "v": 5,
+      "name": "n",
+      "resumeToken": "t",
+      "outfit": 4
+    },
+    {
+      "t": "hello",
+      "v": 5,
+      "name": "n"
+    },
+    {
+      "t": "hello",
+      "v": 5,
+      "name": "n",
+      "resumeToken": "t"
+    },
+    {
+      "t": "hello",
+      "v": 5,
+      "name": "n",
+      "session": "s"
+    },
+    {
+      "t": "hello",
+      "v": 5,
+      "name": "n",
+      "resumeToken": "t",
+      "session": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+    },
+    {
+      "t": "move",
+      "x": 1,
+      "z": 2,
+      "heading": 0,
+      "seq": 1
+    },
+    {
+      "t": "stop",
+      "x": 1,
+      "z": 2,
+      "heading": 0,
+      "seq": 2
+    },
+    {
+      "t": "action",
+      "reqId": "r1",
+      "id": "bow"
+    },
+    {
+      "t": "action",
+      "reqId": "r2",
+      "id": "bell",
+      "data": {
+        "count": 1
+      }
+    },
+    {
+      "t": "ping",
+      "ts": 123.25
+    },
+    {
+      "t": "zone",
+      "zone": "hall",
+      "x": 0,
+      "z": 0,
+      "heading": 0
+    },
+    {
+      "t": "rename",
+      "name": "小明"
+    },
+    {
+      "t": "claim",
+      "kind": 0
+    },
+    {
+      "t": "ride",
+      "car": 3
+    },
+    {
+      "t": "ride",
+      "car": null
+    },
+    {
+      "t": "drive",
+      "seq": 101,
+      "dir": 64,
+      "mag": 255
+    }
+  ],
+  "invalid": {
+    "server": [
+      {
+        "name": "welcome.auth 不是 guest／google／line",
+        "message": {
+          "t": "welcome",
+          "selfId": "a",
+          "room": "r",
+          "resumeToken": "t",
+          "serverTime": 0,
+          "auth": "admin",
+          "players": []
+        }
+      },
+      {
+        "name": "welcome 缺 auth",
+        "message": {
+          "t": "welcome",
+          "selfId": "a",
+          "room": "r",
+          "resumeToken": "t",
+          "serverTime": 0,
+          "players": []
+        }
+      },
+      {
+        "name": "welcome.auth 是 null",
+        "message": {
+          "t": "welcome",
+          "selfId": "a",
+          "room": "r",
+          "resumeToken": "t",
+          "serverTime": 0,
+          "auth": null,
+          "players": []
+        }
+      },
+      {
+        "name": "welcome.auth 大小寫不符（Google）",
+        "message": {
+          "t": "welcome",
+          "selfId": "a",
+          "room": "r",
+          "resumeToken": "t",
+          "serverTime": 0,
+          "auth": "Google",
+          "players": []
+        }
+      },
+      {
+        "name": "name 缺 id",
+        "message": {
+          "t": "name",
+          "name": "小明"
+        }
+      },
+      {
+        "name": "name 缺 name",
+        "message": {
+          "t": "name",
+          "id": "a"
+        }
+      },
+      {
+        "name": "name.name 不是字串",
+        "message": {
+          "t": "name",
+          "id": "a",
+          "name": 1
+        }
+      },
+      {
+        "name": "name.id 不是字串",
+        "message": {
+          "t": "name",
+          "id": 1,
+          "name": "小明"
+        }
+      },
+      {
+        "name": "car.kind 不是整數",
+        "message": {
+          "t": "car",
+          "c": 0,
+          "kind": "0",
+          "driver": null,
+          "x": 0,
+          "z": 0,
+          "heading": 0,
+          "fadeAt": null
+        }
+      },
+      {
+        "name": "carGone.c 不是整數",
+        "message": {
+          "t": "carGone",
+          "c": "0"
+        }
+      },
+      {
+        "name": "knock 缺 at",
+        "message": {
+          "t": "knock",
+          "id": "u",
+          "x": 1,
+          "z": 2,
+          "toX": 3,
+          "toZ": 4
+        }
+      },
+      {
+        "name": "welcome.cars 不是陣列",
+        "message": {
+          "t": "welcome",
+          "selfId": "a",
+          "room": "r",
+          "resumeToken": "t",
+          "serverTime": 0,
+          "auth": "guest",
+          "players": [],
+          "cars": 123
+        }
+      }
+    ],
+    "client": [
+      {
+        "name": "rename 缺 name",
+        "message": {
+          "t": "rename"
+        }
+      },
+      {
+        "name": "rename.name 不是字串",
+        "message": {
+          "t": "rename",
+          "name": 1
+        }
+      },
+      {
+        "name": "rename.name 超過 256 bytes",
+        "message": {
+          "t": "rename",
+          "name": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"
+        }
+      },
+      {
+        "name": "hello.session 不是字串",
+        "message": {
+          "t": "hello",
+          "v": 5,
+          "name": "n",
+          "session": 1
+        }
+      },
+      {
+        "name": "hello.session 超過 512 bytes",
+        "message": {
+          "t": "hello",
+          "v": 5,
+          "name": "n",
+          "session": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+        }
+      },
+      {
+        "name": "claim.kind = 4 (超過 KIND_COUNT-1)",
+        "message": {
+          "t": "claim",
+          "kind": 4
+        }
+      },
+      {
+        "name": "claim.kind 不是整數",
+        "message": {
+          "t": "claim",
+          "kind": "0"
+        }
+      },
+      {
+        "name": "claim 缺 kind",
+        "message": {
+          "t": "claim"
+        }
+      },
+      {
+        "name": "ride.car = 16 (超過 15)",
+        "message": {
+          "t": "ride",
+          "car": 16
+        }
+      },
+      {
+        "name": "ride.car 不是整數或 null",
+        "message": {
+          "t": "ride",
+          "car": "0"
+        }
+      },
+      {
+        "name": "drive.mag = 256 (超過 255)",
+        "message": {
+          "t": "drive",
+          "seq": 1,
+          "dir": 0,
+          "mag": 256
+        }
+      },
+      {
+        "name": "drive.seq = -1",
+        "message": {
+          "t": "drive",
+          "seq": -1,
+          "dir": 0,
+          "mag": 100
+        }
+      },
+      {
+        "name": "drive.dir = 256",
+        "message": {
+          "t": "drive",
+          "seq": 1,
+          "dir": 256,
+          "mag": 100
+        }
+      },
+      {
+        "name": "drive 缺 mag",
+        "message": {
+          "t": "drive",
+          "seq": 1,
+          "dir": 0
+        }
+      }
+    ]
+  },
+  "binary": {
+    "valid": [
+      {
+        "name": "moves：移動中與停止各一筆",
+        "input": {
+          "t": "moves",
+          "m": [
+            [
+              0,
+              1.25,
+              -3,
+              0.5,
+              1
+            ],
+            [
+              1,
+              0,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        "hex": "01807d00d4fe14010000000000",
+        "decoded": {
+          "t": "moves",
+          "m": [
+            [
+              0,
+              1.25,
+              -3.0,
+              0.4908738521234052,
+              1
+            ],
+            [
+              1,
+              0.0,
+              0.0,
+              0.0,
+              0
+            ]
+          ]
+        }
+      },
+      {
+        "name": "sync：最大短編號、場地邊界、heading ±π 與 −π/2",
+        "input": {
+          "t": "sync",
+          "m": [
+            [
+              127,
+              19,
+              -19,
+              3.141592653589793,
+              0
+            ],
+            [
+              5,
+              0.125,
+              -0.125,
+              -1.5707963267948966,
+              1
+            ],
+            [
+              9,
+              -7.4,
+              8.6,
+              -3.141592653589793,
+              1
+            ]
+          ]
+        },
+        "hex": "027f6c0794f880850d00f3ffc0891cfd5c0380",
+        "decoded": {
+          "t": "sync",
+          "m": [
+            [
+              127,
+              19.0,
+              -19.0,
+              3.141592653589793,
+              0
+            ],
+            [
+              5,
+              0.13,
+              -0.13,
+              -1.5707963267948966,
+              1
+            ],
+            [
+              9,
+              -7.4,
+              8.6,
+              3.141592653589793,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "name": "moves：heading 未正規化（6.0、3.13）與四捨五入到格點",
+        "input": {
+          "t": "moves",
+          "m": [
+            [
+              3,
+              0.004,
+              -0.006,
+              6.0,
+              1
+            ],
+            [
+              4,
+              12.34,
+              -18.99,
+              3.13,
+              1
+            ]
+          ]
+        },
+        "hex": "01830000fffff484d20495f880",
+        "decoded": {
+          "t": "moves",
+          "m": [
+            [
+              3,
+              0.0,
+              -0.01,
+              -0.2945243112740431,
+              1
+            ],
+            [
+              4,
+              12.34,
+              -18.99,
+              3.141592653589793,
+              1
+            ]
+          ]
+        }
+      },
+      {
+        "name": "sync：空的整批校正（切換到沒有其他人的場景）",
+        "input": {
+          "t": "sync",
+          "m": []
+        },
+        "hex": "02",
+        "decoded": {
+          "t": "sync",
+          "m": []
+        }
+      },
+      {
+        "name": "moves：座標上限 ±100 公尺",
+        "input": {
+          "t": "moves",
+          "m": [
+            [
+              2,
+              100,
+              -100,
+              0,
+              0
+            ]
+          ]
+        },
+        "hex": "01021027f0d800",
+        "decoded": {
+          "t": "moves",
+          "m": [
+            [
+              2,
+              100.0,
+              -100.0,
+              0.0,
+              0
+            ]
+          ]
+        }
+      },
+      {
+        "name": "moves：超出上限的座標在編碼時夾回 ±100 公尺",
+        "input": {
+          "t": "moves",
+          "m": [
+            [
+              2,
+              150,
+              -400,
+              0,
+              0
+            ]
+          ]
+        },
+        "hex": "01021027f0d800",
+        "decoded": {
+          "t": "moves",
+          "m": [
+            [
+              2,
+              100.0,
+              -100.0,
+              0.0,
+              0
+            ]
+          ]
+        }
+      },
+      {
+        "name": "moves：200 筆（單則上限）",
+        "input": {
+          "t": "moves",
+          "m": [
+            [
+              0,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              1,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              2,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              3,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              4,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              5,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              6,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              7,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              8,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              9,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              10,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              11,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              12,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              13,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              14,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              15,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              16,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              17,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              18,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              19,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              20,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              21,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              22,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              23,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              24,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              25,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              26,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              27,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              28,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              29,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              30,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              31,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              32,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              33,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              34,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              35,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              36,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              37,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              38,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              39,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              40,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              41,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              42,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              43,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              44,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              45,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              46,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              47,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              48,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              49,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              50,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              51,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              52,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              53,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              54,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              55,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              56,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              57,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              58,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              59,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              60,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              61,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              62,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              63,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              64,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              65,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              66,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              67,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              68,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              69,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              70,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              71,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              72,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              73,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              74,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              75,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              76,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              77,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              78,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              79,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              80,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              81,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              82,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              83,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              84,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              85,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              86,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              87,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              88,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              89,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              90,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              91,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              92,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              93,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              94,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              95,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              96,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              97,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              98,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              99,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              100,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              101,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              102,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              103,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              104,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              105,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              106,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              107,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              108,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              109,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              110,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              111,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              112,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              113,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              114,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              115,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              116,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              117,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              118,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              119,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              120,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              121,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              122,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              123,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              124,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              125,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              126,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              127,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              0,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              1,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              2,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              3,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              4,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              5,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              6,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              7,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              8,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              9,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              10,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              11,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              12,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              13,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              14,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              15,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              16,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              17,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              18,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              19,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              20,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              21,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              22,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              23,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              24,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              25,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              26,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              27,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              28,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              29,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              30,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              31,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              32,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              33,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              34,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              35,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              36,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              37,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              38,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              39,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              40,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              41,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              42,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              43,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              44,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              45,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              46,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              47,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              48,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              49,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              50,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              51,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              52,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              53,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              54,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              55,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              56,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              57,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              58,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              59,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              60,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              61,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              62,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              63,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              64,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              65,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              66,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              67,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              68,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              69,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              70,
+              1,
+              2,
+              0,
+              1
+            ],
+            [
+              71,
+              1,
+              2,
+              0,
+              1
+            ]
+          ]
+        },
+        "hex": "01806400c80000816400c80000826400c80000836400c80000846400c80000856400c80000866400c80000876400c80000886400c80000896400c800008a6400c800008b6400c800008c6400c800008d6400c800008e6400c800008f6400c80000906400c80000916400c80000926400c80000936400c80000946400c80000956400c80000966400c80000976400c80000986400c80000996400c800009a6400c800009b6400c800009c6400c800009d6400c800009e6400c800009f6400c80000a06400c80000a16400c80000a26400c80000a36400c80000a46400c80000a56400c80000a66400c80000a76400c80000a86400c80000a96400c80000aa6400c80000ab6400c80000ac6400c80000ad6400c80000ae6400c80000af6400c80000b06400c80000b16400c80000b26400c80000b36400c80000b46400c80000b56400c80000b66400c80000b76400c80000b86400c80000b96400c80000ba6400c80000bb6400c80000bc6400c80000bd6400c80000be6400c80000bf6400c80000c06400c80000c16400c80000c26400c80000c36400c80000c46400c80000c56400c80000c66400c80000c76400c80000c86400c80000c96400c80000ca6400c80000cb6400c80000cc6400c80000cd6400c80000ce6400c80000cf6400c80000d06400c80000d16400c80000d26400c80000d36400c80000d46400c80000d56400c80000d66400c80000d76400c80000d86400c80000d96400c80000da6400c80000db6400c80000dc6400c80000dd6400c80000de6400c80000df6400c80000e06400c80000e16400c80000e26400c80000e36400c80000e46400c80000e56400c80000e66400c80000e76400c80000e86400c80000e96400c80000ea6400c80000eb6400c80000ec6400c80000ed6400c80000ee6400c80000ef6400c80000f06400c80000f16400c80000f26400c80000f36400c80000f46400c80000f56400c80000f66400c80000f76400c80000f86400c80000f96400c80000fa6400c80000fb6400c80000fc6400c80000fd6400c80000fe6400c80000ff6400c80000806400c80000816400c80000826400c80000836400c80000846400c80000856400c80000866400c80000876400c80000886400c80000896400c800008a6400c800008b6400c800008c6400c800008d6400c800008e6400c800008f6400c80000906400c80000916400c80000926400c80000936400c80000946400c80000956400c80000966400c80000976400c80000986400c80000996400c800009a6400c800009b6400c800009c6400c800009d6400c800009e6400c800009f6400c80000a06400c80000a16400c80000a26400c80000a36400c80000a46400c80000a56400c80000a66400c80000a76400c80000a86400c80000a96400c80000aa6400c80000ab6400c80000ac6400c80000ad6400c80000ae6400c80000af6400c80000b06400c80000b16400c80000b26400c80000b36400c80000b46400c80000b56400c80000b66400c80000b76400c80000b86400c80000b96400c80000ba6400c80000bb6400c80000bc6400c80000bd6400c80000be6400c80000bf6400c80000c06400c80000c16400c80000c26400c80000c36400c80000c46400c80000c56400c80000c66400c80000c76400c80000",
+        "decoded": {
+          "t": "moves",
+          "m": [
+            [
+              0,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              1,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              2,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              3,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              4,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              5,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              6,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              7,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              8,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              9,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              10,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              11,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              12,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              13,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              14,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              15,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              16,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              17,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              18,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              19,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              20,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              21,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              22,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              23,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              24,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              25,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              26,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              27,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              28,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              29,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              30,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              31,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              32,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              33,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              34,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              35,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              36,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              37,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              38,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              39,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              40,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              41,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              42,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              43,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              44,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              45,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              46,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              47,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              48,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              49,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              50,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              51,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              52,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              53,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              54,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              55,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              56,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              57,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              58,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              59,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              60,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              61,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              62,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              63,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              64,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              65,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              66,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              67,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              68,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              69,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              70,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              71,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              72,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              73,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              74,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              75,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              76,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              77,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              78,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              79,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              80,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              81,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              82,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              83,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              84,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              85,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              86,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              87,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              88,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              89,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              90,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              91,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              92,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              93,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              94,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              95,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              96,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              97,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              98,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              99,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              100,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              101,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              102,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              103,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              104,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              105,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              106,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              107,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              108,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              109,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              110,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              111,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              112,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              113,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              114,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              115,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              116,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              117,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              118,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              119,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              120,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              121,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              122,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              123,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              124,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              125,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              126,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              127,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              0,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              1,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              2,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              3,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              4,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              5,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              6,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              7,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              8,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              9,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              10,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              11,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              12,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              13,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              14,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              15,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              16,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              17,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              18,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              19,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              20,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              21,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              22,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              23,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              24,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              25,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              26,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              27,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              28,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              29,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              30,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              31,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              32,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              33,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              34,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              35,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              36,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              37,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              38,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              39,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              40,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              41,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              42,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              43,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              44,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              45,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              46,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              47,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              48,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              49,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              50,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              51,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              52,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              53,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              54,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              55,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              56,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              57,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              58,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              59,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              60,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              61,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              62,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              63,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              64,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              65,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              66,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              67,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              68,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              69,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              70,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ],
+            [
+              71,
+              1.0,
+              2.0,
+              0.0,
+              1
+            ]
+          ]
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "name": "空的幀",
+        "hex": ""
+      },
+      {
+        "name": "未知幀型 0x00",
+        "hex": "00"
+      },
+      {
+        "name": "未知幀型 0x05",
+        "hex": "05000000000000"
+      },
+      {
+        "name": "未知幀型 0x7b（JSON 的「{」）",
+        "hex": "7b"
+      },
+      {
+        "name": "長度不是 1 + 6N（少 1 byte）",
+        "hex": "010000000000"
+      },
+      {
+        "name": "長度不是 1 + 6N（多 1 byte）",
+        "hex": "0200000000000000"
+      },
+      {
+        "name": "x 超出 ±100 公尺（10001 公分）",
+        "hex": "01001127000000"
+      },
+      {
+        "name": "z 超出 ±100 公尺（−32768 公分）",
+        "hex": "02000000008000"
+      },
+      {
+        "name": "201 筆（超過單則上限）",
+        "hex": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ],
+    "action": {
+      "codes": [
+        "bow",
+        "prostrate",
+        "chant",
+        "chant_end",
+        "incense",
+        "bell"
+      ],
+      "valid": [
+        {
+          "name": "合十（bow），n = 0",
+          "input": {
+            "n": 0,
+            "id": "bow",
+            "startedAt": 1794787200123
+          },
+          "hex": "0300007b4ca7e1",
+          "decoded": {
+            "n": 0,
+            "id": "bow",
+            "startedAtLow": 3785837691
+          }
+        },
+        {
+          "name": "跪拜（prostrate），n = 1",
+          "input": {
+            "n": 1,
+            "id": "prostrate",
+            "startedAt": 1794787204567
+          },
+          "hex": "030101d75da7e1",
+          "decoded": {
+            "n": 1,
+            "id": "prostrate",
+            "startedAtLow": 3785842135
+          }
+        },
+        {
+          "name": "誦經（chant），n = 49（50 人房的最大編號）",
+          "input": {
+            "n": 49,
+            "id": "chant",
+            "startedAt": 1794873600000
+          },
+          "hex": "03310200a8cde6",
+          "decoded": {
+            "n": 49,
+            "id": "chant",
+            "startedAtLow": 3872237568
+          }
+        },
+        {
+          "name": "起身（chant_end），n = 127（7 位元上限），startedAt 剛好是 2^32 的倍數",
+          "input": {
+            "n": 127,
+            "id": "chant_end",
+            "startedAt": 1795296329728
+          },
+          "hex": "037f0300000000",
+          "decoded": {
+            "n": 127,
+            "id": "chant_end",
+            "startedAtLow": 0
+          }
+        },
+        {
+          "name": "上香（incense），startedAt mod 2^32 = 2^32 − 1",
+          "input": {
+            "n": 7,
+            "id": "incense",
+            "startedAt": 1795296329727
+          },
+          "hex": "030704ffffffff",
+          "decoded": {
+            "n": 7,
+            "id": "incense",
+            "startedAtLow": 4294967295
+          }
+        },
+        {
+          "name": "敲鐘（bell）",
+          "input": {
+            "n": 12,
+            "id": "bell",
+            "startedAt": 1794787200999
+          },
+          "hex": "030c05e74fa7e1",
+          "decoded": {
+            "n": 12,
+            "id": "bell",
+            "startedAtLow": 3785838567
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "name": "只有幀型",
+          "hex": "03"
+        },
+        {
+          "name": "少 1 byte（6 bytes）",
+          "hex": "030000004ca7"
+        },
+        {
+          "name": "多 1 byte（8 bytes）",
+          "hex": "030000004ca7e100"
+        },
+        {
+          "name": "n 的 bit 7 為 1（128）",
+          "hex": "038000004ca7e1"
+        },
+        {
+          "name": "n = 255",
+          "hex": "03ff00004ca7e1"
+        },
+        {
+          "name": "未知動作編號 6（對照表之外）",
+          "hex": "030006004ca7e1"
+        },
+        {
+          "name": "未知動作編號 255",
+          "hex": "0300ff004ca7e1"
+        }
+      ],
+      "unwrap": [
+        {
+          "name": "80 ms 前開始（一般的轉送延遲）",
+          "low": 3785837691,
+          "reference": 1794787200203,
+          "startedAt": 1794787200123
+        },
+        {
+          "name": "客戶端時鐘估計慢了 30 ms：startedAt 在參考時間之後",
+          "low": 3785837691,
+          "reference": 1794787200093,
+          "startedAt": 1794787200123
+        },
+        {
+          "name": "參考時間非整數毫秒（performance.now 的小數）",
+          "low": 3785837691,
+          "reference": 1794787200203.75,
+          "startedAt": 1794787200123
+        },
+        {
+          "name": "跨過 2^32 回繞：startedAt 在回繞前、參考時間在回繞後",
+          "low": 4294967286,
+          "reference": 1795296329778,
+          "startedAt": 1795296329718
+        },
+        {
+          "name": "跨過 2^32 回繞：startedAt 在回繞後、參考時間在回繞前",
+          "low": 5,
+          "reference": 1795296329708,
+          "startedAt": 1795296329733
+        },
+        {
+          "name": "分頁凍結 10 分鐘後才收到",
+          "low": 3785837568,
+          "reference": 1794787800000,
+          "startedAt": 1794787200000
+        },
+        {
+          "name": "延遲 20 天仍正確",
+          "low": 3785837568,
+          "reference": 1796515200000,
+          "startedAt": 1794787200000
+        },
+        {
+          "name": "範圍邊界：startedAt 比參考時間早剛好 2^31 ms 仍正確",
+          "low": 3785837568,
+          "reference": 1796934683648,
+          "startedAt": 1794787200000
+        },
+        {
+          "name": "範圍外：startedAt 比參考時間晚剛好 2^31 ms，解成早 2^31 ms",
+          "low": 1638353920,
+          "reference": 1794787200000,
+          "startedAt": 1792639716352
+        }
+      ]
+    },
+    "cars": {
+      "valid": [
+        {
+          "name": "空幀（ack = 0）",
+          "input": {
+            "ack": 0,
+            "cars": []
+          },
+          "hex": "040000",
+          "decoded": {
+            "ack": 0,
+            "cars": []
+          }
+        },
+        {
+          "name": "一台車：c=3, occupied, x=1.25, z=-3, heading=π/2, vx=8, vz=-2.5, w=1.5, ack=65535",
+          "input": {
+            "ack": 65535,
+            "cars": [
+              {
+                "c": 3,
+                "occupied": true,
+                "bumped": false,
+                "x": 1.25,
+                "z": -3.0,
+                "heading": 1.5707963267948966,
+                "vx": 8.0,
+                "vz": -2.5,
+                "w": 1.5
+              }
+            ]
+          },
+          "hex": "04ffff137d00d4fe0040200306ff18",
+          "decoded": {
+            "ack": 65535,
+            "cars": [
+              {
+                "c": 3,
+                "occupied": true,
+                "bumped": false,
+                "x": 1.25,
+                "z": -3.0,
+                "heading": 1.5707963267948966,
+                "vx": 8.0,
+                "vz": -2.5,
+                "w": 1.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "朝向 π（須編成 -32768）",
+          "input": {
+            "ack": 100,
+            "cars": [
+              {
+                "c": 0,
+                "occupied": false,
+                "bumped": true,
+                "x": 0.0,
+                "z": 0.0,
+                "heading": 3.141592653589793,
+                "vx": 0.0,
+                "vz": 0.0,
+                "w": 0.0
+              }
+            ]
+          },
+          "hex": "046400200000000000800000000000",
+          "decoded": {
+            "ack": 100,
+            "cars": [
+              {
+                "c": 0,
+                "occupied": false,
+                "bumped": true,
+                "x": 0.0,
+                "z": 0.0,
+                "heading": -3.141592653589793,
+                "vx": 0.0,
+                "vz": 0.0,
+                "w": 0.0
+              }
+            ]
+          }
+        },
+        {
+          "name": "16 台車（滿員狀態）",
+          "input": {
+            "ack": 1234,
+            "cars": [
+              {
+                "c": 0,
+                "occupied": false,
+                "bumped": true,
+                "x": -8.0,
+                "z": -8.0,
+                "heading": -3.141592653589793,
+                "vx": -12.0,
+                "vz": 12.0,
+                "w": -4.0
+              },
+              {
+                "c": 1,
+                "occupied": true,
+                "bumped": false,
+                "x": -7.0,
+                "z": -7.0,
+                "heading": -2.748893571891069,
+                "vx": -10.5,
+                "vz": 10.5,
+                "w": -3.5
+              },
+              {
+                "c": 2,
+                "occupied": false,
+                "bumped": false,
+                "x": -6.0,
+                "z": -6.0,
+                "heading": -2.356194490192345,
+                "vx": -9.0,
+                "vz": 9.0,
+                "w": -3.0
+              },
+              {
+                "c": 3,
+                "occupied": true,
+                "bumped": true,
+                "x": -5.0,
+                "z": -5.0,
+                "heading": -1.9634954084936207,
+                "vx": -7.5,
+                "vz": 7.5,
+                "w": -2.5
+              },
+              {
+                "c": 4,
+                "occupied": false,
+                "bumped": false,
+                "x": -4.0,
+                "z": -4.0,
+                "heading": -1.5707963267948966,
+                "vx": -6.0,
+                "vz": 6.0,
+                "w": -2.0
+              },
+              {
+                "c": 5,
+                "occupied": true,
+                "bumped": false,
+                "x": -3.0,
+                "z": -3.0,
+                "heading": -1.1780972450961724,
+                "vx": -4.5,
+                "vz": 4.5,
+                "w": -1.5
+              },
+              {
+                "c": 6,
+                "occupied": false,
+                "bumped": true,
+                "x": -2.0,
+                "z": -2.0,
+                "heading": -0.7853981633974483,
+                "vx": -3.0,
+                "vz": 3.0,
+                "w": -1.0
+              },
+              {
+                "c": 7,
+                "occupied": true,
+                "bumped": false,
+                "x": -1.0,
+                "z": -1.0,
+                "heading": -0.39269908169872414,
+                "vx": -1.5,
+                "vz": 1.5,
+                "w": -0.5
+              },
+              {
+                "c": 8,
+                "occupied": false,
+                "bumped": false,
+                "x": 0.0,
+                "z": 0.0,
+                "heading": 0.0,
+                "vx": 0.0,
+                "vz": 0.0,
+                "w": 0.0
+              },
+              {
+                "c": 9,
+                "occupied": true,
+                "bumped": true,
+                "x": 1.0,
+                "z": 1.0,
+                "heading": 0.39269908169872414,
+                "vx": 1.5,
+                "vz": -1.5,
+                "w": 0.5
+              },
+              {
+                "c": 10,
+                "occupied": false,
+                "bumped": false,
+                "x": 2.0,
+                "z": 2.0,
+                "heading": 0.7853981633974483,
+                "vx": 3.0,
+                "vz": -3.0,
+                "w": 1.0
+              },
+              {
+                "c": 11,
+                "occupied": true,
+                "bumped": false,
+                "x": 3.0,
+                "z": 3.0,
+                "heading": 1.1780972450961724,
+                "vx": 4.5,
+                "vz": -4.5,
+                "w": 1.5
+              },
+              {
+                "c": 12,
+                "occupied": false,
+                "bumped": true,
+                "x": 4.0,
+                "z": 4.0,
+                "heading": 1.5707963267948966,
+                "vx": 6.0,
+                "vz": -6.0,
+                "w": 2.0
+              },
+              {
+                "c": 13,
+                "occupied": true,
+                "bumped": false,
+                "x": 5.0,
+                "z": 5.0,
+                "heading": 1.9634954084936207,
+                "vx": 7.5,
+                "vz": -7.5,
+                "w": 2.5
+              },
+              {
+                "c": 14,
+                "occupied": false,
+                "bumped": false,
+                "x": 6.0,
+                "z": 6.0,
+                "heading": 2.356194490192345,
+                "vx": 9.0,
+                "vz": -9.0,
+                "w": 3.0
+              },
+              {
+                "c": 15,
+                "occupied": true,
+                "bumped": true,
+                "x": 7.0,
+                "z": 7.0,
+                "heading": 2.748893571891069,
+                "vx": 10.5,
+                "vz": -10.5,
+                "w": 3.5
+              }
+            ]
+          },
+          "hex": "04d20420e0fce0fc008050fbb004c01144fd44fd0090e6fb1a04c802a8fda8fd00a07cfc8403d0330cfe0cfe00b012fdee02d80470fe70fe00c0a8fd5802e015d4fed4fe00d03efec201e82638ff38ff00e0d4fe2c01f0179cff9cff00f06aff9600f80800000000000000000000003964006400001096006aff080ac800c80000202c01d4fe101b2c012c010030c2013efe182c9001900100405802a8fd201df401f4010050ee0212fd280e58025802006084037cfc303fbc02bc0200701a04e6fb38",
+          "decoded": {
+            "ack": 1234,
+            "cars": [
+              {
+                "c": 0,
+                "occupied": false,
+                "bumped": true,
+                "x": -8.0,
+                "z": -8.0,
+                "heading": -3.141592653589793,
+                "vx": -12.0,
+                "vz": 12.0,
+                "w": -4.0
+              },
+              {
+                "c": 1,
+                "occupied": true,
+                "bumped": false,
+                "x": -7.0,
+                "z": -7.0,
+                "heading": -2.748893571891069,
+                "vx": -10.5,
+                "vz": 10.5,
+                "w": -3.5
+              },
+              {
+                "c": 2,
+                "occupied": false,
+                "bumped": false,
+                "x": -6.0,
+                "z": -6.0,
+                "heading": -2.356194490192345,
+                "vx": -9.0,
+                "vz": 9.0,
+                "w": -3.0
+              },
+              {
+                "c": 3,
+                "occupied": true,
+                "bumped": true,
+                "x": -5.0,
+                "z": -5.0,
+                "heading": -1.9634954084936207,
+                "vx": -7.5,
+                "vz": 7.5,
+                "w": -2.5
+              },
+              {
+                "c": 4,
+                "occupied": false,
+                "bumped": false,
+                "x": -4.0,
+                "z": -4.0,
+                "heading": -1.5707963267948966,
+                "vx": -6.0,
+                "vz": 6.0,
+                "w": -2.0
+              },
+              {
+                "c": 5,
+                "occupied": true,
+                "bumped": false,
+                "x": -3.0,
+                "z": -3.0,
+                "heading": -1.1780972450961724,
+                "vx": -4.5,
+                "vz": 4.5,
+                "w": -1.5
+              },
+              {
+                "c": 6,
+                "occupied": false,
+                "bumped": true,
+                "x": -2.0,
+                "z": -2.0,
+                "heading": -0.7853981633974483,
+                "vx": -3.0,
+                "vz": 3.0,
+                "w": -1.0
+              },
+              {
+                "c": 7,
+                "occupied": true,
+                "bumped": false,
+                "x": -1.0,
+                "z": -1.0,
+                "heading": -0.39269908169872414,
+                "vx": -1.5,
+                "vz": 1.5,
+                "w": -0.5
+              },
+              {
+                "c": 8,
+                "occupied": false,
+                "bumped": false,
+                "x": 0.0,
+                "z": 0.0,
+                "heading": 0.0,
+                "vx": 0.0,
+                "vz": 0.0,
+                "w": 0.0
+              },
+              {
+                "c": 9,
+                "occupied": true,
+                "bumped": true,
+                "x": 1.0,
+                "z": 1.0,
+                "heading": 0.39269908169872414,
+                "vx": 1.5,
+                "vz": -1.5,
+                "w": 0.5
+              },
+              {
+                "c": 10,
+                "occupied": false,
+                "bumped": false,
+                "x": 2.0,
+                "z": 2.0,
+                "heading": 0.7853981633974483,
+                "vx": 3.0,
+                "vz": -3.0,
+                "w": 1.0
+              },
+              {
+                "c": 11,
+                "occupied": true,
+                "bumped": false,
+                "x": 3.0,
+                "z": 3.0,
+                "heading": 1.1780972450961724,
+                "vx": 4.5,
+                "vz": -4.5,
+                "w": 1.5
+              },
+              {
+                "c": 12,
+                "occupied": false,
+                "bumped": true,
+                "x": 4.0,
+                "z": 4.0,
+                "heading": 1.5707963267948966,
+                "vx": 6.0,
+                "vz": -6.0,
+                "w": 2.0
+              },
+              {
+                "c": 13,
+                "occupied": true,
+                "bumped": false,
+                "x": 5.0,
+                "z": 5.0,
+                "heading": 1.9634954084936207,
+                "vx": 7.5,
+                "vz": -7.5,
+                "w": 2.5
+              },
+              {
+                "c": 14,
+                "occupied": false,
+                "bumped": false,
+                "x": 6.0,
+                "z": 6.0,
+                "heading": 2.356194490192345,
+                "vx": 9.0,
+                "vz": -9.0,
+                "w": 3.0
+              },
+              {
+                "c": 15,
+                "occupied": true,
+                "bumped": true,
+                "x": 7.0,
+                "z": 7.0,
+                "heading": 2.748893571891069,
+                "vx": 10.5,
+                "vz": -10.5,
+                "w": 3.5
+              }
+            ]
+          }
+        },
+        {
+          "name": "速度與角速度夾限",
+          "input": {
+            "ack": 42,
+            "cars": [
+              {
+                "c": 7,
+                "occupied": true,
+                "bumped": false,
+                "x": 150.0,
+                "z": -200.0,
+                "heading": 0.0,
+                "vx": 50.0,
+                "vz": -60.0,
+                "w": 20.0
+              }
+            ]
+          },
+          "hex": "042a00171027f0d80000b80b48f47f",
+          "decoded": {
+            "ack": 42,
+            "cars": [
+              {
+                "c": 7,
+                "occupied": true,
+                "bumped": false,
+                "x": 100.0,
+                "z": -100.0,
+                "heading": 0.0,
+                "vx": 30.0,
+                "vz": -30.0,
+                "w": 7.9375
+              }
+            ]
+          }
+        }
+      ],
+      "invalid": [
+        {
+          "name": "長度 4（不是 3 + 12N）",
+          "hex": "04000000"
+        },
+        {
+          "name": "17 台車（超過 16 台上限）",
+          "hex": "0400000000000000000000000000000100000000000000000000000200000000000000000000000300000000000000000000000400000000000000000000000500000000000000000000000600000000000000000000000700000000000000000000000800000000000000000000000900000000000000000000000a00000000000000000000000b00000000000000000000000c00000000000000000000000d00000000000000000000000e00000000000000000000000f0000000000000000000000000000000000000000000000"
+        },
+        {
+          "name": "保留位元 bit 6 為 1",
+          "hex": "040000400000000000000000000000"
+        },
+        {
+          "name": "保留位元 bit 7 為 1",
+          "hex": "040000800000000000000000000000"
+        },
+        {
+          "name": "x 超出 ±100 公尺（10001 公分）",
+          "hex": "040000001127000000000000000000"
+        },
+        {
+          "name": "z 超出 ±100 公尺（−32768 公分）",
+          "hex": "040000000000008000000000000000"
+        },
+        {
+          "name": "同一幀內 c 重複",
+          "hex": "040000020000000000000000000000126400640000000000000000"
+        }
+      ]
+    }
+  }
+}

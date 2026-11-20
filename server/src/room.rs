@@ -127,6 +127,23 @@ enum RoomCommand {
         who: Who,
         outfit: u8,
     },
+    #[allow(dead_code)]
+    Claim {
+        who: Who,
+        kind: u8,
+    },
+    #[allow(dead_code)]
+    Ride {
+        who: Who,
+        car: Option<u8>,
+    },
+    #[allow(dead_code)]
+    Drive {
+        who: Who,
+        seq: u16,
+        dir: u8,
+        mag: u8,
+    },
 }
 
 struct Link {
@@ -247,6 +264,33 @@ impl Membership {
                 outfit,
             })
             .await;
+    }
+    pub async fn claim(&self, kind: u8) {
+        let _ = self
+            .room
+            .send(RoomCommand::Claim {
+                who: self.who.clone(),
+                kind,
+            })
+            .await;
+    }
+    pub async fn ride(&self, car: Option<u8>) {
+        let _ = self
+            .room
+            .send(RoomCommand::Ride {
+                who: self.who.clone(),
+                car,
+            })
+            .await;
+    }
+    /// 駕駛輸入是高頻可取代狀態，使用 try_send 避免阻塞。
+    pub fn drive(&self, seq: u16, dir: u8, mag: u8) {
+        let _ = self.room.try_send(RoomCommand::Drive {
+            who: self.who.clone(),
+            seq,
+            dir,
+            mag,
+        });
     }
     pub async fn zone(&self, zone: String) {
         let _ = self
@@ -427,6 +471,7 @@ impl Room {
             server_time: now_ms(),
             auth: p.auth,
             players: self.players.values().map(Self::snapshot).collect(),
+            cars: Vec::new(),
         }
     }
     /// 連線指令只在 conn 相符（目前這條連線）時生效。
@@ -904,6 +949,14 @@ async fn run_room(
                     RoomCommand::Rename { who, name } => room.rename(&who, name, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                     RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
+                    RoomCommand::Claim { who, .. } | RoomCommand::Ride { who, .. } => {
+                        let error = ServerMessage::Error {
+                            code: "car_unavailable".into(),
+                            message: "碰碰車暫未開放".into(),
+                        };
+                        room.send_to(&who.id, error, now);
+                    }
+                    RoomCommand::Drive { .. } => {}
                 }
             }
             _ = tick.tick() => {

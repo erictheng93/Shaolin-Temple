@@ -1,8 +1,8 @@
-import fixtures from '../../../../server/tests/protocol-v4.json'
+import fixtures from '../../../../server/tests/protocol-v5.json'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient } from './NetworkClient'
 import { DEFAULT_OUTFIT, normalizeOutfit } from '../world/outfits'
-import { MAX_WIRE_OUTFIT, OUTFIT_COUNT, decode, encode, isOutfit, isOutfitWire, type ClientMessage, type ServerMessage } from './protocol'
+import { MAX_WIRE_OUTFIT, OUTFIT_COUNT, PROTOCOL_VERSION, decode, encode, isOutfit, isOutfitWire, type ClientMessage, type ServerMessage } from './protocol'
 
 const player = { id: 'p', n: 1, name: 'n', x: 0, z: 0, heading: 0 }
 
@@ -24,7 +24,7 @@ describe('衣裝協定', () => {
 
   it('上行 outfit 與帶衣裝的 hello 原樣編碼', () => {
     expect(JSON.parse(encode({ t: 'outfit', outfit: 3 }))).toEqual({ t: 'outfit', outfit: 3 })
-    const hello: ClientMessage = { t: 'hello', v: 4, name: 'n', outfit: 2 }
+    const hello: ClientMessage = { t: 'hello', v: PROTOCOL_VERSION, name: 'n', outfit: 2 }
     expect(JSON.parse(encode(hello))).toEqual(hello)
   })
 
