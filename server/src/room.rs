@@ -417,7 +417,7 @@ async fn join(
     received.await.ok().flatten()
 }
 
-fn now_ms() -> f64 {
+pub(crate) fn now_ms() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -427,7 +427,7 @@ fn now_ms() -> f64 {
 fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0 + 0.0
 }
-fn tuple(p: &Player) -> MoveTuple {
+pub(crate) fn tuple(p: &Player) -> MoveTuple {
     let moving = if p.moving {
         Moving::Moving
     } else {
@@ -694,7 +694,7 @@ impl Room {
 
     fn position(&mut self, who: &Who, x: f64, z: f64, heading: f64, moving: bool, at: Instant) {
         let Some(p) = self.live(who) else { return };
-        if p.riding.is_some() {
+        if p.riding.is_some() || p.knocked_until.is_some_and(|t| at < t) {
             return;
         }
         if !(x.is_finite() && z.is_finite() && heading.is_finite()) {
@@ -736,10 +736,14 @@ impl Room {
             Some((_, ack)) => ack.clone(),
             None => {
                 let known = world::action(&action);
-                let reason = match (data_ok, known) {
-                    (false, _) => Some("unsupported_data"),
-                    (true, None) => Some("unknown_action"),
-                    (true, Some(_)) => None,
+                let reason = if p.knocked_until.is_some_and(|t| now < t) {
+                    Some("knocked")
+                } else {
+                    match (data_ok, known) {
+                        (false, _) => Some("unsupported_data"),
+                        (true, None) => Some("unknown_action"),
+                        (true, Some(_)) => None,
+                    }
                 };
                 let ack = ServerMessage::Ack {
                     req_id: req_id.clone(),
