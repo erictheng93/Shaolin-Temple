@@ -4,6 +4,7 @@ use crate::{
         AuthKind, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MoveTuple, Moving, PlayerAction,
         PlayerSnapshot, ServerMessage,
     },
+    vehicles::{params::params, world::VehicleWorld},
     world::{self, PORTAL_TOLERANCE, Zone},
 };
 use std::{
@@ -11,6 +12,9 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+mod vehicles;
+use vehicles::Car;
 use tokio::{
     sync::{
         mpsc::{self, error::TrySendError},
@@ -72,9 +76,9 @@ pub type Outbound = mpsc::Receiver<ServerMessage>;
 
 /// 一條連線在房內的身分。`conn` 區分同一玩家的新舊連線，舊連線的指令一律忽略。
 #[derive(Clone, Debug)]
-struct Who {
-    id: String,
-    conn: u64,
+pub(crate) struct Who {
+    pub(crate) id: String,
+    pub(crate) conn: u64,
 }
 type Reply = oneshot::Sender<Option<Who>>;
 enum RoomCommand {
@@ -150,7 +154,7 @@ struct Link {
     conn: u64,
     tx: mpsc::Sender<ServerMessage>,
 }
-struct Player {
+pub(crate) struct Player {
     id: String,
     n: u8,
     name: String,
@@ -184,6 +188,14 @@ struct Player {
     /// 改名額度（次數），算到 `rename_at` 為止。
     rename_tokens: f64,
     rename_at: Instant,
+    pub(crate) riding: Option<u8>,
+    pub(crate) claim_at: Option<Instant>,
+    pub(crate) last_drive_seq: u16,
+    pub(crate) last_active_drive: Instant,
+    pub(crate) drive_seq_init: bool,
+    pub(crate) needs_cars_sync: bool,
+    pub(crate) knocked_until: Option<Instant>,
+    pub(crate) immune_until: Option<Instant>,
 }
 impl Player {
     /// 有額度就扣一次並回 true。
@@ -433,16 +445,32 @@ struct TickState {
 }
 
 /// 房間 actor 擁有全部玩家狀態；只在自己的 task 內修改，對連線只用 `try_send`，不會被任何連線拖住。
-struct Room {
-    id: String,
-    no: u64,
-    config: RoomConfig,
-    metrics: Arc<Metrics>,
-    players: HashMap<String, Player>,
-    next_conn: u64,
+pub struct Room {
+    pub(crate) id: String,
+    pub(crate) no: u64,
+    pub(crate) config: RoomConfig,
+    pub(crate) metrics: Arc<Metrics>,
+    pub(crate) players: HashMap<String, Player>,
+    pub(crate) next_conn: u64,
+    pub(crate) vehicles: VehicleWorld,
+    pub(crate) cars: BTreeMap<u8, Car>,
+    pub(crate) physics_steps: u64,
 }
 
 impl Room {
+    pub fn new(no: u64, config: RoomConfig, metrics: Arc<Metrics>) -> Self {
+        Self {
+            id: format!("room-{no}"),
+            no,
+            config,
+            metrics,
+            players: HashMap::new(),
+            next_conn: 0,
+            vehicles: VehicleWorld::new(&world::COURTYARD),
+            cars: BTreeMap::new(),
+            physics_steps: 0,
+        }
+    }
     fn new_token(&self) -> String {
         format!("{:x}.{:032x}", self.no, rand::random::<u128>())
     }
@@ -471,7 +499,7 @@ impl Room {
             server_time: now_ms(),
             auth: p.auth,
             players: self.players.values().map(Self::snapshot).collect(),
-            cars: Vec::new(),
+            cars: self.car_snapshots(),
         }
     }
     /// 連線指令只在 conn 相符（目前這條連線）時生效。
@@ -521,6 +549,14 @@ impl Room {
             acks: VecDeque::new(),
             rename_tokens: RENAME_BURST,
             rename_at: now,
+            riding: None,
+            claim_at: None,
+            last_drive_seq: 0,
+            last_active_drive: now,
+            drive_seq_init: false,
+            needs_cars_sync: true,
+            knocked_until: None,
+            immune_until: None,
         };
         self.players.insert(id.clone(), player);
         if !self.send_welcome(&id) {
@@ -566,6 +602,7 @@ impl Room {
         p.link = Some(Link { conn, tx: outbound });
         p.grace_until = None;
         p.needs_sync = false;
+        p.needs_cars_sync = true;
         p.last_at = now;
         p.budget = BUDGET_START;
         if p.moving {
@@ -639,6 +676,13 @@ impl Room {
         let Some(p) = self.players.get_mut(id) else {
             return;
         };
+        if p.riding.is_some() {
+            self.dismount(id, now);
+        }
+        let Some(p) = self.players.get_mut(id) else {
+            return;
+        };
+        self.vehicles.set_walker(p.n, None);
         if p.link.take().is_some() {
             p.grace_until = Some(now + self.config.resume_grace);
             if p.moving {
@@ -650,6 +694,9 @@ impl Room {
 
     fn position(&mut self, who: &Who, x: f64, z: f64, heading: f64, moving: bool, at: Instant) {
         let Some(p) = self.live(who) else { return };
+        if p.riding.is_some() {
+            return;
+        }
         if !(x.is_finite() && z.is_finite() && heading.is_finite()) {
             return;
         }
@@ -772,6 +819,14 @@ impl Room {
 
     fn switch_zone(&mut self, who: &Who, target: &str, now: Instant) {
         let Some(p) = self.live(who) else { return };
+        if p.riding.is_some() {
+            let error = ServerMessage::Error {
+                code: "dismount_first".into(),
+                message: "請先下車再離開".into(),
+            };
+            self.send_to(&who.id, error, now);
+            return;
+        }
         let allowed = world::zone(target).and_then(|zone| {
             p.zone
                 .portals
@@ -805,6 +860,18 @@ impl Room {
         };
         // 先讓所有人知道換場景，再把新場景裡的其他玩家位置整批校正給切換者。
         self.broadcast(message, now, |_| true);
+        if zone.id == world::COURTYARD.id {
+            let all_cars: Vec<crate::protocol::CarState> =
+                self.vehicles.cars().map(Into::into).collect();
+            let msg = ServerMessage::Cars {
+                ack: 0,
+                cars: all_cars,
+            };
+            self.send_to(&who.id, msg, now);
+            if let Some(p) = self.players.get_mut(&who.id) {
+                p.needs_cars_sync = false;
+            }
+        }
         let states = self.states();
         self.send_batch(&who.id, &states, true, now);
     }
@@ -845,6 +912,7 @@ impl Room {
     fn states(&self) -> Vec<TickState> {
         self.players
             .values()
+            .filter(|p| p.riding.is_none())
             .map(|p| TickState {
                 n: p.n,
                 zone: p.zone.id,
@@ -872,9 +940,12 @@ impl Room {
             .map(|p| p.id.clone())
             .collect();
         for id in expired {
-            self.players.remove(&id);
+            if let Some(p) = self.players.remove(&id) {
+                self.vehicles.set_walker(p.n, None);
+            }
             self.broadcast(ServerMessage::Leave { id }, now, |_| true);
         }
+        self.cleanup_expired_cars(now);
         // 停止看門狗
         for p in self.players.values_mut() {
             if p.moving && now.saturating_duration_since(p.last_pos_msg) > self.config.stale_move {
@@ -904,18 +975,19 @@ async fn run_room(
     mut rx: mpsc::Receiver<RoomCommand>,
     metrics: Arc<Metrics>,
 ) {
-    let mut room = Room {
-        id: format!("room-{no}"),
-        no,
-        config,
-        metrics,
-        players: HashMap::new(),
-        next_conn: 0,
-    };
+    let mut room = Room::new(no, config, metrics);
     let mut counted = None;
     let mut empty_since = Some(Instant::now());
     let mut tick = interval(config.tick);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    let p_params = params();
+    let step_duration = Duration::from_nanos(1_000_000_000 / p_params.physics.hz as u64);
+    let mut physics_tick = interval(step_duration);
+    physics_tick.set_missed_tick_behavior(MissedTickBehavior::Burst);
+    let mut burst_steps = 0u32;
+    let mut burst_at = Instant::now();
+
     loop {
         tokio::select! {
             command = rx.recv() => {
@@ -949,14 +1021,26 @@ async fn run_room(
                     RoomCommand::Rename { who, name } => room.rename(&who, name, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                     RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
-                    RoomCommand::Claim { who, .. } | RoomCommand::Ride { who, .. } => {
-                        let error = ServerMessage::Error {
-                            code: "car_unavailable".into(),
-                            message: "碰碰車暫未開放".into(),
-                        };
-                        room.send_to(&who.id, error, now);
+                    RoomCommand::Claim { who, kind } => room.claim(&who, kind, now),
+                    RoomCommand::Ride { who, car } => room.ride(&who, car, now),
+                    RoomCommand::Drive { who, seq, dir, mag } => room.drive(&who, seq, dir, mag, now),
+                }
+            }
+            _ = physics_tick.tick() => {
+                let now = Instant::now();
+                if now == burst_at {
+                    burst_steps += 1;
+                    if burst_steps > p_params.physics.max_catch_up_steps {
+                        physics_tick.reset();
+                        burst_steps = 0;
+                        continue;
                     }
-                    RoomCommand::Drive { .. } => {}
+                } else {
+                    burst_at = now;
+                    burst_steps = 1;
+                }
+                if room.should_physics_step() {
+                    room.physics_step(now);
                 }
             }
             _ = tick.tick() => {
@@ -984,3 +1068,5 @@ async fn run_room(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vehicle_tests;
