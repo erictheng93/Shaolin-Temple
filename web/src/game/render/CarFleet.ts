@@ -4,6 +4,15 @@ import type { ResourceTracker } from './ResourceTracker'
 export const CAR_MODEL_VERSION = 1
 export const CAR_CAPACITY = 16
 
+export interface CarInstance {
+  c?: number
+  kind: number
+  x: number
+  z: number
+  heading: number
+  opacity: number
+}
+
 const BAYER_SHADER = `
 if (vOpacity < 0.999) {
   mat4 bayer = mat4(
