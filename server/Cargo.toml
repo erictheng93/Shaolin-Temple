@@ -26,6 +26,9 @@ hmac = "0.12.1"
 sha2 = "0.10.9"
 # url-safe base64；0.22 已是 tungstenite 的間接依賴。
 base64 = "0.22.1"
+# 物理引擎（src/vehicles）：與前端 @dimforge/rapier3d-compat 0.21.0 同一版核心（該 npm 版本由 rapier 0.36.0 的提交發布），
+# 所以鎖精確版本；升級時前後端一起升。預設功能（dim3、f32、std）即可。
+rapier3d = "=0.36.0"
 
 [dev-dependencies]
 tokio = { version = "1.54", features = ["test-util"] }
