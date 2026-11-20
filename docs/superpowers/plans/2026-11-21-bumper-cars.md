@@ -63,6 +63,8 @@
 
 ### 任務 1：確認 Rapier 版本配對並加入後端依賴
 
+> **已完成（PR #36，分支 `feat/rapier-engine`）。** 配對結果：npm `@dimforge/rapier3d-compat` 0.21.0 ↔ crate `rapier3d` =0.36.0。冒煙測試實際名稱是 `vehicles::tests::rapier_steps_a_free_body_one_metre_in_one_second`，前端另有同情境的 `web/src/game/vehicles/rapier.test.ts`。任務 10 步驟 1 的 npm 安裝也已在同一個 PR 完成。第 1 段的分支請從合併了 #36 的 `main` 開出。以下步驟留作紀錄。
+
 **檔案：** 修改 `server/Cargo.toml`、`server/Cargo.lock`、`docs/TECH_STACK.md`；建立 `server/src/vehicles/mod.rs`（先只有一個測試）。
 
 - [ ] **步驟 1：查出配對版本。** 到 rapier.js 儲存庫（dimforge/rapier.js）標籤 `v0.21.0`，看它的 Cargo 設定鎖定哪一版 `rapier3d`。這一版就是後端要用的版本（不是 crates.io 最新的 0.36.1，除非剛好相同）。
