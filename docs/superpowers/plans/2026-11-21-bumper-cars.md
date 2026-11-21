@@ -665,6 +665,52 @@ export class VehicleSim {
 
 ---
 
+# 修訂（2026-11-21）：遊戲區與領車 NPC
+
+設計 §5.2 已改：檔口擴成西南角的遊戲區，車只能向 NPC 領，不採停車場模式。**領車時機與稀有度分配尚未決定**（設計 §5.2 的方向 A–D），決定後再補任務 18；任務 17 只做已定的部分，不改協定、不改伺服器。
+
+### 任務 17：遊戲區鋪面、領車 NPC 與出車效果（前端，併入第 2 段）
+
+**檔案：** 修改 `shared/vehicles.json`、`server/src/vehicles/params.rs`、`web/src/game/world/vehicles.ts`、`web/src/game/render/TempleScene.ts`、`web/src/game/vehicles/Vehicles.ts`、`web/src/game/render/CarFleet.ts`、`web/src/i18n/*.ts`；重跑 `npm run bake:lightmaps`、`npm run capture:doorway` 並把 `DOORWAY_VIEW_VERSION` 加一。
+
+**`shared/vehicles.json` 的 `booth` 新增兩個欄位（既有的 `rect`、`counter`、`bays` 不動）：**
+
+```json
+"zone": { "minX": -18.5, "maxX": -9.3, "minZ": 6.0, "maxZ": 13.2 },
+"npc": { "x": -12.8, "z": 9.25, "heading": 1.5708 }
+```
+
+**介面（產出）：**
+
+```ts
+// world/vehicles.ts
+export const GAME_ZONE: Rect            // = VEHICLES.booth.zone
+export const BOOTH_NPC: { x: number; z: number; heading: number }
+// Vehicles.ts：收到 driver 由 null/不存在變成有人、且車在停車位半徑內的 `car` 時
+//   → CarFleet.popIn(c, now)（0.4 秒由 0.2 倍放大到 1 倍）並讓 NPC 播一次 `nod`
+```
+
+**規則：**
+
+- 鋪面是一般 Mesh 的靜態物件（併入靜態合併與烘焙），用庭院既有的石或木材質換一種色調；矮木欄只放在西、北兩側、可走範圍之外，不加碰撞。兩棵樹（`(-17, 6)`、`(-14, 14)`）不動。
+- NPC 用 `AvatarFactory` 建一尊本機公仔（不進 `Players` 的遠端清單、不經網路），固定衣裝、名牌文字取字典 key `vehicles.npcName`；只在庭院顯示；`GameCore.dispose` 時釋放。
+- 出車效果純前端：伺服器的生車位置與時間不變；資料節省或低畫質時照樣播（只是縮放，沒有額外 draw call）。「一陣煙」沿用 `IncenseSystem` 的煙材質做不到就省略，不為它新增 draw call。
+
+- [ ] **步驟 1：寫測試**
+  - Rust `params::tests::zone_contains_booth_counter_bays_and_npc`：`zone` 包含 `rect`、`counter`、三個停車位中心與 `npc`；`npc` 在 `rect` 內。
+  - 前端 `vehicles.test.ts` `遊戲區在庭院邊界內且不蓋到中軸`：`GAME_ZONE` 在 `WORLD_BOUNDS` 內、`maxX < -4`（不碰到石燈籠與中軸）。
+  - 前端 `Vehicles.test.ts` `有人在停車位領到車時觸發出車效果一次，別處上車不觸發`。
+  - 既有的 `courtyardBake.test.ts` 在重烘焙後通過。
+- [ ] **步驟 2–4：** 失敗 → 實作 → 前端三個檢查與 `cargo test` 通過。
+- [ ] **步驟 5：** 以 `npm run dev` 加 `npm run mock` 實際領一台車，擷圖確認鋪面、NPC、名牌與出車效果；開效能資訊確認 draw call 比任務 11 的量測不增加。
+- [ ] **步驟 6：提交** `前端：遊戲區鋪面、領車 NPC 與出車效果`。
+
+**稽核方式：** 跑前端三個檢查與 `cargo test`；看擷圖比對 NPC 與鋪面是否同一種 Q 版風格、NPC 不是神明形象；記錄 draw call。
+
+### 任務 18：領車時機與稀有度（待決定後補）
+
+---
+
 ## 設計涵蓋對照
 
 | 設計章節 | 任務 |
