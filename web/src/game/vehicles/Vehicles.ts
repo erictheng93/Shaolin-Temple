@@ -60,6 +60,7 @@ export class Vehicles {
   private sim: VehicleSim | null = null
   private loadingSim = false
   private simLoadAttempted = false
+  private disposed = false
 
   constructor(private readonly deps: VehiclesDeps) {
     if (deps.sim !== undefined) {
@@ -85,7 +86,7 @@ export class Vehicles {
   }
 
   private maybeLoadSim(): void {
-    if (this.simLoadAttempted || this.loadingSim || this.sim) return
+    if (this.simLoadAttempted || this.loadingSim || this.sim || this.disposed) return
     const netInfo = getNetworkConnection()
     if (!VehicleSim.shouldLoad(netInfo)) return
     this.simLoadAttempted = true
@@ -93,6 +94,10 @@ export class Vehicles {
     VehicleSim.load().then(
       (sim) => {
         this.loadingSim = false
+        if (this.disposed) {
+          sim?.dispose()
+          return
+        }
         this.sim = sim
         if (sim && this._riding !== null) {
           sim.setCars(this.getCarStates(), this._riding)
@@ -137,7 +142,6 @@ export class Vehicles {
     if (!hidden) {
       // 從背景切回前景時清空歷史輸入與平滑偏移，等待下一則權威廣播
       this.sim?.clearHistory()
->>>>>>> f3200b4 (feat(web): 碰碰車客戶端預測與重播校正 (任務 15))
     }
   }
 
@@ -206,6 +210,8 @@ export class Vehicles {
       this._riding = null
       this.sim?.clearHistory()
       this.sim?.setCars(this.getCarStates(), null)
+    } else if (this.sim !== null && this._riding !== null) {
+      this.sim.setCars(this.getCarStates(), this._riding)
     }
   }
 
@@ -215,6 +221,8 @@ export class Vehicles {
       this._riding = null
       this.sim?.clearHistory()
       this.sim?.setCars(this.getCarStates(), null)
+    } else if (this.sim !== null && this._riding !== null) {
+      this.sim.setCars(this.getCarStates(), this._riding)
     }
   }
 
@@ -269,10 +277,16 @@ export class Vehicles {
   }
 
   setStick(dirX: number, dirZ: number): void {
-    const mag = Math.min(1, Math.hypot(dirX, dirZ))
-    this.stickMag = mag
+    const rawMag = Math.min(1, Math.hypot(dirX, dirZ))
+    this.stickMag = rawMag
     if (this._riding !== null) {
-      const dir = mag > 0.01 ? Math.atan2(dirX, dirZ) : 0
+      const rawDir = rawMag > 0.01 ? Math.atan2(dirX, dirZ) : 0
+      const qDir =
+        Math.round((((rawDir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * 256) & 0xff
+      const qMag = Math.round(rawMag * 255) & 0xff
+      const dir = (qDir * (Math.PI * 2)) / 256
+      const mag = qMag / 255
+
       const seq = this.deps.net.sendDrive(dir, mag)
       if (this.sim !== null) {
         if (seq !== null) {
@@ -418,6 +432,7 @@ export class Vehicles {
   }
 
   dispose(): void {
+    this.disposed = true
     this.sim?.dispose()
     this.sim = null
     this.cars.clear()

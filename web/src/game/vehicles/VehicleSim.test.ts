@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import RAPIER from '@dimforge/rapier3d-compat'
 import { VehicleSim, isSeqLe } from './VehicleSim'
 import { createSimWorld, type CarState } from './simCore'
@@ -248,8 +248,8 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     expect(VehicleSim.shouldLoad({})).toBe(true)
   })
 
-  it('8. load 失敗時 Vehicles 繼續使用插值顯示', () => {
-    // 模擬 Vehicles 載入失敗或無 sim 時的插值行為
+  it('8. load 失敗時 Vehicles 繼續使用插值顯示', async () => {
+    const loadSpy = vi.spyOn(VehicleSim, 'load').mockRejectedValueOnce(new Error('Sim load error'))
     const fleetMock = {
       sync: () => {},
       dispose: () => {},
@@ -265,9 +265,14 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
       selfId: () => 'p1',
     })
 
-    // 加入一輛車並收到 cars 快照
+    // 加入一輛車並呼叫 toggleRide() 觸發 maybeLoadSim()
     vehicles.onWelcome([{ c: 0, kind: 0, driver: null, x: 5, z: 5, heading: 0, fadeAt: null }])
-    expect(vehicles.ui(5, 5).nearCar).toBe(true)
+    vehicles.toggleRide(5, 5)
+
+    // 等待 Promise 執行完畢
+    await vi.waitFor(() => {
+      expect(loadSpy).toHaveBeenCalled()
+    })
 
     // 收到 cars 訊息進行插值
     vehicles.onCars(0, [makeCar(0, 6, 6, 0)], 1000)
@@ -276,6 +281,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     expect(typeof active).toBe('boolean')
 
     vehicles.dispose()
+    loadSpy.mockRestore()
   })
 
   it('9. dispose 後 world 已釋放', () => {
@@ -301,7 +307,8 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
 
     interface ClientPacket {
       seq: number
-      input: { dir: number; mag: number }
+      dir: number
+      mag: number
       deliverAtStep: number
     }
     interface ServerSnapshot {
@@ -314,34 +321,82 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     const downlinkQueue: ServerSnapshot[] = []
 
     let serverProcessedSeq = 0
+    let currentSeq = 0
+    let lastSentAt = -Infinity
+    let lastSentDir = -1
+    let lastSentMag = -1
     const totalSteps = 1800 // 60 秒 @ 30fps
 
     for (let step = 1; step <= totalSteps; step++) {
+      const nowMs = step * (1000 / 30)
       // 緩慢轉彎平滑駕駛，避免撞牆
       const t = step / 30
-      const dir = Math.sin(t * 0.5) * 0.5
-      const input = { dir, mag: 0.8 }
+      const rawDir = Math.sin(t * 0.5) * 0.5
+      const rawMag = 0.8
 
-      clientSim.pushInput(step, input)
+      // 客戶端輸入量化（比照 Vehicles.ts: setStick 與 NetworkClient.ts: sendDrive）
+      const qDir =
+        Math.round((((rawDir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * 256) & 0xff
+      const qMag = Math.round(Math.max(0, Math.min(1, rawMag)) * 255) & 0xff
+      const dir = (qDir * (Math.PI * 2)) / 256
+      const mag = qMag / 255
+
+      // 15 Hz 節流與 200 ms 心跳
+      const changed = qDir !== lastSentDir || qMag !== lastSentMag
+      const minInterval = changed ? 1000 / 15 : 200
+      let seq: number | null = null
+      if (lastSentAt < 0 || nowMs - lastSentAt >= minInterval) {
+        currentSeq = (currentSeq + 1) & 0xffff
+        seq = currentSeq
+        lastSentAt = nowMs
+        lastSentDir = qDir
+        lastSentMag = qMag
+      }
+
+      if (seq !== null) {
+        clientSim.pushInput(seq, { dir, mag })
+        uplinkQueue.push({ seq, dir, mag, deliverAtStep: step + uplinkDelay })
+      } else {
+        clientSim.setInput({ dir, mag })
+      }
+
       clientSim.advance(1 / 30)
 
-      uplinkQueue.push({ seq: step, input, deliverAtStep: step + uplinkDelay })
-
+      // 伺服器接收上行封包
       while (uplinkQueue.length > 0 && uplinkQueue[0]!.deliverAtStep <= step) {
         const p = uplinkQueue.shift()!
-        serverWorld.setInput(0, p.input)
+        serverWorld.setInput(0, { dir: p.dir, mag: p.mag })
         serverProcessedSeq = p.seq
       }
 
       serverWorld.step()
 
-      const s = serverWorld.state(0)!
-      downlinkQueue.push({
-        ack: serverProcessedSeq,
-        car: { ...s },
-        deliverAtStep: step + downlinkDelay,
-      })
+      // 伺服器以 15 Hz（每 2 個物理步）廣播一次快照，並套用協定量化
+      if (step % 2 === 0) {
+        const raw = serverWorld.state(0)!
+        const quantizedCar: CarState = {
+          c: raw.c,
+          occupied: raw.occupied,
+          bumped: raw.bumped,
+          x: Math.round(raw.x * 100) / 100, // 公分量化
+          z: Math.round(raw.z * 100) / 100,
+          heading:
+            (Math.round((((raw.heading % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * 65536) /
+              65536) *
+            Math.PI *
+            2, // 16-bit heading
+          vx: Math.round(raw.vx * 100) / 100,
+          vz: Math.round(raw.vz * 100) / 100,
+          w: Math.round(raw.w * 1000) / 1000,
+        }
+        downlinkQueue.push({
+          ack: serverProcessedSeq,
+          car: quantizedCar,
+          deliverAtStep: step + downlinkDelay,
+        })
+      }
 
+      // 客戶端接收伺服器校正
       while (downlinkQueue.length > 0 && downlinkQueue[0]!.deliverAtStep <= step) {
         const snap = downlinkQueue.shift()!
         clientSim.reconcile(snap.ack, snap.car, [])

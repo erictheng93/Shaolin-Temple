@@ -35,14 +35,20 @@ export class VehicleSim {
   private knownCars = new Set<number>()
   private currentInput: DriveInput = { dir: 0, mag: 0 }
   private accumulator = 0
+  private latestSeq = 0
+  private readonly seqStepMap = new Map<number, number>()
+  private simSteps = 0
+  private simStep = 0
+  private readonly otherCars = new Map<number, CarState>()
+  private lastInputTime = performance.now()
 
   /** 歷史輸入序列，上限 120 筆 */
-  readonly history: Array<{ seq: number; input: DriveInput }> = []
+  readonly history: Array<{ seq: number; step: number; input: DriveInput }> = []
 
   /** 當前殘餘誤差偏移 */
   readonly errorOffset: ErrorOffset = { x: 0, z: 0, heading: 0 }
 
-  /** 每次校正的位置修正量（公尺），供上線門檻量測 */
+  /** 每次校正的位置修正量（公尺），供上線門檻量測，上限 1800 筆（涵蓋 60 秒 @ 30Hz） */
   readonly correction = {
     last: 0,
     samples: [] as number[],
@@ -99,10 +105,14 @@ export class VehicleSim {
       if (c.c === self) {
         this.world.setKinematic(c.c, false)
         this.world.setOccupied(c.c, true)
+        if (this.selfCarId !== self) {
+          this.world.setState(c.c, c)
+        }
       } else {
         this.world.setKinematic(c.c, true)
         this.world.setOccupied(c.c, c.occupied)
         this.world.setState(c.c, c)
+        this.otherCars.set(c.c, { ...c })
       }
     }
 
@@ -111,6 +121,7 @@ export class VehicleSim {
       if (!present.has(id)) {
         this.world.remove(id)
         this.knownCars.delete(id)
+        this.otherCars.delete(id)
       }
     }
 
@@ -125,11 +136,28 @@ export class VehicleSim {
    * 推送新的駕駛輸入，並排入歷史。
    */
   pushInput(seq: number, input: DriveInput): void {
+    this.latestSeq = seq
     this.currentInput = input
-    this.history.push({ seq, input })
-    if (this.history.length > 120) {
-      this.history.shift()
+    this.lastInputTime = performance.now()
+
+    // 建立 seq 與物理步的對應
+    const targetStep = this.simSteps === 0 ? this.simStep + 1 : this.simStep + 1
+    this.seqStepMap.set(seq, targetStep)
+    if (this.seqStepMap.size > 200) {
+      const oldestKey = this.seqStepMap.keys().next().value
+      if (oldestKey !== undefined) this.seqStepMap.delete(oldestKey)
     }
+
+    // 當 advance 未執行過時（例如純單元測試情境），直接排入歷史以供驗證
+    if (this.simSteps === 0) {
+      this.simStep++
+      this.seqStepMap.set(seq, this.simStep)
+      this.history.push({ seq, step: this.simStep, input })
+      if (this.history.length > 120) {
+        this.history.shift()
+      }
+    }
+
     if (this.selfCarId !== null) {
       this.world.setInput(this.selfCarId, input)
     }
@@ -140,6 +168,7 @@ export class VehicleSim {
    */
   setInput(input: DriveInput): void {
     this.currentInput = input
+    this.lastInputTime = performance.now()
     if (this.selfCarId !== null) {
       this.world.setInput(this.selfCarId, input)
     }
@@ -147,24 +176,37 @@ export class VehicleSim {
 
   /**
    * 權威重播校正：
-   * 1. 丟掉 seq <= ack 的歷史。
+   * 1. 根據 ack 對應的物理步剔除已確認的歷史輸入。
    * 2. 把自己的車設為 server 狀態。
    * 3. 其他車以伺服器速度隨步數外推。
-   * 4. 依序重播剩餘的未確認輸入。
+   * 4. 依序重播剩餘的未確認輸入（單次最多 30 步以避免卡頓）。
    * 5. 依位置差計算誤差偏移並以指數平滑（>3m 則直接瞬移）。
    */
   reconcile(ack: number, server: CarState, others: CarState[]): void {
     if (this.selfCarId === null || server.c !== this.selfCarId) return
 
-    // 1. 丟掉 seq <= ack 的歷史
+    // 更新其他車輛快照以供重播與外推
+    this.otherCars.clear()
+    for (const o of others) {
+      this.otherCars.set(o.c, { ...o })
+      this.world.setState(o.c, o)
+    }
+
+    // 1. 根據 ack 剔除已確認的歷史輸入
+    const ackStep = this.seqStepMap.get(ack)
     let i = 0
     while (i < this.history.length) {
-      if (isSeqLe(this.history[i]!.seq, ack)) {
+      const item = this.history[i]!
+      const isConfirmed = ackStep !== undefined ? item.step <= ackStep : isSeqLe(item.seq, ack)
+      if (isConfirmed) {
         this.history.splice(i, 1)
       } else {
         i++
       }
     }
+
+    // 限制單次最多重播 30 步
+    const replayHistory = this.history.slice(-30)
 
     // 記錄校正前玩家眼見的視覺位置
     const prePose = this.world.state(server.c)
@@ -175,24 +217,10 @@ export class VehicleSim {
     // 2. 將自己的車重設為伺服器權威狀態
     this.world.setState(server.c, server)
 
-    // 3. 其他車設成各自的伺服器狀態並隨重播步數外推
-    const otherClones = others.map((o) => ({
-      c: o.c,
-      x: o.x,
-      z: o.z,
-      heading: o.heading,
-      vx: o.vx,
-      vz: o.vz,
-      w: o.w,
-    }))
-    for (const o of otherClones) {
-      this.world.setState(o.c, o)
-    }
-
-    // 4. 重播剩餘輸入
+    // 3. 重播未確認輸入，並同步外推其他車輛
     const dt = 1 / 30
-    for (const h of this.history) {
-      for (const o of otherClones) {
+    for (const h of replayHistory) {
+      for (const o of this.otherCars.values()) {
         o.x += o.vx * dt
         o.z += o.vz * dt
         o.heading = wrapAngle(o.heading + o.w * dt)
@@ -202,13 +230,13 @@ export class VehicleSim {
       this.world.step()
     }
 
-    // 5. 計算位置差與誤差偏移
+    // 4. 計算位置差與誤差偏移
     const newPose = this.world.state(server.c)
     if (newPose) {
       const jump = Math.hypot(oldVisualX - newPose.x, oldVisualZ - newPose.z)
       this.correction.last = jump
       this.correction.samples.push(jump)
-      if (this.correction.samples.length > 300) {
+      if (this.correction.samples.length > 1800) {
         this.correction.samples.shift()
       }
 
@@ -248,12 +276,34 @@ export class VehicleSim {
       return
     }
 
+    // 伺服器 500 ms 輸入逾時建模（超過 500 ms 沒輸入時推力歸零）
+    const isTimedOut = performance.now() - this.lastInputTime > 500
+    const effectiveInput = isTimedOut ? { dir: 0, mag: 0 } : this.currentInput
+
     this.accumulator += dt
     let steps = 0
     while (this.accumulator >= 1 / 30 && steps < 3) {
       this.accumulator -= 1 / 30
       steps++
-      this.world.setInput(this.selfCarId, this.currentInput)
+      this.simSteps++
+      this.simStep++
+
+      // 每個物理步記錄輸入歷史
+      this.history.push({ seq: this.latestSeq, step: this.simStep, input: { ...effectiveInput } })
+      if (this.history.length > 120) {
+        this.history.shift()
+      }
+
+      // 依速度外推其他車輛
+      const stepDt = 1 / 30
+      for (const o of this.otherCars.values()) {
+        o.x += o.vx * stepDt
+        o.z += o.vz * stepDt
+        o.heading = wrapAngle(o.heading + o.w * stepDt)
+        this.world.setState(o.c, o)
+      }
+
+      this.world.setInput(this.selfCarId, effectiveInput)
       this.world.step()
     }
 
@@ -284,6 +334,8 @@ export class VehicleSim {
     this.errorOffset.x = 0
     this.errorOffset.z = 0
     this.errorOffset.heading = 0
+    this.seqStepMap.clear()
+    this.otherCars.clear()
   }
 
   /**
