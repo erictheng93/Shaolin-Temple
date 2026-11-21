@@ -43,6 +43,34 @@ describe('stepMover', () => {
     stepMover(s, { dirX: 0, dirZ: 0 }, 1, cfg)
     expect(s.target).toBeNull()
   })
+
+  it('走進空車時速度降為 40%，離開後恢復；有人的車不影響', () => {
+    // 空車在 (5, 5)
+    const slowCfg: MoveConfig = {
+      ...cfg,
+      slowZones: () => [{ x: 5, z: 5, heading: 0 }],
+    }
+    // 站在 (5, 5) 重疊空車時移動 1 秒
+    const inCar = mover(5, 5)
+    stepMover(inCar, { dirX: 1, dirZ: 0 }, 1, slowCfg)
+    // 原速 2，40% 為 0.8
+    expect(inCar.x - 5).toBeCloseTo(0.8)
+
+    // 站在 (0, 0) 遠離空車時移動 1 秒
+    const outCar = mover(0, 0)
+    stepMover(outCar, { dirX: 1, dirZ: 0 }, 1, slowCfg)
+    // 恢復原速 2
+    expect(outCar.x).toBeCloseTo(2)
+
+    // 有人的車（slowZones 回傳空集合，不影響）
+    const occupiedCfg: MoveConfig = {
+      ...cfg,
+      slowZones: () => [],
+    }
+    const nearOccupied = mover(5, 5)
+    stepMover(nearOccupied, { dirX: 1, dirZ: 0 }, 1, occupiedCfg)
+    expect(nearOccupied.x - 5).toBeCloseTo(2)
+  })
 })
 
 describe('resolveCollisions', () => {

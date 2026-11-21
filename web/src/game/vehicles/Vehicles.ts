@@ -235,6 +235,18 @@ export class Vehicles {
     return active
   }
 
+  /**
+   * 庭院中的空車（沒有駕駛），用於行走推車阻力區（slowZones）。
+   */
+  *slowZones(): Iterable<{ x: number; z: number; heading: number }> {
+    if (this.zone !== 'courtyard') return
+    for (const car of this.cars.values()) {
+      if (car.driver === null) {
+        yield { x: car.x, z: car.z, heading: car.heading }
+      }
+    }
+  }
+
   ui(localX: number, localZ: number): RideUi {
     const riding = this._riding !== null
     let nearCar = false

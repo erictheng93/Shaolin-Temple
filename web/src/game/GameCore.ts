@@ -24,6 +24,8 @@ import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
 import { CarFleet } from './render/CarFleet'
 import { Vehicles, type RideUi } from './vehicles/Vehicles'
+import { VehicleAudio } from './vehicles/sfx'
+import { handleKnock, type KnockFlight } from './vehicles/knock'
 import { resolveCollisions, stepMover, type MoveConfig } from './world/movement'
 import { findPath, type Point } from './world/pathfind'
 import { normalizeOutfit } from './world/outfits'
@@ -172,7 +174,9 @@ export class GameCore {
   private audio = new AudioManager()
   private actions = new ActionRegistry()
   private uninstallers: Array<() => void> = []
-  private moveCfg: MoveConfig = moveConfigFor('courtyard')
+  private moveCfg!: MoveConfig
+  private vehicleAudio: VehicleAudio
+  private knockFlight: KnockFlight | null = null
   /** 虛擬搖桿的類比向量（螢幕座標：x 右、y 下，長度 0～1）；非零時優先於鍵盤。 */
   private stickX = 0
   private stickY = 0
@@ -325,6 +329,11 @@ export class GameCore {
       net: this.net,
       selfId: () => this.selfId,
     })
+    this.vehicleAudio = new VehicleAudio(this.audio)
+    this.moveCfg = {
+      ...moveConfigFor('courtyard'),
+      slowZones: () => this.vehicles.slowZones(),
+    }
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
     this.net.events.on('rtt', (ms) => (this.rtt = ms))
@@ -429,6 +438,7 @@ export class GameCore {
 
   /** 切換上下車。 */
   toggleRide(): void {
+    if (this.fading || performance.now() < this.players.local.lockedUntil) return
     const local = this.players.local.mover
     this.vehicles.toggleRide(local.x, local.z)
   }
@@ -707,6 +717,18 @@ export class GameCore {
     // 有移動意圖就保持迴圈運作；喚醒後第一幀 dt=0 不會位移，不能只看本幀是否移動。
     let wantsMove = false
 
+    if (this.knockFlight !== null) {
+      const flight = this.knockFlight
+      const p = Math.min(1, Math.max(0, (now - flight.start) / (flight.end - flight.start)))
+      local.mover.x = flight.fromX + (flight.toX - flight.fromX) * p
+      local.mover.z = flight.fromZ + (flight.toZ - flight.fromZ) * p
+      this.players.syncLocalTransform()
+      if (p >= 1) {
+        this.knockFlight = null
+      }
+      wantsMove = true
+    }
+
     const riding = this.vehicles.riding !== null
     if (riding) {
       this.lastInputAt = now
@@ -728,11 +750,17 @@ export class GameCore {
       }
       moving = false
       local.anim.moving = false
+      if (local.anim.clip !== 'ride' && local.anim.clip !== 'knocked') {
+        this.anim.play(local.anim, 'ride', now, Infinity)
+      }
       if (this.wasMoving) {
         this.net.sendPosition(local.mover.x, local.mover.z, local.mover.heading, false)
         this.wasMoving = false
       }
     } else {
+      if (local.anim.clip === 'ride') {
+        local.anim.clip = null
+      }
       // 可提前結束的動作（誦經）進行中按方向鍵：起身，接著照常移動
       if (now < local.lockedUntil) {
         const k = this.moveInput()
@@ -920,7 +948,10 @@ export class GameCore {
       this.savedCamera[this.zone] = { yaw: r.yaw, pitch: r.pitch, distance: r.distance }
     }
     this.zone = zone
-    this.moveCfg = moveConfigFor(zone)
+    this.moveCfg = {
+      ...moveConfigFor(zone),
+      slowZones: () => this.vehicles.slowZones(),
+    }
     this.temple.root.visible = zone === 'courtyard'
     if (this.hall) this.hall.root.visible = zone === 'hall'
     this.renderer.setEnvironment(zone === 'hall' ? HALL_ENV : OUTDOOR_ENV)
@@ -1079,6 +1110,15 @@ export class GameCore {
         break
       case 'cars':
         this.vehicles.onCars(m.ack, m.cars, performance.now())
+        for (const c of m.cars) {
+          if (c.bumped) {
+            this.vehicleAudio.playBump(c.x, c.z, this.players.local.mover.x, this.players.local.mover.z)
+          }
+        }
+        this.wake()
+        break
+      case 'knock':
+        this.onKnock(m)
         this.wake()
         break
       case 'error':
@@ -1096,6 +1136,45 @@ export class GameCore {
     this.chatLog = [...this.chatLog, { seq: ++this.chatSeq, id: m.id, name, text: m.text, at: m.at, seen: now, self }].slice(-CHAT_LOG_MAX)
     this.players.say(self ? null : m.id, m.text, now + CHAT_BUBBLE_MS)
     this.pushUi(true)
+  }
+
+  private onKnock(m: Extract<ServerMessage, { t: 'knock' }>): void {
+    const now = performance.now()
+    handleKnock(
+      {
+        selfId: this.selfId,
+        serverOffset: this.serverOffset,
+        fading: this.fading,
+        local: this.players.local,
+        clearLocalActions: () => {
+          this.pending = null
+          this.path = []
+          this.lockedAction = null
+          this.players.local.anim.clip = null
+        },
+        playAnim: (anim, clip, n, durationMs, startedAt) => {
+          this.anim.play(anim, clip, n, durationMs, startedAt)
+        },
+        playAudio: (knockX, knockZ, selfX, selfZ) => {
+          this.vehicleAudio.playKnock(knockX, knockZ, selfX, selfZ)
+        },
+        setKnockFlight: (flight) => {
+          this.knockFlight = flight
+        },
+        syncLocalTransform: () => {
+          this.players.syncLocalTransform()
+        },
+        remotes: this.players.remotes,
+        applyRemoteKnock: (r, fromX, fromZ, toX, toZ, startAt, endAt) => {
+          this.players.applyKnock(r, fromX, fromZ, toX, toZ, startAt, endAt)
+        },
+        syncRemoteByN: (n, x, z, heading, moving, time) => {
+          this.players.syncRemoteByN(n, x, z, heading, moving, time)
+        },
+      },
+      m,
+      now,
+    )
   }
 
   private onRemoteAction(m: Extract<ServerMessage, { t: 'action' }>): void {

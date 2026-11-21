@@ -66,6 +66,10 @@ export interface VehicleParams {
 
 export const VEHICLES: VehicleParams = VEHICLES_JSON as unknown as VehicleParams
 
+export const CAR_PARAMS = {
+  radius: VEHICLES.car.halfLength,
+}
+
 export const CAR_KINDS: ReadonlyArray<{ id: string; rarity: 'common' | 'rare' | 'mythic'; count: number; label: MessageKey }> = [
   { id: 'classic', rarity: 'common', count: 4, label: 'ride.kind.classic' },
   { id: 'woodfish', rarity: 'common', count: 3, label: 'ride.kind.woodfish' },

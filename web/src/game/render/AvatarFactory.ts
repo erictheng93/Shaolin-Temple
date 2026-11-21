@@ -13,6 +13,8 @@ export interface AvatarRig {
   /** 腰部樞紐：鞠躬、呼吸等動作旋轉這裡。 */
   pivot: THREE.Group
   head: THREE.Group
+  /** 整尊離地高度（公尺，被撞飛時拋物線抬升）。AnimationSystem 每幀重設為 0。 */
+  lift: number
   /** 表情（FACE_* 常數）。AnimationSystem 每幀重設為平常的臉，動作片段可以改。 */
   face: number
   /** 手上拿的東西（PROP_* 常數）。與 face 相同，每幀重設為 PROP_NONE，動作片段可以改。 */
@@ -25,6 +27,8 @@ export interface AvatarRig {
 export const FACE_CALM = 0
 /** 瞇瞇笑眼：合十時。 */
 export const FACE_SMILE = 1
+/** 暈頭轉向臉：螺旋眼與波浪嘴（撞飛時）。 */
+export const FACE_DIZZY = 2
 
 /** 手上沒有東西。 */
 export const PROP_NONE = 0
@@ -68,10 +72,13 @@ interface AvatarRecord {
   shadow: THREE.Object3D
   /** 衣裝編號（OUTFITS 的索引），外觀完全由它決定。 */
   outfit: number
+  label: Nameplate
+  getBubble: () => THREE.Sprite | null
+  bubbleY: () => number
 }
 
 /** 臉圖集的格數（橫向排列）。 */
-const FACE_COUNT = 2
+const FACE_COUNT = 3
 /** 臉在模型上的範圍（公尺，模型面向 +z）：以 x、y 平面投影成貼圖座標。 */
 const FACE_RECT = { x: 0.19, yMin: 0.64, yMax: 1.02, zMin: 0.05 }
 
@@ -134,6 +141,35 @@ function makeFaceAtlas(): THREE.CanvasTexture {
     g.stroke()
     g.beginPath()
     g.arc(ox + 128 + 8, EY + 26, 8, 0, Math.PI)
+    g.stroke()
+  }
+  // 2：暈頭轉向臉（螺旋眼與波浪嘴）
+  {
+    const ox = S * 2
+    g.strokeStyle = INK
+    for (const sx of [-1, 1]) {
+      blush(ox, 128 + sx * 68, EY + 28, 30, 18, 0.5)
+      g.lineWidth = 4
+      g.beginPath()
+      const cx = ox + 128 + sx * 46
+      const cy = EY
+      for (let a = 0; a <= Math.PI * 4.5; a += 0.2) {
+        const r = 2 + a * 2.2
+        const px = cx + Math.cos(a) * r
+        const py = cy + Math.sin(a) * r
+        if (a === 0) g.moveTo(px, py)
+        else g.lineTo(px, py)
+      }
+      g.stroke()
+    }
+    // 波浪嘴
+    g.lineWidth = 3.5
+    g.beginPath()
+    const mx = ox + 128
+    const my = EY + 26
+    g.moveTo(mx - 14, my)
+    g.quadraticCurveTo(mx - 7, my - 6, mx, my)
+    g.quadraticCurveTo(mx + 7, my + 6, mx + 14, my)
     g.stroke()
   }
   const tex = new THREE.CanvasTexture(c)
@@ -386,7 +422,6 @@ function makePlaceholderHead(): THREE.BufferGeometry {
 /** 名牌與對話泡泡的額外高度：戴斗笠的衣裝升高。 */
 const labelLift = (outfit: number) => (OUTFITS[outfit]?.hat ? HAT_LABEL_LIFT : 0)
 
-const ORIGIN = new THREE.Vector3()
 export const PIVOT_HEIGHT = 0.55
 /** 小沙彌模型的身高（公尺），與 scripts/build-avatar.mjs 的 HEIGHT 一致。 */
 const FIGURE_HEIGHT = 1.15
@@ -472,6 +507,7 @@ export class AvatarFactory {
   /** 頭、手與臉的剛體姿勢（不縮放），與 shoulderOffset 都是重用的暫存物件。 */
   private rigidPose = new THREE.Matrix4()
   private shoulderOffset = new THREE.Vector3()
+  private liftOffset = new THREE.Vector3()
   private static readonly UNIT_SCALE = new THREE.Vector3(1, 1, 1)
 
   constructor(parent: THREE.Object3D) {
@@ -632,11 +668,18 @@ export class AvatarFactory {
       bubble = null
     }
 
-    const rig: AvatarRig = { root, pivot, head, face: FACE_CALM, prop: PROP_NONE, propAngle: 0 }
-    const record: AvatarRecord = { rig, shadow, outfit: normalizeOutfit(opts.outfit) }
-    this.records.add(record)
+    const rig: AvatarRig = { root, pivot, head, lift: 0, face: FACE_CALM, prop: PROP_NONE, propAngle: 0 }
     /** 名牌與泡泡的高度（戴斗笠時升高）；換衣裝時重新放。 */
     const bubbleY = () => FIGURE_HEIGHT + (label.name ? 0.55 : 0.3) + labelLift(record.outfit)
+    const record: AvatarRecord = {
+      rig,
+      shadow,
+      outfit: normalizeOutfit(opts.outfit),
+      label,
+      getBubble: () => bubble,
+      bubbleY,
+    }
+    this.records.add(record)
     const placeLabels = () => {
       label.setY(FIGURE_HEIGHT + 0.3 + labelLift(record.outfit))
       if (bubble) bubble.position.y = bubbleY()
@@ -699,13 +742,21 @@ export class AvatarFactory {
       // 公仔式動畫：整尊繞腳底傾斜；pivot 下降（蹲坐）時壓扁、上升（走路彈跳、呼吸）時拉長，體積大致不變。
       const stretch = 1 + (pivot.position.y - PIVOT_HEIGHT) / FIGURE_HEIGHT
       const side = 1 / Math.sqrt(stretch)
-      this.pose.compose(ORIGIN, pivot.quaternion, this.poseScale.set(side, stretch, side)).premultiply(root.matrixWorld)
+      const liftY = r.rig.lift ?? 0
+      this.pose.compose(this.liftOffset.set(0, liftY, 0), pivot.quaternion, this.poseScale.set(side, stretch, side)).premultiply(root.matrixWorld)
       const tier = this.tiers[(root.position.x - x) ** 2 + (root.position.z - z) ** 2 <= nearRadius * nearRadius ? 0 : 1]!
       tier.body.setMatrixAt(tier.count, this.pose)
       tier.outfit.setX(tier.count, r.outfit)
       // 頭、耳朵、手與臉：同樣的傾斜，但不縮放，只跟著肩膀的高度升降（手比袖口多降約 3 公分，可接受）。
       this.rigidPose
-        .compose(this.shoulderOffset.set(0, SHOULDER_HEIGHT * (stretch - 1), 0).applyQuaternion(pivot.quaternion), pivot.quaternion, AvatarFactory.UNIT_SCALE)
+        .compose(
+          this.shoulderOffset
+            .set(0, SHOULDER_HEIGHT * (stretch - 1), 0)
+            .applyQuaternion(pivot.quaternion)
+            .add(this.liftOffset.set(0, liftY, 0)),
+          pivot.quaternion,
+          AvatarFactory.UNIT_SCALE,
+        )
         .premultiply(root.matrixWorld)
       tier.skin.setMatrixAt(tier.count, this.rigidPose)
       tier.face.setMatrixAt(tier.count, this.rigidPose)
@@ -715,6 +766,9 @@ export class AvatarFactory {
       if (r.rig.prop === PROP_CHANT) chant = this.placeChantProps(chant, root.matrixWorld, r.rig.propAngle)
       this.shadows.setMatrixAt(i, r.shadow.matrixWorld)
       i++
+      r.label.setY(FIGURE_HEIGHT + 0.3 + labelLift(r.outfit) + liftY)
+      const bubble = r.getBubble()
+      if (bubble) bubble.position.y = r.bubbleY() + liftY
     }
     for (const tier of this.tiers) {
       if (tier.count > 0) {
