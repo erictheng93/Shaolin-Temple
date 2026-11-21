@@ -85,65 +85,71 @@ export function createSimWorld(
   const world = new RAPIER.World({ x: 0, y: 0, z: 0 })
   world.timestep = 1.0 / 30.0
 
-  const eventQueue = new RAPIER.EventQueue(true)
+  let eventQueue: InstanceType<typeof RAPIER.EventQueue>
+  try {
+    eventQueue = new RAPIER.EventQueue(true)
 
-  // 靜態邊界與障礙物（固定在同一個 static 剛體上）
-  const groundHandle = world.createRigidBody(RAPIER.RigidBodyDesc.fixed())
+    // 靜態邊界與障礙物（固定在同一個 static 剛體上）
+    const groundHandle = world.createRigidBody(RAPIER.RigidBodyDesc.fixed())
 
-  // 1. zone.solids
-  const hasBooth = solids.some(
-    (s) =>
-      Math.abs(s.minX - p.booth.rect.minX) < 1e-4 &&
-      Math.abs(s.maxX - p.booth.rect.maxX) < 1e-4 &&
-      Math.abs(s.minZ - p.booth.rect.minZ) < 1e-4 &&
-      Math.abs(s.maxZ - p.booth.rect.maxZ) < 1e-4,
-  )
-  const allSolids = hasBooth ? solids : [...solids, p.booth.rect]
+    // 1. zone.solids
+    const hasBooth = solids.some(
+      (s) =>
+        Math.abs(s.minX - p.booth.rect.minX) < 1e-4 &&
+        Math.abs(s.maxX - p.booth.rect.maxX) < 1e-4 &&
+        Math.abs(s.minZ - p.booth.rect.minZ) < 1e-4 &&
+        Math.abs(s.maxZ - p.booth.rect.maxZ) < 1e-4,
+    )
+    const allSolids = hasBooth ? solids : [...solids, p.booth.rect]
 
-  for (const rect of allSolids) {
-    const cx = (rect.minX + rect.maxX) * 0.5
-    const cz = (rect.minZ + rect.maxZ) * 0.5
-    const hx = (rect.maxX - rect.minX) * 0.5
-    const hz = (rect.maxZ - rect.minZ) * 0.5
-    const colDesc = RAPIER.ColliderDesc.cuboid(hx, 1.0, hz)
-      .setTranslation(cx, 0.0, cz)
-      .setCollisionGroups(staticGroups())
-      .setRestitution(p.car.restitution)
-      .setFriction(p.car.friction)
-      .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-    world.createCollider(colDesc, groundHandle)
-  }
+    for (const rect of allSolids) {
+      const cx = (rect.minX + rect.maxX) * 0.5
+      const cz = (rect.minZ + rect.maxZ) * 0.5
+      const hx = (rect.maxX - rect.minX) * 0.5
+      const hz = (rect.maxZ - rect.minZ) * 0.5
+      const colDesc = RAPIER.ColliderDesc.cuboid(hx, 1.0, hz)
+        .setTranslation(cx, 0.0, cz)
+        .setCollisionGroups(staticGroups())
+        .setRestitution(p.car.restitution)
+        .setFriction(p.car.friction)
+        .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
+      world.createCollider(colDesc, groundHandle)
+    }
 
-  // 2. 四面邊界牆
-  const minX = bounds.minX
-  const maxX = bounds.maxX
-  const minZ = bounds.minZ
-  const maxZ = bounds.maxZ
-  const midX = (minX + maxX) * 0.5
-  const midZ = (minZ + maxZ) * 0.5
-  const hw = (maxX - minX) * 0.5
-  const hz = (maxZ - minZ) * 0.5
-  const thick = 2.0
+    // 2. 四面邊界牆
+    const minX = bounds.minX
+    const maxX = bounds.maxX
+    const minZ = bounds.minZ
+    const maxZ = bounds.maxZ
+    const midX = (minX + maxX) * 0.5
+    const midZ = (minZ + maxZ) * 0.5
+    const hw = (maxX - minX) * 0.5
+    const hz = (maxZ - minZ) * 0.5
+    const thick = 2.0
 
-  const walls = [
-    // 西牆 (x = minX)
-    { center: { x: minX - thick * 0.5, y: 0.0, z: midZ }, hx: thick * 0.5, hz: hz + thick },
-    // 東牆 (x = maxX)
-    { center: { x: maxX + thick * 0.5, y: 0.0, z: midZ }, hx: thick * 0.5, hz: hz + thick },
-    // 北牆 (z = minZ)
-    { center: { x: midX, y: 0.0, z: minZ - thick * 0.5 }, hx: hw + thick, hz: thick * 0.5 },
-    // 南牆 (z = maxZ)
-    { center: { x: midX, y: 0.0, z: maxZ + thick * 0.5 }, hx: hw + thick, hz: thick * 0.5 },
-  ]
+    const walls = [
+      // 西牆 (x = minX)
+      { center: { x: minX - thick * 0.5, y: 0.0, z: midZ }, hx: thick * 0.5, hz: hz + thick },
+      // 東牆 (x = maxX)
+      { center: { x: maxX + thick * 0.5, y: 0.0, z: midZ }, hx: thick * 0.5, hz: hz + thick },
+      // 北牆 (z = minZ)
+      { center: { x: midX, y: 0.0, z: minZ - thick * 0.5 }, hx: hw + thick, hz: thick * 0.5 },
+      // 南牆 (z = maxZ)
+      { center: { x: midX, y: 0.0, z: maxZ + thick * 0.5 }, hx: hw + thick, hz: thick * 0.5 },
+    ]
 
-  for (const wall of walls) {
-    const wallCol = RAPIER.ColliderDesc.cuboid(wall.hx, 1.0, wall.hz)
-      .setTranslation(wall.center.x, wall.center.y, wall.center.z)
-      .setCollisionGroups(staticGroups())
-      .setRestitution(p.car.restitution)
-      .setFriction(p.car.friction)
-      .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-    world.createCollider(wallCol, groundHandle)
+    for (const wall of walls) {
+      const wallCol = RAPIER.ColliderDesc.cuboid(wall.hx, 1.0, wall.hz)
+        .setTranslation(wall.center.x, wall.center.y, wall.center.z)
+        .setCollisionGroups(staticGroups())
+        .setRestitution(p.car.restitution)
+        .setFriction(p.car.friction)
+        .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
+      world.createCollider(wallCol, groundHandle)
+    }
+  } catch (err) {
+    world.free()
+    throw err
   }
 
   // 車輛儲存集合
