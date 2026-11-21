@@ -428,6 +428,8 @@ export class NetworkClient {
         // hello 送出後、welcome 之前改了名：hello 帶的是舊名字，被清掉的 rename 要補送。
         if (this.opts.name !== this.helloName) this.queue.push({ t: 'rename', name: this.opts.name })
         this.welcomed = true
+        // 馬上量一次來回延遲，不等第一次心跳（20 秒後）：開車的預測要用它估計伺服器狀態晚了多久。
+        this.sendNow({ t: 'ping', ts: performance.now() })
         if (this.helloHadSession && msg.auth === 'guest') {
           this.session = undefined
           this.events.emit('sessionExpired', undefined)
