@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod collide;
 pub mod config;
 pub mod connection;
 pub mod metrics;

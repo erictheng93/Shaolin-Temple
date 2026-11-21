@@ -1,0 +1,268 @@
+{
+  "cases": [
+    {
+      "name": "head_on_overlap_is_split_evenly",
+      "mover": [
+        0.2,
+        0.0
+      ],
+      "prev": [
+        -1.0,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 2,
+          "x": 0.5,
+          "z": 0.0,
+          "rooted": false
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": null
+    },
+    {
+      "name": "rooted_body_does_not_move_and_mover_takes_all",
+      "mover": [
+        0.2,
+        0.0
+      ],
+      "prev": [
+        -1.0,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 2,
+          "x": 0.5,
+          "z": 0.0,
+          "rooted": true
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": null
+    },
+    {
+      "name": "pushed_body_blocked_by_a_wall_makes_the_mover_stop",
+      "mover": [
+        0.2,
+        0.0
+      ],
+      "prev": [
+        -1.0,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 2,
+          "x": 0.5,
+          "z": 0.0,
+          "rooted": false
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": 0.6
+    },
+    {
+      "name": "overlap_within_tolerance_is_left_alone",
+      "mover": [
+        0.0,
+        0.0
+      ],
+      "prev": [
+        -1.0,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 2,
+          "x": 0.5,
+          "z": 0.0,
+          "rooted": false
+        }
+      ],
+      "tolerance": 0.15,
+      "wall": null
+    },
+    {
+      "name": "coincident_bodies_separate_deterministically",
+      "mover": [
+        0.0,
+        0.0
+      ],
+      "prev": [
+        0.0,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 2,
+          "x": 0.0,
+          "z": 0.0,
+          "rooted": false
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": null
+    },
+    {
+      "name": "mover_returns_to_prev_when_resolved_position_is_invalid",
+      "mover": [
+        0.2,
+        0.0
+      ],
+      "prev": [
+        -0.5,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 2,
+          "x": 0.5,
+          "z": 0.0,
+          "rooted": true
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": -0.2
+    },
+    {
+      "name": "diagonal_push_at_45_degrees",
+      "mover": [
+        0.2,
+        0.2
+      ],
+      "prev": [
+        -1.0,
+        -1.0
+      ],
+      "others": [
+        {
+          "n": 3,
+          "x": 0.5,
+          "z": 0.5,
+          "rooted": false
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": null
+    },
+    {
+      "name": "three_bodies_in_a_line",
+      "mover": [
+        0.4,
+        0.0
+      ],
+      "prev": [
+        -1.0,
+        0.0
+      ],
+      "others": [
+        {
+          "n": 1,
+          "x": 0.5,
+          "z": 0.0,
+          "rooted": false
+        },
+        {
+          "n": 2,
+          "x": 0.9,
+          "z": 0.0,
+          "rooted": false
+        }
+      ],
+      "tolerance": 0.0,
+      "wall": null
+    }
+  ],
+  "expected": [
+    {
+      "name": "head_on_overlap_is_split_evenly",
+      "mover": [
+        0.05000000000000002,
+        0.0
+      ],
+      "pushed": [
+        {
+          "n": 2,
+          "x": 0.65,
+          "z": 0.0
+        }
+      ]
+    },
+    {
+      "name": "rooted_body_does_not_move_and_mover_takes_all",
+      "mover": [
+        -0.09999999999999998,
+        0.0
+      ],
+      "pushed": []
+    },
+    {
+      "name": "pushed_body_blocked_by_a_wall_makes_the_mover_stop",
+      "mover": [
+        -0.09999999999999998,
+        0.0
+      ],
+      "pushed": []
+    },
+    {
+      "name": "overlap_within_tolerance_is_left_alone",
+      "mover": [
+        0.0,
+        0.0
+      ],
+      "pushed": []
+    },
+    {
+      "name": "coincident_bodies_separate_deterministically",
+      "mover": [
+        0.3,
+        0.0
+      ],
+      "pushed": [
+        {
+          "n": 2,
+          "x": -0.3,
+          "z": 0.0
+        }
+      ]
+    },
+    {
+      "name": "mover_returns_to_prev_when_resolved_position_is_invalid",
+      "mover": [
+        -0.5,
+        0.0
+      ],
+      "pushed": []
+    },
+    {
+      "name": "diagonal_push_at_45_degrees",
+      "mover": [
+        0.13786796564403575,
+        0.13786796564403575
+      ],
+      "pushed": [
+        {
+          "n": 3,
+          "x": 0.5621320343559643,
+          "z": 0.5621320343559643
+        }
+      ]
+    },
+    {
+      "name": "three_bodies_in_a_line",
+      "mover": [
+        0.15000000000000002,
+        0.0
+      ],
+      "pushed": [
+        {
+          "n": 1,
+          "x": 0.75,
+          "z": 0.0
+        }
+      ]
+    }
+  ]
+}
