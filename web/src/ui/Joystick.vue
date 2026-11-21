@@ -10,7 +10,7 @@ const props = defineProps<{
   setStick: (x: number, y: number) => void
   /** 場景切換中：變成 true 時放開搖桿（同鍵盤清掉按鍵），要重新按下才會再走。 */
   suspended?: boolean
-  /** 放在哪一側的下方。開車且橫向拿手機時放右下角（右手拇指），其餘在左下角。 */
+  /** 放在哪一側的下方。橫向拿手機時放右下角（右手拇指），直向在左下角。 */
   side?: 'left' | 'right'
 }>()
 
