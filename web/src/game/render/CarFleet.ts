@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { ResourceTracker } from './ResourceTracker'
 
-export const CAR_MODEL_VERSION = 1
+export const CAR_MODEL_VERSION = 2
 export const CAR_CAPACITY = 16
 
 export interface CarInstance {
@@ -138,6 +138,8 @@ export class CarFleet {
     this.mesh.receiveShadow = false
     this.mesh.frustumCulled = false
     this.mesh.count = 0
+    // 車散布整個庭院，實例位置每幀在變；InstancedMesh 的包圍球只算一次，不關掉會被誤剔除。
+    this.mesh.frustumCulled = false
 
     // 初始化所有實例矩陣為縮放 0
     for (let i = 0; i < CAR_CAPACITY; i++) {
