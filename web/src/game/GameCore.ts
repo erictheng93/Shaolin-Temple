@@ -344,7 +344,6 @@ export class GameCore {
       fleet: this.fleet,
       net: this.net,
       selfId: () => this.selfId,
-      rttMs: () => this.rtt,
     })
     this.vehicleAudio = new VehicleAudio(this.audio)
     this.moveCfg = {
@@ -353,7 +352,10 @@ export class GameCore {
     }
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
-    this.net.events.on('rtt', (ms) => (this.rtt = ms))
+    this.net.events.on('rtt', (ms) => {
+      this.rtt = ms
+      this.vehicles.onRtt(ms)
+    })
     this.net.events.on('sessionExpired', () => {
       // 權杖失效：清掉本機權杖，照常以訪客身份遊玩（權杖本身不出現在提示或 console）
       clearAuth()
@@ -772,7 +774,7 @@ export class GameCore {
       const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
       this.vehicles.setStick(dirX, dirZ)
       // 先推進物理再讀騎士位置，騎士與車身才是同一個時間點。
-      this.vehicles.advance(dt)
+      this.vehicles.advance(dt, now)
 
       const rider = this.vehicles.riderCar(this.selfId ?? '')
       if (rider) {
@@ -855,11 +857,12 @@ export class GameCore {
     }
     this.inPortal = portal !== null && !riding && this.knockFlight === null
 
+    // 車先算好這一幀的位置，騎在上面的人（players.update 會讀 riderCar）才不會比車晚一幀。
+    const serverNow = now + this.serverOffset
+    const vehiclesActive = this.vehicles.update(now, serverNow, dt)
     const playersActive = this.players.update(now, dt, t, (id) => this.vehicles.riderCar(id))
     this.incense.update(now, t)
     const striking = this.zone === 'courtyard' && this.striker.update(now)
-    const serverNow = now + this.serverOffset
-    const vehiclesActive = this.vehicles.update(now, serverNow, dt)
     if (this.zone === 'hall') this.hall?.update(t, dt)
     else this.temple.update(t, dt)
     // 殿內越靠近神龕（z 從 1 到 -3.5），鏡頭注視點越往上抬，像抬頭仰望神像。

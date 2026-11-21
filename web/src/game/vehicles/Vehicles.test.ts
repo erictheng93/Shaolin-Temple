@@ -62,20 +62,57 @@ describe('Vehicles 子系統', () => {
     expect(vehicles.riderCar('me')).toBeNull()
   })
 
-  it('cars 幀在兩筆之間插值', () => {
+  const lastShown = (): { x: number; z: number; heading: number } => {
+    const calls = mockFleet.sync.mock.calls
+    return calls[calls.length - 1]![0][0]
+  }
+  const moving = (x: number, vx: number) => ({ c: 0, occupied: true, bumped: false, x, z: 0, heading: Math.PI / 2, vx, vz: 0, w: 0 })
+
+  it('別人的車依伺服器給的速度推算到現在', () => {
+    vehicles.onCar({ c: 0, kind: 0, driver: 'other', x: 0, z: 0, heading: Math.PI / 2, fadeAt: null })
+    vehicles.update(1000, 1000, 0)
+    vehicles.onCars(0, [moving(0, 6)], 1000)
+
+    // 50 毫秒後：0 + 6 m/s × 0.05 s
+    vehicles.update(1050, 1050, 0.05)
+    expect(lastShown().x).toBeCloseTo(0.3, 3)
+    // 一直沒有新的狀態：最多推算 0.25 秒就停住，不會一路開出去
+    vehicles.update(3000, 3000, 0.05)
+    expect(lastShown().x).toBeCloseTo(1.5, 3)
+  })
+
+  it('封包晚到（網路抖動）時畫面上的車維持等速', () => {
+    vehicles.onCar({ c: 0, kind: 0, driver: 'other', x: 0, z: 0, heading: Math.PI / 2, fadeAt: null })
+    const frame = (VEHICLES.physics.broadcastEverySteps / VEHICLES.physics.hz) * 1000
+    // 伺服器每 frame 毫秒送一則、車以 6 m/s 前進；到達時間輪流晚 0、30、10、40 毫秒
+    const late = [0, 30, 10, 40]
+    const arrivals = Array.from({ length: 40 }, (_, k) => ({ at: 1000 + k * frame + late[k % 4]!, x: (6 * k * frame) / 1000 }))
+    const speeds: number[] = []
+    let prev: number | null = null
+    for (let t = 1000; t < 1000 + 39 * frame; t += 16) {
+      while (arrivals.length && arrivals[0]!.at <= t) {
+        const a = arrivals.shift()!
+        vehicles.onCars(0, [moving(a.x, 6)], a.at)
+      }
+      vehicles.update(t, t, 0.016)
+      const x = lastShown().x
+      if (prev !== null && t > 1500) speeds.push((x - prev) / 0.016)
+      prev = x
+    }
+    expect(Math.min(...speeds)).toBeGreaterThan(5.4)
+    expect(Math.max(...speeds)).toBeLessThan(6.6)
+  })
+
+  it('新狀態與畫面有落差時滑過去，不會跳', () => {
     vehicles.onCar({ c: 0, kind: 0, driver: null, x: 0, z: 0, heading: 0, fadeAt: null })
+    vehicles.update(1000, 1000, 0)
+    vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 2, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
 
-    // 第一筆位置到達 t=1000
-    vehicles.onCars(0, [{ c: 0, occupied: false, bumped: false, x: 0, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
-    // 第二筆位置到達 t=1100，移動到 x=4 (< 5m SNAP)
-    vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 4, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1100)
-
-    // 在 t=1150 時更新（走到預計 100ms 間隔的一半）
-    vehicles.update(1150, 1150, 0.05)
-    expect(mockFleet.sync).toHaveBeenCalled()
-    const lastSync = mockFleet.sync.mock.calls[mockFleet.sync.mock.calls.length - 1]![0]
-    expect(lastSync).toHaveLength(1)
-    expect(lastSync[0].x).toBeCloseTo(2, 1)
+    vehicles.update(1016, 1016, 0.016)
+    expect(lastShown().x).toBeGreaterThan(0)
+    expect(lastShown().x).toBeLessThan(0.5)
+    for (let t = 1032; t <= 2000; t += 16) vehicles.update(t, t, 0.016)
+    expect(lastShown().x).toBeCloseTo(2, 2)
   })
 
   it('超過 5 公尺直接套用', () => {
@@ -86,8 +123,15 @@ describe('Vehicles 子系統', () => {
     vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 10, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1100)
     vehicles.update(1100, 1100, 0.05)
 
-    const lastSync = mockFleet.sync.mock.calls[mockFleet.sync.mock.calls.length - 1]![0]
-    expect(lastSync[0].x).toBe(10)
+    expect(lastShown().x).toBe(10)
+  })
+
+  it('推算的位置不會畫到庭院邊界外', () => {
+    vehicles.onCar({ c: 0, kind: 0, driver: 'other', x: 18, z: 0, heading: Math.PI / 2, fadeAt: null })
+    vehicles.update(1000, 1000, 0)
+    vehicles.onCars(0, [moving(18, 8)], 1000)
+    vehicles.update(1200, 1200, 0.2)
+    expect(lastShown().x).toBeLessThanOrEqual(19 - VEHICLES.car.halfWidth)
   })
 
   it('淡出的不透明度（fadeAt 前為 1、過一半為 0.5、結束為 0）', () => {
