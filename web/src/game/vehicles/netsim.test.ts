@@ -200,88 +200,95 @@ function speedStats(frames: Frame[], fromMs: number, pick: (f: Frame) => { x: nu
   return { mean, min: sorted[0]!, max: sorted[sorted.length - 1]!, p01: pct(sorted, 0.01), p99: pct(sorted, 0.99) }
 }
 
-const fmt = (o: Record<string, number>): string =>
-  Object.entries(o)
-    .map(([k, x]) => `${k}=${x.toFixed(2)}`)
-    .join(' ')
-
 const straight = (): { x: number; z: number } => ({ x: 1, z: 0 })
+/** 庭院南側往東的空曠直線，極速下可以開 3 秒不碰到東西。 */
 const LANE = { x: -9, z: 9, heading: Math.PI / 2 }
+const EAST_WALL = WORLD_BOUNDS.maxX - VEHICLES.car.halfLength
+
+const NETS: Array<[string, Partial<Scenario>]> = [
+  ['沒有延遲', {}],
+  ['單程 40±15 ms', { oneWayMs: 40, jitterMs: 15, frameJitterMs: 2 }],
+  ['單程 100±40 ms', { oneWayMs: 100, jitterMs: 40, frameJitterMs: 2 }],
+]
 
 describe('開車手感（模擬網路）', () => {
   beforeAll(async () => {
     await RAPIER.init()
   })
 
-  it('量測', () => {
-    const cases: Array<[string, Partial<Scenario>]> = [
-      ['60fps 0ms', {}],
-      ['60fps 抖動幀 0ms', { frameJitterMs: 4 }],
-      ['30fps 0ms', { frameMs: 1000 / 30, frameJitterMs: 3 }],
-      ['60fps 單程40±15', { oneWayMs: 40, jitterMs: 15, frameJitterMs: 2 }],
-      ['60fps 單程100±40', { oneWayMs: 100, jitterMs: 40, frameJitterMs: 2 }],
-      ['60fps 單程200±80', { oneWayMs: 200, jitterMs: 80, frameJitterMs: 2 }],
-      ['60fps 斷流400ms', { oneWayMs: 40, jitterMs: 15, stall: { at: 2000, ms: 400 } }],
-      ['60fps 卡頓300ms', { oneWayMs: 40, jitterMs: 15, hitch: { at: 2000, ms: 300 } }],
-    ]
-    for (const [name, extra] of cases) {
-      // 從靜止往 +z 開 3 秒（不會撞到東西），看 1.5 秒之後（已到極速）
-      const r = run({ seconds: 3, stick: straight, start: LANE, ...extra })
+  // 極速 8 m/s；物理的油門是開關式的，每步速度本來就在 7.8～8.2 之間。
+  // 修正前同樣的情境是 6.4～9.3（40±15）、5.6～10.8（200±80）。
+  describe.each([
+    ...NETS,
+    ['單程 200±80 ms', { oneWayMs: 200, jitterMs: 80, frameJitterMs: 2 }],
+    ['30 FPS', { frameMs: 1000 / 30, frameJitterMs: 3 }],
+    ['幀間隔不穩', { frameJitterMs: 4 }],
+    ['下行斷 400 ms 後一次到齊', { oneWayMs: 40, jitterMs: 15, stall: { at: 2000, ms: 400 } }],
+    ['卡頓 300 ms', { oneWayMs: 40, jitterMs: 15, hitch: { at: 2000, ms: 300 } }],
+  ] as Array<[string, Partial<Scenario>]>)('%s', (_name, net) => {
+    it('直線極速時畫面上的車接近等速', () => {
+      const r = run({ seconds: 3, stick: straight, start: LANE, ...net })
       const s = speedStats(r.frames, 1500)
-      const err = r.frames.filter((f) => f.t > 1500).map((f) => Math.hypot(f.x - f.sx, f.z - f.sz))
-      const corr = [...r.corrections].sort((a, b) => a - b)
-      process.stdout.write(
-        `${name.padEnd(22)} ${fmt(s)} | 校正 p95=${pct(corr, 0.95).toFixed(3)} max=${(corr[corr.length - 1] ?? 0).toFixed(3)} | 領先伺服器 max=${Math.max(...err).toFixed(2)}
-`,
-      )
-    }
-    const nets: Array<[string, Partial<Scenario>]> = [
-      ['0ms', {}],
-      ['40±15', { oneWayMs: 40, jitterMs: 15, frameJitterMs: 2 }],
-      ['100±40', { oneWayMs: 100, jitterMs: 40, frameJitterMs: 2 }],
-    ]
-    const jerk = (frames: Frame[]): number => {
-      let worst = 0
-      for (let i = 2; i < frames.length; i++) {
-        const a = frames[i - 2]!, b = frames[i - 1]!, c = frames[i]!
-        const v1 = Math.hypot(b.x - a.x, b.z - a.z) / b.dt
-        const v2 = Math.hypot(c.x - b.x, c.z - b.z) / c.dt
-        worst = Math.max(worst, Math.abs(v2 - v1))
-      }
-      return worst
-    }
-    const worlds: Array<[string, Partial<Scenario>]> = [
-      ['撞東牆', { seconds: 6 }],
-      ['撞空車', { seconds: 4, other: { x: 5, z: 9, heading: 0 } }],
-      ['對撞', { seconds: 4, other: { x: 15, z: 9, heading: -Math.PI / 2, input: { dir: -Math.PI / 2, mag: 1 } } }],
-      ['並行', { seconds: 3, other: { x: -9, z: 12, heading: Math.PI / 2, input: { dir: Math.PI / 2, mag: 1 } } }],
-      ['蛇行', { seconds: 4, stick: (t) => ({ x: 1, z: Math.sin(t / 300) }) }],
-      ['走走停停', { seconds: 4, stick: (t) => (Math.floor(t / 500) % 2 ? { x: 0, z: 0 } : { x: 1, z: 0 }) }],
-    ]
-    for (const [wn, w] of worlds) {
-      for (const [nn, n] of nets) {
-        const r = run({ seconds: 3, stick: straight, start: LANE, ...n, ...w })
+      expect(s.min).toBeGreaterThan(7.2)
+      expect(s.max).toBeLessThan(9.0)
+    })
+  })
+
+  describe.each(NETS)('%s', (_name, net) => {
+    it('撞牆時不會畫到牆外，也不會卡在與伺服器不同的位置', () => {
+      const r = run({ seconds: 6, stick: straight, start: LANE, ...net })
+      expect(Math.max(...r.frames.map((f) => f.x))).toBeLessThanOrEqual(EAST_WALL + 1e-6)
+      const last = r.frames[r.frames.length - 1]!
+      expect(Math.hypot(last.x - last.sx, last.z - last.sz)).toBeLessThan(0.1)
+    })
+
+    it('貼著場內障礙物（香爐）撞上去時不會畫進去', () => {
+      // 香爐在 x -0.9～0.9、z -2.4～-0.6；從西邊正對著它開過去
+      const r = run({ seconds: 3, stick: straight, start: { x: -12, z: -1.5, heading: Math.PI / 2 }, ...net })
+      const front = Math.max(...r.frames.map((f) => f.x)) + VEHICLES.car.halfLength
+      expect(front).toBeLessThanOrEqual(-0.9 + 1e-6)
+      expect(front).toBeGreaterThan(-0.9 - 0.3) // 真的有撞到
+    })
+
+    it('蛇行與走走停停時校正量都小', () => {
+      for (const stick of [
+        (t: number) => ({ x: 1, z: Math.sin(t / 300) }),
+        (t: number) => (Math.floor(t / 500) % 2 ? { x: 0, z: 0 } : { x: 1, z: 0 }),
+      ]) {
+        const r = run({ seconds: 4, stick, start: LANE, ...net })
         const corr = [...r.corrections].sort((a, b) => a - b)
-        const maxX = Math.max(...r.frames.map((f) => f.x))
-        const last = r.frames[r.frames.length - 1]!
-        const os = r.frames[0]!.other ? speedStats(r.frames, 1500, (f) => f.other) : null
-        const gap = r.frames.map((f) => (f.other && f.otherTrue ? Math.hypot(f.other.x - f.otherTrue.x, f.other.z - f.otherTrue.z) : 0))
-        let hitAt = 0, hitDv = 0
-        for (let i = 2; i < r.frames.length; i++) {
-          const a = r.frames[i - 2]!, b = r.frames[i - 1]!, c = r.frames[i]!
-          const dv = Math.hypot(b.x - a.x, b.z - a.z) / b.dt - Math.hypot(c.x - b.x, c.z - b.z) / c.dt
-          if (dv > hitDv) { hitDv = dv; hitAt = i }
-        }
-        const hf = r.frames[hitAt]!
-        if (hf.other) process.stdout.write(`    撞擊那一幀畫面上兩車中心距離=${Math.hypot(hf.x - hf.other.x, hf.z - hf.other.z).toFixed(2)}（實際接觸約 1.80） 全程最近=${Math.min(...r.frames.map((f) => Math.hypot(f.x - f.other!.x, f.z - f.other!.z))).toFixed(2)}
-`)
-        process.stdout.write(
-          `${(wn + ' ' + nn).padEnd(16)} 校正 p95=${pct(corr, 0.95).toFixed(2)} max=${(corr[corr.length - 1] ?? 0).toFixed(2)} | maxX=${maxX.toFixed(2)} 速度變化max=${jerk(r.frames).toFixed(1)} | 結束時與伺服器差=${Math.hypot(last.x - last.sx, last.z - last.sz).toFixed(2)}` +
-            (os ? ` | 別車 ${fmt(os)} 落後max=${Math.max(...gap).toFixed(2)}` : '') +
-            '\n',
-        )
+        expect(pct(corr, 0.95)).toBeLessThan(0.3)
       }
-    }
-    expect(true).toBe(true)
+    })
+
+    it('並行的另一台車畫面上也接近等速', () => {
+      const r = run({
+        seconds: 3,
+        stick: straight,
+        start: LANE,
+        other: { x: -9, z: 12, heading: Math.PI / 2, input: { dir: Math.PI / 2, mag: 1 } },
+        ...net,
+      })
+      const s = speedStats(r.frames, 1500, (f) => f.other)
+      // 修正前（兩筆位置之間插值）在 100±40 ms 下是 0～18.8 m/s
+      expect(s.min).toBeGreaterThan(6.5)
+      expect(s.max).toBeLessThan(10.6)
+    })
+
+    it('撞上空車與對撞後，兩台車在畫面上不會疊在一起', () => {
+      for (const other of [
+        { x: 5, z: 9, heading: 0 },
+        { x: 15, z: 9, heading: -Math.PI / 2, input: { dir: -Math.PI / 2, mag: 1 } },
+      ]) {
+        const r = run({ seconds: 4, stick: straight, start: LANE, other, ...net })
+        const nearest = Math.min(...r.frames.map((f) => Math.hypot(f.x - f.other!.x, f.z - f.other!.z)))
+        // 兩台車側面相貼時中心相距 2 × 半寬 = 1.1；平滑中的偏移容許一點重疊
+        expect(nearest).toBeGreaterThan(2 * VEHICLES.car.halfWidth - 0.15)
+        // 也不會隔空彈開：車頭對車尾相貼是 2 × 半長 = 1.8，最近的那一刻要看得出碰到了
+        expect(nearest).toBeLessThan(2 * VEHICLES.car.halfLength + 0.3)
+        const corr = [...r.corrections].sort((a, b) => a - b)
+        expect(corr[corr.length - 1]).toBeLessThan(1.5)
+      }
+    })
   })
 })

@@ -21,6 +21,11 @@ const SOFT_CORRECTION = 0.6
 const SOFT_PULL = 0.12
 /** 超過這個距離（公尺）不平滑，直接到位。 */
 const SNAP_CORRECTION = 3
+/**
+ * 畫面比物理的上一步領先多少（單位：步）。0 是純內插（最平順、畫面晚一整步約 33 毫秒），
+ * 1 是純外推（不延遲，但加減速時每步交界會跳）。取一半：延遲約 17 毫秒，交界的跳動也只有一半。
+ */
+export const DISPLAY_LEAD = 0.5
 /** 重播的上限（步）：延遲超過半秒時不再多補，寧可落後也不要每次校正都跑很多步物理。 */
 const MAX_LAG_STEPS = 15
 
@@ -41,6 +46,31 @@ type Pose = ErrorOffset
 interface Shown {
   prev: Pose | null
   off: Pose
+}
+
+/**
+ * 不讓畫面上的車畫進牆或障礙物裡。平滑用的偏移與往前推算都可能把車推進去一點，物理上不會發生，畫面上也不該看到。
+ * ref 是一個確定合法的位置（物理世界或伺服器給的）。畫面上的車與障礙物重疊時，沿著 ref 離障礙物最開的那一軸
+ * 推回 ref 所在的那一側（貼著牆滑行時只修正垂直牆面的方向，不會沿著牆被拉回去）。
+ * 車身在兩軸上佔的半寬依車頭方向計算。
+ */
+export function keepOutside(pose: Pose, ref: { x: number; z: number }): void {
+  const s = Math.abs(Math.sin(pose.heading))
+  const c = Math.abs(Math.cos(pose.heading))
+  const ex = s * VEHICLES.car.halfLength + c * VEHICLES.car.halfWidth
+  const ez = c * VEHICLES.car.halfLength + s * VEHICLES.car.halfWidth
+  pose.x = Math.max(WORLD_BOUNDS.minX + ex, Math.min(WORLD_BOUNDS.maxX - ex, pose.x))
+  pose.z = Math.max(WORLD_BOUNDS.minZ + ez, Math.min(WORLD_BOUNDS.maxZ - ez, pose.z))
+  for (const r of SOLIDS) {
+    if (pose.x + ex <= r.minX || pose.x - ex >= r.maxX || pose.z + ez <= r.minZ || pose.z - ez >= r.maxZ) continue
+    // ref 在各軸上離這個障礙物多遠（負的是物理允許的些微穿透）
+    const gapX = Math.max(r.minX - (ref.x + ex), ref.x - ex - r.maxX)
+    const gapZ = Math.max(r.minZ - (ref.z + ez), ref.z - ez - r.maxZ)
+    // ref 自己就深陷在裡面（不該發生；撞擊瞬間的穿透最多一步的距離）：不知道該推去哪一側，不處理
+    if (Math.max(gapX, gapZ) < -0.4) continue
+    if (gapX >= gapZ) pose.x = ref.x < (r.minX + r.maxX) / 2 ? r.minX - ex : r.maxX + ex
+    else pose.z = ref.z < (r.minZ + r.maxZ) / 2 ? r.minZ - ez : r.maxZ + ez
+  }
 }
 
 /**
@@ -408,16 +438,25 @@ export class VehicleSim {
     return sh && s ? this.blend(sh.prev, s, sh.off) : null
   }
 
-  private blend(p: Pose | null, s: Pose, off: Pose): Pose {
-    const k = p ? this.pendingTime() / STEP : 1
-    const px = p ? p.x : s.x
-    const pz = p ? p.z : s.z
-    const ph = p ? p.heading : s.heading
-    return {
-      x: px + (s.x - px) * k + off.x,
-      z: pz + (s.z - pz) * k + off.z,
-      heading: wrapAngle(ph + wrapAngle(s.heading - ph) * k + off.heading),
+  private blend(p: Pose | null, s: CarState, off: Pose): Pose {
+    // t：要畫的時刻，以「這一步」為 0、「上一步」為 -1（單位：步）
+    const t = (p ? this.pendingTime() / STEP : 1) - 1 + DISPLAY_LEAD
+    let x = s.x
+    let z = s.z
+    let h = s.heading
+    if (t <= 0 && p) {
+      const k = 1 + t
+      x = p.x + (s.x - p.x) * k
+      z = p.z + (s.z - p.z) * k
+      h = p.heading + wrapAngle(s.heading - p.heading) * k
+    } else if (t > 0) {
+      x += s.vx * t * STEP
+      z += s.vz * t * STEP
+      h += s.w * t * STEP
     }
+    const pose = { x: x + off.x, z: z + off.z, heading: wrapAngle(h + off.heading) }
+    keepOutside(pose, s)
+    return pose
   }
 
   /**

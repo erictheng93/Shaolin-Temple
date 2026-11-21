@@ -3,10 +3,9 @@ import type { CarFleet, CarInstance } from '../render/CarFleet'
 import type { NetworkClient } from '../net/NetworkClient'
 import type { CarSnapshot, CarState } from '../net/protocol'
 import { REMOTE_SNAP_DISTANCE } from '../world/interp'
-import { WORLD_BOUNDS } from '../world/layout'
 import { VEHICLES } from '../world/vehicles'
 import type { ZoneId } from '../world/zones'
-import { VehicleSim } from './VehicleSim'
+import { VehicleSim, keepOutside } from './VehicleSim'
 
 export interface CarPose {
   x: number
@@ -55,8 +54,6 @@ const FRAME_MS = (VEHICLES.physics.broadcastEverySteps / VEHICLES.physics.hz) * 
 const FRAME_DRIFT_MS = 2
 /** 別人的車最多依速度往前推算這麼久（秒）；超過（斷線、卡住）就停在原地等下一筆。 */
 const MAX_EXTRAPOLATE_SEC = 0.25
-/** 推算的位置夾在庭院邊界以內（留車身半寬），車才不會在撞牆前的那一筆畫到牆外。 */
-const INSET = VEHICLES.car.halfWidth
 /** 畫面與推算位置的差每秒衰減的速率，與自己的車的誤差偏移相同。 */
 const OFFSET_DECAY = 10
 
@@ -88,7 +85,7 @@ export class Vehicles {
   private simLoadAttempted = false
   /** 等下一幀處理的校正：一幀內到了好幾則 cars（網路卡住後一次到齊）時只用最新的一則。 */
   private pending: { ack: number; at: number } | null = null
-  /** 最近幾次量到的來回延遲（毫秒），取中位數用，單次的尖峰不會讓車往前衝再拉回來。 */
+  /** 最近幾次量到的來回延遲（毫秒），取最小值用，單次的尖峰不會讓車往前衝再拉回來。 */
   private rtts: number[] = []
   private lastAdvanceAt: number | null = null
   /** 最新一則 cars 的時刻（本機時間）。封包晚到時不是用到達時間，而是用「上一則加一個廣播間隔」。 */
@@ -150,9 +147,8 @@ export class Vehicles {
   }
 
   private rttMs(): number {
-    if (this.rtts.length === 0) return 0
-    const sorted = [...this.rtts].sort((a, b) => a - b)
-    return sorted[sorted.length >> 1]!
+    // 量到的延遲只會因為卡頓或壅塞而偏高，不會偏低，所以取最小的
+    return this.rtts.length ? Math.min(...this.rtts) : 0
   }
 
   private getCarStates(): CarState[] {
@@ -208,8 +204,8 @@ export class Vehicles {
     const s = car.sv
     // 可以是負的：新狀態到達時要往回推到上一幀的時刻，才能和畫面上的位置比較
     const ahead = Math.max(-MAX_EXTRAPOLATE_SEC, Math.min(MAX_EXTRAPOLATE_SEC, (t - car.svAt) / 1000))
-    out.x = Math.max(WORLD_BOUNDS.minX + INSET, Math.min(WORLD_BOUNDS.maxX - INSET, s.x + s.vx * ahead))
-    out.z = Math.max(WORLD_BOUNDS.minZ + INSET, Math.min(WORLD_BOUNDS.maxZ - INSET, s.z + s.vz * ahead))
+    out.x = s.x + s.vx * ahead
+    out.z = s.z + s.vz * ahead
     out.heading = wrapAngle(s.heading + s.w * ahead)
   }
 
@@ -416,6 +412,8 @@ export class Vehicles {
         car.x += o.x
         car.z += o.z
         car.heading = wrapAngle(car.heading + o.heading)
+        // 車才不會在撞牆前的那一筆被推算到牆裡
+        keepOutside(car, s)
       }
 
       let opacity = 1
