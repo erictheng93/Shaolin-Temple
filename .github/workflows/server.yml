@@ -1,9 +1,9 @@
 name: server
 on:
   push:
-    paths: ['server/**', 'web/src/game/net/protocol*', '.github/workflows/server.yml']
+    paths: ['server/**', 'web/src/game/net/protocol*', 'shared/**', '.github/workflows/server.yml']
   pull_request:
-    paths: ['server/**', 'web/src/game/net/protocol*', '.github/workflows/server.yml']
+    paths: ['server/**', 'web/src/game/net/protocol*', 'shared/**', '.github/workflows/server.yml']
 permissions:
   contents: read
 jobs:
@@ -26,4 +26,5 @@ jobs:
       - run: npm test -- --run src/game/net/protocol-fixtures.test.ts
         working-directory: web
       - run: cargo build --locked --release
-      - run: docker build -t temple-server:test .
+      - run: docker build -t temple-server:test -f server/Dockerfile .
+        working-directory: .
