@@ -332,9 +332,12 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     for _ in 0..50 {
         clients.push(connect(&room).await);
     }
-    sleep(TICK).await;
+    sleep(Duration::from_secs(2)).await;
+    let (x0, z0) = (clients[7].x, 9.5);
+    clients[7].position(x0, z0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
     clients.iter_mut().for_each(|c| _ = c.drain());
-    let (x, z) = (clients[7].x + 0.123_456, 11.0 - 0.014_9);
+    let (x, z) = (x0 + 0.123_456, z0 - 0.014_9);
     clients[7].position(x, z, 7.0, true).await;
     sleep(TICK * 2).await;
     let expected = (
@@ -378,6 +381,8 @@ async fn tick_rate_follows_config() {
         });
         let mover = connect(&room).await;
         let mut watcher = connect(&room).await;
+        watcher.position(watcher.x, 10.3, 0.0, false).await;
+        sleep(TICK * 2).await;
         watcher.drain();
         let mut batches = 0;
         // 每 10 ms 一則位置，每個 tick 都有變動；10 秒內收到的 moves 則數 = tick 數
@@ -407,10 +412,15 @@ async fn moves_and_actions_stay_in_zone_but_zone_join_leave_reach_everyone() {
     let mut hall_b = connect(&room).await;
     hall_a.enter_hall().await;
     hall_b.enter_hall().await;
+    sleep(Duration::from_secs(2)).await;
+    yard.position(0.0, 8.0, 0.0, false).await;
+    hall_b.position(1.5, 6.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
     // 換場景的 zone 廣播，所有場景的人都收到（各兩則）
     assert_eq!(count(&yard.drain(), "zone"), 2);
     yard_mover.drain();
     hall_a.drain();
+    hall_b.drain();
     // 殿內玩家移動、做動作：庭院玩家完全收不到，殿內另一人收到
     hall_a.position(0.3, 7.4, 0.0, true).await;
     hall_a.action("r1", "bow", true).await;
@@ -863,7 +873,9 @@ async fn dropped_moves_are_replaced_by_one_sync_when_the_queue_has_room() {
     let mover = connect(&room).await;
     let still = connect(&room).await;
     let mut slow = connect_with(&room, 4).await;
-    sleep(TICK).await;
+    still.position(still.x, 11.7, 0.0, false).await;
+    slow.position(slow.x, 10.3, 0.0, false).await;
+    sleep(TICK * 2).await;
     slow.drain();
     // 佇列只有 4 格：8 個 tick 的 moves 前 4 則入列，其餘被丟棄
     let mut last = (0.0, 0.0);
@@ -1330,4 +1342,274 @@ async fn resume_renames_share_the_per_player_rename_budget() {
     rename(&a3, "五").await;
     sleep(TICK).await;
     assert_eq!(names(&b.drain()), [(id.clone(), "五".to_string())]);
+}
+
+// ---- 玩家碰撞（Task 2） ----
+
+#[tokio::test(start_paused = true)]
+async fn walking_into_a_standing_player_pushes_them_and_slows_the_walker() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    // A 朝 B (x 方向) 走向 (-0.2, 8.0)，試圖與 B 重疊 (0.2 < 0.6)
+    a.position(-0.2, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let moves = move_tuples(&watcher.drain());
+    let a_move = moves.iter().find(|m| m.0 == a.n).copied();
+    let b_move = moves.iter().find(|m| m.0 == b.n).copied();
+
+    assert!(a_move.is_some(), "A 應該有移動");
+    assert!(b_move.is_some(), "B 應該被推動");
+    let a_pos = a_move.unwrap();
+    let b_pos = b_move.unwrap();
+
+    assert!(b_pos.1 > 0.0, "B 的 x 應被推往前，實際為 {}", b_pos.1);
+    assert!(a_pos.1 < -0.2, "A 的 x 應被推回，實際為 {}", a_pos.1);
+    let dist = (b_pos.1 - a_pos.1).hypot(b_pos.2 - a_pos.2);
+    assert!(
+        dist >= 0.6 - 0.15 - 1e-4,
+        "兩人距離應 >= 0.45，實際為 {dist}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn pushed_player_receives_a_sync_and_appears_in_moves() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    a.position(-0.1, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let b_syncs = corrections(&mut b);
+    assert!(!b_syncs.is_empty(), "B 被推動時應收到 sync 校正");
+    assert!(b_syncs[0].1 > 0.0, "B 的 sync x 應大於 0.0");
+
+    let w_moves = move_tuples(&watcher.drain());
+    assert!(
+        w_moves.iter().any(|m| m.0 == b.n),
+        "watcher 的 moves 應包含被推動的 B"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn player_in_a_station_action_cannot_be_pushed() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    b.action("req-1", "prostrate", true).await;
+    sleep(TICK).await;
+    b.drain();
+    a.drain();
+    watcher.drain();
+
+    a.position(-0.1, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let a_syncs = corrections(&mut a);
+    assert!(!a_syncs.is_empty(), "A 被定點動作阻擋應收到 sync 校正");
+    assert!(
+        a_syncs[0].1 <= -0.1,
+        "A 的位置應被推回 <= -0.1，實際為 {}",
+        a_syncs[0].1
+    );
+
+    let w_moves = move_tuples(&watcher.drain());
+    assert!(
+        !w_moves.iter().any(|m| m.0 == b.n),
+        "跪拜中的 B 不能被推動出現在 moves 中"
+    );
+    assert!(
+        corrections(&mut b).is_empty(),
+        "跪拜中的 B 不能收到位置變更 sync"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn bowing_player_can_be_pushed() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    b.action("req-1", "bow", true).await;
+    sleep(TICK).await;
+    b.drain();
+    a.drain();
+    watcher.drain();
+
+    a.position(-0.1, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let b_syncs = corrections(&mut b);
+    assert!(!b_syncs.is_empty(), "合十中的 B 可以被推動並收到 sync");
+    let w_moves = move_tuples(&watcher.drain());
+    assert!(
+        w_moves.iter().any(|m| m.0 == b.n),
+        "合十中的 B 應被推動出現在 moves 中"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn player_is_not_pushed_through_an_obstacle() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // B 站在香爐右側 (1.2, 1.5)，背靠香爐障礙物 (邊界在 1.15)
+    // A 站在 (2.2, 1.5)
+    b.position(1.2, 1.5, 0.0, false).await;
+    a.position(2.2, 1.5, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    // A 朝 -x 走向 B (1.4, 1.5)，推動 B 向 -x
+    a.position(1.4, 1.5, 0.0, true).await;
+    sleep(TICK).await;
+
+    let w_moves = move_tuples(&watcher.drain());
+    if let Some(b_move) = w_moves.iter().find(|m| m.0 == b.n) {
+        assert!(
+            world::COURTYARD.is_valid(b_move.1, b_move.2),
+            "B 不能被推入障礙物"
+        );
+    }
+    for s in corrections(&mut b) {
+        assert!(
+            world::COURTYARD.is_valid(s.1, s.2),
+            "B 的 sync 不能在障礙物內"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn moving_into_a_spot_the_other_player_left_200ms_ago_is_not_corrected() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    let p0 = (0.0, 8.0);
+    b.position(p0.0, p0.1, 0.0, false).await;
+    a.position(-1.5, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+
+    // B 走開到 (1.0, 8.0)
+    b.position(1.0, 8.0, 0.0, true).await;
+    sleep(TICK * 2 + Duration::from_millis(10)).await;
+    a.drain();
+    b.drain();
+
+    // A 走到 B 原本的位置 p0
+    a.position(p0.0, p0.1, 0.0, false).await;
+    sleep(TICK * 2).await;
+
+    let a_syncs = corrections(&mut a);
+    assert!(
+        a_syncs.is_empty(),
+        "A 走到 B 200ms 前離開的位置不應被糾正，收到: {a_syncs:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn riders_knocked_and_grace_players_do_not_collide() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let b = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // B 斷線進入保留期
+    b.disconnect().await;
+    sleep(TICK).await;
+    a.drain();
+
+    // A 走到 B 的位置 (0.0, 8.0)
+    a.position(0.0, 8.0, 0.0, false).await;
+    sleep(TICK).await;
+
+    let a_syncs = corrections(&mut a);
+    assert!(
+        a_syncs.is_empty(),
+        "A 走入斷線保留玩家的位置不應發生玩家碰撞糾正"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn two_players_pressing_against_each_other_get_at_most_one_sync_per_correction_gap() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    b.position(0.2, 8.0, 0.0, false).await;
+    a.position(-0.2, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+
+    let mut a_sync_count = 0;
+    for _ in 0..20 {
+        a.position(0.1, 8.0, 0.0, true).await;
+        b.position(-0.1, 8.0, 0.0, true).await;
+        sleep(Duration::from_millis(50)).await;
+        a_sync_count += corrections(&mut a).len();
+    }
+
+    assert!(
+        a_sync_count <= 5,
+        "1 秒內 sync 次數應受 CORRECTION_GAP 節流限制，實際收到 {a_sync_count} 次"
+    );
+    assert!(a_sync_count >= 1, "互相推擠應至少收到 1 次 sync");
 }
