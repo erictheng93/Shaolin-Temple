@@ -53,7 +53,7 @@ impl Client {
         self.room
             .send(RoomCommand::Claim {
                 who: self.who.clone(),
-                kind,
+                kind: Some(kind),
             })
             .await
             .unwrap();
@@ -447,6 +447,39 @@ async fn claim_when_kind_at_limit_fails() {
         })
         .expect("should receive Error message");
     assert_eq!(err, "car_unavailable");
+}
+
+// 抽車種：額滿的車種抽不到，全部額滿回 None，每個 roll 都落在對應權重的區間
+#[test]
+fn pick_kind_skips_full_kinds_and_follows_weights() {
+    use super::vehicles::pick_kind;
+    let stock = [45, 0, 15, 5];
+    let drawn: Vec<u8> = (0..65).map(|r| pick_kind(&stock, r).unwrap()).collect();
+    assert!(drawn.iter().all(|&k| k != 1));
+    assert_eq!(drawn.iter().filter(|&&k| k == 0).count(), 45);
+    assert_eq!(drawn.iter().filter(|&&k| k == 2).count(), 15);
+    assert_eq!(drawn.iter().filter(|&&k| k == 3).count(), 5);
+    assert_eq!(pick_kind(&[0, 0, 0, 0], 0), None);
+}
+
+// 不帶車種的領車（正式路徑）：伺服器抽一種並發車
+#[tokio::test(start_paused = true)]
+async fn claim_without_kind_draws_a_car() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    a.drain();
+    a.room
+        .send(RoomCommand::Claim {
+            who: a.who.clone(),
+            kind: None,
+        })
+        .await
+        .unwrap();
+    sleep(Duration::from_millis(50)).await;
+    let car = find_car_msg(&a.drain()).expect("claim without kind spawns a car");
+    assert!((car.kind as usize) < params().kinds.len());
+    assert_eq!(car.driver.as_deref(), Some(a.who.id.as_str()));
 }
 
 // 6. claim_when_all_bays_blocked_fails: 6 車位都有障礙回 booth_crowded
