@@ -8,7 +8,7 @@ fn full_room_welcome_fits_message_limit() {
     // 最壞情況：16 個 4-byte 字元的名稱、公分精度的 f64、最大的短編號。zone 與動作 id 限於
     // 已知場景與允許清單（取其中最長者）；加上滿額 10 台車的快照。
     let n = -19.99;
-    let heading = -3.141;
+    let heading = -3.12;
     let ts = 1_700_000_000_000.0;
     let longest = |names: &[&'static str]| {
         names

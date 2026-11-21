@@ -601,7 +601,7 @@ async fn ride_none_dismounts() {
     assert!((fade_at - (now_ms() + 45_000.0)).abs() < 500.0);
 
     // 檢查落點距離 車體 (car_msg.x, car_msg.z) 約 1.1m
-    let dist = ((px as f64) - car_msg.x).hypot((pz as f64) - car_msg.z);
+    let dist = (px - car_msg.x).hypot(pz - car_msg.z);
     assert!((dist - 1.1).abs() < 0.05, "dismount distance: {dist}");
 }
 
@@ -1389,16 +1389,13 @@ async fn dismount_places_the_player_beside_the_car_and_schedules_fade() {
     let fade_at = car_msg.fade_at.expect("fade_at must be scheduled");
     assert!((fade_at - (now_ms() + 45_000.0)).abs() < 500.0);
 
-    let dist = ((px as f64) - car_msg.x).hypot((pz as f64) - car_msg.z);
+    let dist = (px - car_msg.x).hypot(pz - car_msg.z);
     assert!(
         (dist - 1.1).abs() < 0.05,
         "distance to car should be 1.1 ± 0.05, got {dist}"
     );
     assert!(
-        !world::COURTYARD
-            .solids
-            .iter()
-            .any(|s| s.contains(px as f64, pz as f64)),
+        !world::COURTYARD.solids.iter().any(|s| s.contains(px, pz)),
         "landing point must not be solid"
     );
 }
