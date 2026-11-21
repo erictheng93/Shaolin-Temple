@@ -149,6 +149,7 @@ const en: Record<MessageKey, string> = {
   'ride.modal.go': 'Let’s go!',
   'ride.modal.hint': 'Cars are assigned at random; you cannot choose',
   'ride.modal.close': 'Close',
+  'ride.rotateHint': 'Turn your phone sideways for easier driving',
 
   'perf.label': 'Performance',
   'perf.position': 'Position',
