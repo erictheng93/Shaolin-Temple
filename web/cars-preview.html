@@ -116,7 +116,14 @@
           camera.aspect = w / h
           camera.updateProjectionMatrix()
         }
-        fleet.sync(KINDS.map((_, k) => ({ kind: k, x: (k - 1.5) * GAP, z: 0, heading, opacity: 1 })), now)
+        // 前排是四種車；後排是經典碰碰車另外三種烤漆色（顏色依車的編號輪流）
+        fleet.sync(
+          [
+            ...KINDS.map((_, k) => ({ c: 0, kind: k, x: (k - 1.5) * GAP, z: 0, heading, opacity: 1 })),
+            ...[1, 2, 3].map((c) => ({ c, kind: 0, x: (-1.5 + (c - 1) * 0.8) * GAP - 0.4, z: -2.6, heading, opacity: 1 })),
+          ],
+          now,
+        )
         pivots.forEach((p, k) => {
           p.rotation.y = heading
           p.children[0].visible = showRider
