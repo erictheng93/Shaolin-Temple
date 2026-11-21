@@ -25,7 +25,7 @@ afterEach(() => {
 const chantEvent = (playerId: string, actionId: string, startedAt: number, local = false) =>
   ({ playerId, actionId, local, zone: 'hall', startedAt, x: 0, z: 0 }) as const
 const woods = (played: ReturnType<typeof setup>['played']) => played.filter((p) => p.name === 'wood')
-const qings = (played: ReturnType<typeof setup>['played']) => played.filter((p) => p.name === 'qing')
+const qings = (played: ReturnType<typeof setup>['played']) => played.filter((p) => p.name === 'daqing')
 const onGrid = (s: number) => Math.abs(s / CHANT_BEAT_MS - Math.round(s / CHANT_BEAT_MS)) < 1e-6
 
 describe('誦經：動作', () => {
@@ -117,8 +117,8 @@ describe('誦經：多人時的聲音（共同節拍格，每拍只發一聲）'
     expect(planChantSounds([{ startS: 0, local: false, distance: CHANT_HEARING_RANGE + 1 }], 0, 60_000)).toEqual([])
   })
 
-  it('引磬：每人開頭與結尾各一聲，幾乎同時的引磬只留一聲', () => {
-    const one = planChantSounds([crowd[0]!], 0, 60_000).filter((s) => s.sound === 'qing')
+  it('大磬：每人開頭與結尾各一聲，幾乎同時的大磬只留一聲', () => {
+    const one = planChantSounds([crowd[0]!], 0, 60_000).filter((s) => s.sound === 'daqing')
     expect(one.map((s) => s.atS)).toEqual([10_000 + QING_START_MS, 10_000 + QING_END_MS])
     const twin = planChantSounds(
       [
@@ -127,11 +127,11 @@ describe('誦經：多人時的聲音（共同節拍格，每拍只發一聲）'
       ],
       0,
       60_000,
-    ).filter((s) => s.sound === 'qing')
+    ).filter((s) => s.sound === 'daqing')
     expect(twin).toHaveLength(2)
   })
 
-  it('幾乎同時的引磬在分段排程（每 100 ms 一段）時也只留一聲', () => {
+  it('幾乎同時的大磬在分段排程（每 100 ms 一段）時也只留一聲', () => {
     for (const second of [
       { startS: 200, local: false, distance: 2 },
       { startS: 200, local: false, distance: 0 }, // 與第一人同音量
@@ -139,7 +139,7 @@ describe('誦經：多人時的聲音（共同節拍格，每拍只發一聲）'
       const list = [{ startS: 0, local: second.distance === 0 ? false : true, distance: 0 }, second]
       const pieces = []
       for (let t = 0; t < 30_000; t += 100) pieces.push(...planChantSounds(list, t, t + 100))
-      expect(pieces.filter((s) => s.sound === 'qing').map((s) => s.atS)).toEqual([QING_START_MS, QING_END_MS])
+      expect(pieces.filter((s) => s.sound === 'daqing').map((s) => s.atS)).toEqual([QING_START_MS, QING_END_MS])
     }
   })
 
@@ -175,7 +175,7 @@ describe('誦經：模組的排程', () => {
     expect(qings(played)).toHaveLength(4)
   })
 
-  it('提前起身（chant_end）：之後不再有木魚，也沒有收尾的引磬；沒人誦經時計時器停止', () => {
+  it('提前起身（chant_end）：之後不再有木魚，也沒有收尾的大磬；沒人誦經時計時器停止', () => {
     const { events, played, positions } = setup()
     positions.set('local', { x: 1.8, z: 3.1, zone: 'hall' })
     const t0 = performance.now()
@@ -193,7 +193,7 @@ describe('誦經：模組的排程', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('不同場景或太遠的人的木魚聽不到；完整誦完有開頭與收尾兩聲引磬', () => {
+  it('不同場景或太遠的人的木魚聽不到；完整誦完有開頭與收尾兩聲大磬', () => {
     const { events, played, positions } = setup()
     positions.set('local', { x: 0, z: 0, zone: 'courtyard' })
     positions.set('p-b', { x: 1.8, z: 3.1, zone: 'hall' })
