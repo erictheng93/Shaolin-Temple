@@ -770,15 +770,18 @@ export function buildTempleScene(
         s.material.opacity = Math.sin(p * Math.PI) * 0.35
       }
       // 樹冠隨風輕晃
-      canopyItems.forEach((it, i) => {
+      for (let i = 0; i < canopyItems.length; i++) {
+        const it = canopyItems[i]!
         const sway = Math.sin(t * 0.9 + i * 1.7) * 0.035
         tmp.position.set(it.pos[0] + sway * 2, it.pos[1], it.pos[2])
-        tmp.scale.set(...it.scale)
+        tmp.scale.set(it.scale[0], it.scale[1], it.scale[2])
         tmp.rotation.set(sway, it.rotY, sway * 0.6)
         tmp.updateMatrix()
         canopyMesh.setMatrixAt(i, tmp.matrix)
-      })
+      }
+      canopyMesh.instanceMatrix.updateRanges = [{ start: 0, count: canopyItems.length * 16 }]
       canopyMesh.instanceMatrix.needsUpdate = true
+
       for (let i = 0; i < LEAF_COUNT; i++) {
         const tree = TREES[i % TREES.length]!
         const p = (t * (0.04 + (i % 5) * 0.004) + i * 0.618) % 1
@@ -792,14 +795,18 @@ export function buildTempleScene(
         tmp.updateMatrix()
         leaves.setMatrixAt(i, tmp.matrix)
       }
+      leaves.instanceMatrix.updateRanges = [{ start: 0, count: LEAF_COUNT * 16 }]
       leaves.instanceMatrix.needsUpdate = true
-      robeItems.forEach((it, i) => {
-        tmp.position.set(...it.pos)
+
+      for (let i = 0; i < robeItems.length; i++) {
+        const it = robeItems[i]!
+        tmp.position.set(it.pos[0], it.pos[1], it.pos[2])
         tmp.scale.set(1, 1, 1)
         tmp.rotation.set(0, 0, Math.sin(t * 1.1 + i * 1.9) * 0.07)
         tmp.updateMatrix()
         robeMesh.setMatrixAt(i, tmp.matrix)
-      })
+      }
+      robeMesh.instanceMatrix.updateRanges = [{ start: 0, count: robeItems.length * 16 }]
       robeMesh.instanceMatrix.needsUpdate = true
       if (bellAngle !== 0 || bellVel !== 0) {
         const k = 18
