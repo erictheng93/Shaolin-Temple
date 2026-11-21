@@ -716,25 +716,49 @@ export class AvatarFactory {
       i++
     }
     for (const tier of this.tiers) {
-      for (const m of [tier.body, tier.skin]) {
-        m.count = tier.count
-        m.instanceMatrix.needsUpdate = true
+      if (tier.count > 0) {
+        const matCount = tier.count * 16
+        for (const m of [tier.body, tier.skin]) {
+          m.count = tier.count
+          m.instanceMatrix.updateRanges = [{ start: 0, count: matCount }]
+          m.instanceMatrix.needsUpdate = true
+        }
+        tier.outfit.updateRanges = [{ start: 0, count: tier.count }]
+        tier.outfit.needsUpdate = true
+
+        const hasFace = Boolean(tier.face.geometry.getAttribute('position'))
+        tier.face.count = hasFace ? tier.count : 0
+        if (hasFace) {
+          tier.face.instanceMatrix.updateRanges = [{ start: 0, count: matCount }]
+          tier.face.instanceMatrix.needsUpdate = true
+          tier.faceIndex.updateRanges = [{ start: 0, count: tier.count }]
+          tier.faceIndex.needsUpdate = true
+        }
+      } else {
+        tier.body.count = 0
+        tier.skin.count = 0
+        tier.face.count = 0
       }
-      tier.outfit.needsUpdate = true
-      // 模型還沒載入時沒有臉的幾何（替代用的圓柱與球不畫臉）
-      tier.face.count = tier.face.geometry.getAttribute('position') ? tier.count : 0
-      tier.face.instanceMatrix.needsUpdate = true
-      tier.faceIndex.needsUpdate = true
     }
     this.shadows.count = i
-    this.shadows.instanceMatrix.needsUpdate = true
+    if (i > 0) {
+      this.shadows.instanceMatrix.updateRanges = [{ start: 0, count: i * 16 }]
+      this.shadows.instanceMatrix.needsUpdate = true
+    }
     this.props.count = props
     this.props.visible = props > 0
-    this.props.instanceMatrix.needsUpdate = true
+    if (props > 0) {
+      this.props.instanceMatrix.updateRanges = [{ start: 0, count: props * 16 }]
+      this.props.instanceMatrix.needsUpdate = true
+    }
     this.chantProps.count = chant
     this.chantProps.visible = chant > 0
-    this.chantProps.instanceMatrix.needsUpdate = true
-    this.chantPart.needsUpdate = true
+    if (chant > 0) {
+      this.chantProps.instanceMatrix.updateRanges = [{ start: 0, count: chant * 16 }]
+      this.chantProps.instanceMatrix.needsUpdate = true
+      this.chantPart.updateRanges = [{ start: 0, count: chant }]
+      this.chantPart.needsUpdate = true
+    }
   }
 
   /**
