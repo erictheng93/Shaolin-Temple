@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall, synthesizeIncenseOffering, synthesizeQing } from './AudioManager'
+import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall, synthesizeIncenseOffering, synthesizeMuyu, synthesizeQing } from './AudioManager'
 
 // 只實作 synthesizeBirdCall 用到的 createBuffer，node 環境沒有 Web Audio。
 const fakeCtx = (sampleRate = 8000) =>
@@ -36,6 +36,17 @@ describe('synthesizeIncenseOffering', () => {
     expect(peak(1.7, 2)).toBeLessThan(0.15)
     expect(peak(2, 2.2)).toBeCloseTo(0.6, 1)
     expect(Math.abs(data[data.length - 1]!)).toBeLessThan(0.01)
+  })
+})
+
+describe('synthesizeMuyu', () => {
+  it('短促、已正規化，餘韻在 0.3 秒內消失', () => {
+    const sr = 8000
+    const data = synthesizeMuyu(fakeCtx(sr), seeded(3)).getChannelData(0)
+    const peak = (from: number, to: number) => data.slice(from * sr, to * sr).reduce((m, v) => Math.max(m, Math.abs(v)), 0)
+    expect(data.length / sr).toBeLessThan(0.5)
+    expect(peak(0, 0.05)).toBeCloseTo(0.8, 5)
+    expect(peak(0.3, 0.4)).toBeLessThan(0.02)
   })
 })
 

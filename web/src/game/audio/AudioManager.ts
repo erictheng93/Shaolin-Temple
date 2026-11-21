@@ -10,7 +10,7 @@
  * - AudioContext 只能在使用者操作後建立／恢復，因此 unlock() 必須在點擊事件中呼叫。
  */
 
-type SynthName = 'bell' | 'wood' | 'bowl'
+type SynthName = 'bell' | 'bowl'
 
 const MAX_VOICES = 12
 
@@ -41,11 +41,9 @@ export interface Volumes {
 
 function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
   const sr = ctx.sampleRate
-  const spec: Record<SynthName, { seconds: number; partials: Array<[ratio: number, amp: number, decay: number]>; f0: number; click?: number }> = {
+  const spec: Record<SynthName, { seconds: number; partials: Array<[ratio: number, amp: number, decay: number]>; f0: number }> = {
     // 寺鐘：不和諧泛音、長衰減
     bell: { seconds: 7, f0: 98, partials: [[1, 1, 3.2], [2.0, 0.6, 2.2], [2.76, 0.45, 1.6], [5.4, 0.25, 0.9], [8.93, 0.12, 0.5]] },
-    // 木魚：短促、帶敲擊聲
-    wood: { seconds: 0.35, f0: 620, partials: [[1, 1, 0.07], [2.31, 0.4, 0.04]], click: 0.004 },
     // 頌缽：拍頻造成的嗡嗡聲
     bowl: { seconds: 6, f0: 294, partials: [[1, 1, 3.5], [1.006, 0.8, 3.5], [2.71, 0.35, 2], [5.15, 0.12, 1]] },
   }
@@ -61,7 +59,36 @@ function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
     for (const [ratio, amp, decay] of s.partials) {
       v += amp * Math.sin(2 * Math.PI * s.f0 * ratio * t) * Math.exp(-t / decay)
     }
-    if (s.click && t < s.click) v += (Math.random() * 2 - 1) * (1 - t / s.click)
+    if (i < attack) v *= i / attack
+    data[i] = v
+    peak = Math.max(peak, Math.abs(v))
+  }
+  const norm = peak > 0 ? 0.8 / peak : 1
+  for (let i = 0; i < len; i++) data[i]! *= norm
+  return buffer
+}
+
+/**
+ * 合成木魚：空心木頭的「篤」。音高比實心木塊低，敲下去的瞬間音高微微下滑再落定（空腔共鳴），
+ * 敲擊聲是壓掉高頻的雜訊（包布的槌），餘韻很短。random 可注入。
+ */
+export function synthesizeMuyu(ctx: BaseAudioContext, random: () => number = Math.random): AudioBuffer {
+  const sr = ctx.sampleRate
+  const f0 = 400
+  const len = Math.floor(sr * 0.4)
+  const buffer = ctx.createBuffer(1, len, sr)
+  const data = buffer.getChannelData(0)
+  const attack = Math.floor(sr * 0.001)
+  let phase = 0
+  let click = 0
+  let peak = 0
+  for (let i = 0; i < len; i++) {
+    const t = i / sr
+    phase += (2 * Math.PI * f0 * (1 + 0.1 * Math.exp(-t / 0.012))) / sr
+    // 腔體的基音，加一個很快消失的較高模態
+    let v = Math.sin(phase) * Math.exp(-t / 0.075) + 0.3 * Math.sin(2.4 * phase) * Math.exp(-t / 0.03)
+    click += 0.25 * (random() * 2 - 1 - click)
+    v += 0.6 * click * Math.exp(-t / 0.004)
     if (i < attack) v *= i / attack
     data[i] = v
     peak = Math.max(peak, Math.abs(v))
@@ -127,6 +154,7 @@ const DAQING_TAIL = 4.5
 /**
  * 合成上香的音效：前面留白（三拜不出聲），plantAt 秒（香插進香爐的那一刻）之前是香腳入灰的一小聲「沙」，
  * 插下時敲一聲大磬（缽形、低而溫潤、兩個相近的分音造成緩慢的拍頻），與跪拜清亮的引磬區分。
+ * plantAt 為 0 時沒有沙聲，就是單獨一聲大磬（誦經的起腔與收腔）。
  */
 export function synthesizeIncenseOffering(ctx: BaseAudioContext, plantAt: number, random: () => number = Math.random): AudioBuffer {
   const sr = ctx.sampleRate
@@ -302,7 +330,8 @@ export class AudioManager {
       this.musicBus.connect(this.master)
       this.sfxBus.connect(this.master)
       this.master.connect(ctx.destination)
-      for (const n of ['bell', 'wood', 'bowl'] as const) this.buffers.set(n, synthesize(ctx, n))
+      for (const n of ['bell', 'bowl'] as const) this.buffers.set(n, synthesize(ctx, n))
+      this.buffers.set('wood', synthesizeMuyu(ctx))
       this.birdBuffers = Array.from({ length: BIRD_VARIANTS }, () => synthesizeBirdCall(ctx))
       this.windBuffer = synthesizeWindNoise(ctx)
       for (const [name, url] of this.pendingUrls) void this.loadSfx(name, url)
