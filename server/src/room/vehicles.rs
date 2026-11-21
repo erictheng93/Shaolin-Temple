@@ -1,7 +1,7 @@
 use super::*;
 use crate::protocol::{CarSnapshot, CarState as WireCarState};
 use crate::vehicles::{
-    drive::{wrap_angle, DriveInput},
+    drive::{DriveInput, wrap_angle},
     params::params,
 };
 use std::f32::consts::PI;
@@ -49,9 +49,9 @@ impl Room {
             return;
         }
 
-        if p.claim_at
-            .is_some_and(|t| now.duration_since(t) < Duration::from_millis(p_params.ride.claim_cooldown_ms))
-        {
+        if p.claim_at.is_some_and(|t| {
+            now.duration_since(t) < Duration::from_millis(p_params.ride.claim_cooldown_ms)
+        }) {
             let error = ServerMessage::Error {
                 code: "claim_cooldown".into(),
                 message: "領車冷卻中".into(),
@@ -266,8 +266,13 @@ impl Room {
 
         let dir_rad = wrap_angle(dir as f32 * (2.0 * PI / 256.0));
         let mag_f32 = mag as f32 / 255.0;
-        self.vehicles
-            .set_input(c, DriveInput { dir: dir_rad, mag: mag_f32 });
+        self.vehicles.set_input(
+            c,
+            DriveInput {
+                dir: dir_rad,
+                mag: mag_f32,
+            },
+        );
 
         if let Some(car_meta) = self.cars.get_mut(&c) {
             car_meta.last_input_at = now;
@@ -279,7 +284,9 @@ impl Room {
     /// 玩家座標設為落點，對本人送一筆 sync；
     /// 車 set_occupied(false)、清除輸入、empty_since = now，廣播 car（fadeAt = 伺服器毫秒 + idleMs）。
     pub(crate) fn dismount(&mut self, id: &str, now: Instant) {
-        let Some(p) = self.players.get_mut(id) else { return };
+        let Some(p) = self.players.get_mut(id) else {
+            return;
+        };
         let Some(c) = p.riding.take() else { return };
 
         let car_state = self.vehicles.car(c);
@@ -314,13 +321,12 @@ impl Room {
         p.last_at = now;
         p.last_pos_msg = now;
 
-        let sync_msg = ServerMessage::Sync {
-            m: vec![tuple(p)],
-        };
+        let sync_msg = ServerMessage::Sync { m: vec![tuple(p)] };
         self.send_to(id, sync_msg, now);
 
         self.vehicles.set_occupied(c, false);
-        self.vehicles.set_input(c, DriveInput { dir: 0.0, mag: 0.0 });
+        self.vehicles
+            .set_input(c, DriveInput { dir: 0.0, mag: 0.0 });
         let fade_at = now_ms() + p_params.fade.idle_ms as f64;
         let mut kind = 0;
         if let Some(car_meta) = self.cars.get_mut(&c) {
@@ -357,7 +363,10 @@ impl Room {
     }
 
     pub(crate) fn car_snapshots(&self) -> Vec<CarSnapshot> {
-        self.cars.keys().filter_map(|&c| self.car_snapshot(c)).collect()
+        self.cars
+            .keys()
+            .filter_map(|&c| self.car_snapshot(c))
+            .collect()
     }
 
     pub(crate) fn should_physics_step(&self) -> bool {
@@ -404,16 +413,11 @@ impl Room {
             .players
             .values_mut()
             .filter_map(|pl| {
-                if let Some(t) = pl.knocked_until {
-                    if now >= t {
-                        pl.knocked_until = None;
-                        return Some((
-                            pl.id.clone(),
-                            ServerMessage::Sync {
-                                m: vec![tuple(pl)],
-                            },
-                        ));
-                    }
+                if let Some(t) = pl.knocked_until
+                    && now >= t
+                {
+                    pl.knocked_until = None;
+                    return Some((pl.id.clone(), ServerMessage::Sync { m: vec![tuple(pl)] }));
                 }
                 None
             })
@@ -426,7 +430,8 @@ impl Room {
         let timeout = Duration::from_millis(p_params.physics.input_timeout_ms);
         for (&c, car) in &self.cars {
             if car.driver.is_some() && now.duration_since(car.last_input_at) > timeout {
-                self.vehicles.set_input(c, DriveInput { dir: 0.0, mag: 0.0 });
+                self.vehicles
+                    .set_input(c, DriveInput { dir: 0.0, mag: 0.0 });
             }
         }
 
@@ -446,13 +451,13 @@ impl Room {
 
         // 3. 騎士的 x, z, heading 設為車的狀態
         for pl in self.players.values_mut() {
-            if let Some(c) = pl.riding {
-                if let Some(st) = self.vehicles.car(c) {
-                    pl.x = st.x as f64;
-                    pl.z = st.z as f64;
-                    pl.heading = st.heading as f64;
-                    pl.moving = false;
-                }
+            if let Some(c) = pl.riding
+                && let Some(st) = self.vehicles.car(c)
+            {
+                pl.x = st.x as f64;
+                pl.z = st.z as f64;
+                pl.heading = st.heading as f64;
+                pl.moving = false;
             }
         }
 
@@ -554,7 +559,10 @@ impl Room {
         self.cleanup_expired_cars(now);
 
         // 7. 每 broadcastEverySteps 步廣播 cars
-        if self.physics_steps % (p_params.physics.broadcast_every_steps as u64) == 0 {
+        if self
+            .physics_steps
+            .is_multiple_of(p_params.physics.broadcast_every_steps as u64)
+        {
             self.broadcast_cars(now);
         }
     }
@@ -594,7 +602,9 @@ impl Room {
                 ack,
                 cars: cars.clone(),
             };
-            let Some(pl) = self.players.get_mut(&id) else { continue };
+            let Some(pl) = self.players.get_mut(&id) else {
+                continue;
+            };
             let Some(link) = &pl.link else { continue };
             match link.tx.try_send(msg) {
                 Ok(()) => {

@@ -383,7 +383,7 @@ impl ClientMessage {
             Self::Zone { zone, .. } => id(zone, MAX_ZONE_BYTES),
             Self::Chat { text } => text.len() <= MAX_CHAT_RAW_BYTES,
             Self::Claim { kind } => *kind < KIND_COUNT,
-            Self::Ride { car } => car.map_or(true, |c| (c as usize) < MAX_CARS),
+            Self::Ride { car } => car.is_none_or(|c| (c as usize) < MAX_CARS),
             Self::Drive { .. } => true,
             Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } | Self::Outfit { .. } => true,
         }
@@ -716,7 +716,7 @@ pub fn decode_cars(bytes: &[u8]) -> Option<(u16, Vec<CarState>)> {
         return None;
     }
     let body = &bytes[3..];
-    if body.len() % CAR_ENTRY_BYTES != 0 {
+    if !body.len().is_multiple_of(CAR_ENTRY_BYTES) {
         return None;
     }
     let count = body.len() / CAR_ENTRY_BYTES;
@@ -879,7 +879,11 @@ mod tests {
         assert!(ride(Some(0)).within_limits());
         assert!(ride(Some(MAX_CARS as u8 - 1)).within_limits());
         assert!(!ride(Some(MAX_CARS as u8)).within_limits());
-        let drive = ClientMessage::Drive { seq: 1, dir: 128, mag: 255 };
+        let drive = ClientMessage::Drive {
+            seq: 1,
+            dir: 128,
+            mag: 255,
+        };
         assert!(drive.within_limits());
     }
 

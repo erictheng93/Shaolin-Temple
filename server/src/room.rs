@@ -14,7 +14,6 @@ use std::{
 };
 
 mod vehicles;
-use vehicles::Car;
 use tokio::{
     sync::{
         mpsc::{self, error::TrySendError},
@@ -22,6 +21,7 @@ use tokio::{
     },
     time::{Instant, MissedTickBehavior, interval},
 };
+use vehicles::Car;
 
 /// 單一房間人數上限的上限。welcome 以單則訊息帶整房快照，必須放得進
 /// MAX_MESSAGE_BYTES（見 `full_room_welcome_fits_message_limit`）。

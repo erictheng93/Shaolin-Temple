@@ -107,7 +107,12 @@ const PLAYER_RADIUS: f64 = 0.35;
 pub const OBSTACLE_TOLERANCE: f64 = 0.1;
 
 const fn raw_solid(min_x: f64, max_x: f64, min_z: f64, max_z: f64) -> Rect {
-    Rect { min_x, max_x, min_z, max_z }
+    Rect {
+        min_x,
+        max_x,
+        min_z,
+        max_z,
+    }
 }
 const fn raw_square(x: f64, z: f64, half: f64) -> Rect {
     raw_solid(x - half, x + half, z - half, z + half)
@@ -117,7 +122,12 @@ const fn raw_tree(x: f64, z: f64, scale: f64) -> Rect {
 }
 
 const fn pad_rects<const N: usize>(solids: &[Rect; N]) -> [Rect; N] {
-    let mut out = [Rect { min_x: 0.0, max_x: 0.0, min_z: 0.0, max_z: 0.0 }; N];
+    let mut out = [Rect {
+        min_x: 0.0,
+        max_x: 0.0,
+        min_z: 0.0,
+        max_z: 0.0,
+    }; N];
     let mut i = 0;
     while i < N {
         out[i] = solids[i].grow(PLAYER_RADIUS);
