@@ -132,11 +132,3 @@ button {
     animation-duration: 0.01ms !important;
   }
 }
-
-/* 觸控裝置橫向：移動輪盤在右下角，原本在右側的上下車與說話按鈕換到左邊（App.vue 的 drive-right）。
-   寫在全域：元件的 scoped 樣式裡 :global(.a) .b 會被編譯成只剩 .a。 */
-.stage.drive-right .ride-btn,
-.stage.drive-right .talk {
-  right: auto;
-  left: max(12px, env(safe-area-inset-left));
-}
