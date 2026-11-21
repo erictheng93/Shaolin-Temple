@@ -1,4 +1,5 @@
 import { Emitter } from '../core/Emitter'
+import { quantizeDrive } from '../vehicles/drive'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import {
@@ -269,8 +270,7 @@ export class NetworkClient {
     if (!this.enabled || this.status !== 'online') return null
     const now = performance.now()
 
-    const qDir = Math.round(((dir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 256) & 0xff
-    const qMag = Math.round(Math.max(0, Math.min(1, mag)) * 255) & 0xff
+    const { dir: qDir, mag: qMag } = quantizeDrive(dir, mag)
 
     const changed = qDir !== this.lastDriveDir || qMag !== this.lastDriveMag
     const minInterval = changed ? 1000 / 15 : 200
