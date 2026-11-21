@@ -273,11 +273,12 @@ async fn player(
         return Joined::Failed(format!("welcome: got {}", welcome["t"]));
     }
     let my_id = welcome["selfId"].as_str().unwrap_or("").to_string();
-    let is_driver = index < args.drivers;
+    let is_driver = (index * args.drivers / args.connections)
+        != ((index + 1) * args.drivers / args.connections);
     enum DriverPhase {
         Walking,
         Claiming { kind: u8, retry_at: Instant },
-        Driving { seq: u8 },
+        Driving { seq: u16 },
     }
     let mut driver_phase = if is_driver {
         Some(DriverPhase::Walking)

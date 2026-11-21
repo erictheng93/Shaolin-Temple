@@ -484,8 +484,8 @@ impl Room {
             id: p.id.clone(),
             n: p.n,
             name: p.name.clone(),
-            x: p.x,
-            z: p.z,
+            x: (p.x * 100.0).round() / 100.0,
+            z: (p.z * 100.0).round() / 100.0,
             heading: p.heading,
             action: p.action.clone(),
             outfit: p.outfit,
@@ -585,6 +585,9 @@ impl Room {
             .find(|p| p.token == token && p.grace_until.is_none_or(|t| t > now))?
             .id
             .clone();
+        if self.players.get(&id).is_some_and(|p| p.riding.is_some()) {
+            self.dismount(&id, now);
+        }
         self.next_conn += 1;
         let conn = self.next_conn;
         let token = self.new_token();
@@ -1032,17 +1035,18 @@ async fn run_room(
             }
             _ = physics_tick.tick() => {
                 let now = Instant::now();
-                if now == burst_at {
+                if now.duration_since(burst_at) < Duration::from_millis(10) {
                     burst_steps += 1;
                     if burst_steps > p_params.physics.max_catch_up_steps {
                         physics_tick.reset();
                         burst_steps = 0;
+                        burst_at = now;
                         continue;
                     }
                 } else {
-                    burst_at = now;
                     burst_steps = 1;
                 }
+                burst_at = now;
                 if room.should_physics_step() {
                     let started = std::time::Instant::now();
                     room.physics_step(now);
