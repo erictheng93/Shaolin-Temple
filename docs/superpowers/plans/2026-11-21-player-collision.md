@@ -67,14 +67,25 @@ PORTAL_REACH     = 1.0     // 殿門觸發範圍往門前多延伸的距離
 **`separate`：每個 tick 的全體分離**
 
 ```text
-對同一場景所有參與碰撞的人，依 n 排序後兩兩（i < j）：
-  d、pen、(ux, uz) 同上（方向由 j 指向 i；d < 1e-9 時取 (-1, 0)，即 n 小的往 −x）
+// 2026-11-21 定稿（以前端已實作的 web/src/game/world/collide.ts 為準）：
+// 所有配對都用「這個 tick 開始時」的位置計算，位移先加總、最後才套用，不邊算邊移。
+bodies 依 n 由小到大排序；每人一個累計位移 delta = (0, 0)
+對每一對 i < j（a = bodies[i]、b = bodies[j]）：
+  若 a、b 都 rooted：跳過
+  ex = a.x - b.x ; ez = a.z - b.z ; d = sqrt(ex*ex + ez*ez) ; pen = MIN_DIST - d
   若 pen <= 0：跳過
-  每人要移的量 = min(pen / 2, SEPARATE_PER_TICK)；rooted 的人不移，另一人移 min(pen, SEPARATE_PER_TICK)
-  兩人都 rooted：跳過
-  移動後的位置不 valid 的那個人不移
-回傳位置有變的人
+  (ux, uz) = d < 1e-9 ? (-1, 0) : (ex/d, ez/d)        // 由 b 指向 a；同一點時 n 小的往 −x
+  sa = a.rooted ? 0 : (b.rooted ? 1 : 0.5) ; sb = 1 - sa
+  delta[i] += (ux, uz) * pen * sa
+  delta[j] -= (ux, uz) * pen * sb
+對每個人（依排序）：
+  len = |delta| ; 若 len < 1e-12：跳過
+  若 len > SEPARATE_PER_TICK：delta *= SEPARATE_PER_TICK / len
+  若 valid(x + delta.x, z + delta.z)：輸出 { n, 新位置 }
+回傳輸出的清單（依 n 由小到大）
 ```
+
+`resolve_move` 的補充（同樣以 `collide.ts` 為準）：`others` 先複製並依 `n` 排序；第二輪用的是第一輪推過之後的位置；被推動清單回傳每個人**最後**的位置、依 `n` 由小到大、每人只出現一次。
 
 ---
 
@@ -120,8 +131,8 @@ pub fn separate(bodies: &[Body], valid: impl Fn(f64, f64) -> bool) -> Vec<Moved>
   - `mover_returns_to_prev_when_resolved_position_is_invalid`
   - `separate_moves_each_at_most_the_per_tick_limit`：兩人相距 0.2 → 各移 0.1（不是 0.2）。
   - `separate_leaves_two_rooted_bodies_alone`
-  - `collide_script_matches_fixture`：讀 `server/tests/collide-script.json` 的 `cases`（每筆 `{ name, mover, prev, others, tolerance, wall }`，`wall` 是選填的 `maxX`），結果與 `expected` 每個數值相差小於 `1e-9`。`UPDATE_FIXTURES=1` 時改為寫回。至少 8 筆，涵蓋上面每一種情況與「三人排成一列」。
-- [ ] **步驟 2–4：** 失敗 → 照「共用的數值與算法」實作 → 先 `UPDATE_FIXTURES=1 cargo test collide_script` 產生 `expected`，再不帶環境變數 `cargo test collide::` 全過。
+  - `collide_script_matches_fixture`：讀 `server/tests/collide-script.json`。**這個檔已由前端產生（PR #45，分支 `feat/player-collision-web`），不要重新產生**——用 `git checkout origin/feat/player-collision-web -- server/tests/collide-script.json` 取到你的分支。格式：`moveCases`（每筆 `{ name, mover: [x, z], prev: [x, z], others: [{ n, x, z, rooted }], tolerance, maxX?, expected: { x, z, moved: [{ n, x, z }] } }`）與 `separateCases`（每筆 `{ name, bodies, maxX?, expected: [{ n, x, z }] }`）。`valid(x, z)` 在有 `maxX` 時是 `x <= maxX`，否則一律為真。每個數值與 `expected` 相差小於 `1e-9`，`moved` 的順序與 `n` 也要相同。
+- [ ] **步驟 2–4：** 失敗 → 照「共用的數值與算法」實作（有疑問時以 `web/src/game/world/collide.ts` 為準，逐行對照）→ `cargo test collide::` 全過。若你認為固定資料有錯，告訴 Claude，不要自行改檔。
 - [ ] **步驟 5：提交** `後端：玩家碰撞的純函式與共用固定資料`。
 
 ### 任務 2：位置驗證接上碰撞，加延遲補償
