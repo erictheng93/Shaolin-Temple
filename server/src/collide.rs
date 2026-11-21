@@ -594,4 +594,58 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn glancing_collision_deflects_both_players_in_two_dimensions() {
+        // A 走斜角方向：由 (0.0, 0.0) 走向 (0.3, 0.4)
+        // B 位於 (0.5, 0.5)（非對頭，斜向推擠）
+        let mover = (0.3, 0.4);
+        let prev = (0.0, 0.0);
+        let others = [Body {
+            n: 2,
+            x: 0.5,
+            z: 0.5,
+            rooted: false,
+        }];
+        let (new_mover, pushed) = resolve_move(mover, prev, &others, 0.0, |_, _| true);
+        assert_eq!(pushed.len(), 1);
+        let b = pushed[0];
+        // B 應被推向 (+x, +z) 方向，mover 被反推向 (-x, -z) 方向
+        assert!(b.x > 0.5, "b.x 應增加：{}", b.x);
+        assert!(b.z > 0.5, "b.z 應增加：{}", b.z);
+        assert!(new_mover.0 < 0.3, "mover x 應減少：{}", new_mover.0);
+        assert!(new_mover.1 < 0.4, "mover z 應減少：{}", new_mover.1);
+        let dist = (new_mover.0 - b.x).hypot(new_mover.1 - b.z);
+        assert!(
+            dist >= MIN_DIST - 1e-4,
+            "最終距離應達到 MIN_DIST (0.6)，實際為 {dist}"
+        );
+    }
+
+    #[test]
+    fn player_cornered_by_walls_cannot_be_pushed_and_blocks_mover() {
+        // B 緊貼在角落邊界 (15.0, 12.0)
+        // 邊界為 x <= 15.0 && z <= 12.0
+        let valid = |x: f64, z: f64| x <= 15.0 && z <= 12.0;
+        let mover = (14.8, 11.8);
+        let prev = (14.4, 11.4);
+        let others = [Body {
+            n: 2,
+            x: 15.0,
+            z: 12.0,
+            rooted: false,
+        }];
+        let (new_mover, pushed) = resolve_move(mover, prev, &others, 0.0, valid);
+        // B 無法往 (+x, +z) 移動，所以 share = 0，B 不動
+        assert!(
+            pushed.is_empty(),
+            "受困角落的 B 不應移動，實際為: {pushed:?}"
+        );
+        // mover 承擔所有重疊，被推離
+        let dist = (new_mover.0 - 15.0).hypot(new_mover.1 - 12.0);
+        assert!(
+            dist >= MIN_DIST - 1e-4,
+            "mover 應被推至距角落 B 至少 MIN_DIST 處，實際為 {dist}"
+        );
+    }
 }

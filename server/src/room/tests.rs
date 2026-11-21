@@ -384,12 +384,6 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     }
     // 靜止不再重送
     sleep(TICK * 5).await;
-    for (i, c) in clients.iter_mut().enumerate() {
-        let got = c.drain();
-        if !got.is_empty() {
-            eprintln!("client {i} received at line 385: {got:#?}");
-        }
-    }
     assert!(clients.iter_mut().all(|c| c.drain().is_empty()));
     // 停下時送一次 moving: 0，之後不再重送（重複的 stop 沒有變化，也不送）
     clients[mover_idx].position(x, z, 7.0, false).await;
@@ -1826,5 +1820,56 @@ async fn separation_never_moves_a_rooted_player() {
     assert!(
         b_syncs.is_empty(),
         "定點動作中的 B 絕不能被分離機制移動或收到 sync，收到: {b_syncs:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn player_pushed_against_incense_burner_stops_and_pusher_is_blocked() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut b = connect(&room).await;
+    let mut a = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // 將 B 移至香爐南側外緣 (0.0, -0.85)（香爐障礙物邊界為 z <= -0.90）
+    b.position(2.0, 5.0, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    b.position(2.0, -0.85, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    b.position(0.0, -0.85, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    b.drain();
+
+    // A 移動到 B 後方 (0.0, -0.2)
+    a.position(2.0, 5.0, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    a.position(2.0, -0.2, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    a.position(0.0, -0.2, PI, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+
+    // A 嘗試往前推擠 B：向 -z 移動，目標 (0.0, -0.70)
+    a.position(0.0, -0.70, PI, true).await;
+    sleep(TICK * 2).await;
+
+    // 驗證 B 沒有被推進香爐 (z 必須 > -0.90)
+    let b_syncs = corrections(&mut b);
+    if let Some(sync) = b_syncs.last() {
+        assert!(
+            sync.2 >= -0.90,
+            "B 絕不可被推進香爐障礙物內部 (z 應 >= -0.90)，實際為 {}",
+            sync.2
+        );
+    }
+
+    // 驗證 A 收到糾正，且 A 也絕不在香爐障礙物內部
+    let a_syncs = corrections(&mut a);
+    assert!(!a_syncs.is_empty(), "A 被香爐後的 B 阻擋應收到 sync 糾正");
+    let a_last = a_syncs.last().unwrap();
+    assert!(
+        a_last.2 >= -0.90,
+        "A 絕不可穿透至香爐障礙物內部 (z 應 >= -0.90)，實際為 {}",
+        a_last.2
     );
 }
