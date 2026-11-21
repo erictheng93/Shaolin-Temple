@@ -254,8 +254,7 @@
       "name": "小明"
     },
     {
-      "t": "claim",
-      "kind": 0
+      "t": "claim"
     },
     {
       "t": "ride",
@@ -433,26 +432,6 @@
           "v": 5,
           "name": "n",
           "session": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
-        }
-      },
-      {
-        "name": "claim.kind = 4 (超過 KIND_COUNT-1)",
-        "message": {
-          "t": "claim",
-          "kind": 4
-        }
-      },
-      {
-        "name": "claim.kind 不是整數",
-        "message": {
-          "t": "claim",
-          "kind": "0"
-        }
-      },
-      {
-        "name": "claim 缺 kind",
-        "message": {
-          "t": "claim"
         }
       },
       {
