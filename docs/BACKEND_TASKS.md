@@ -433,6 +433,27 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 - **僅完成後端實作**：前端視覺（Three.js 車輛渲染、輪胎與車身擺動、粒子煙霧火花、檔口互動 UI、操縱桿駕駛控制）屬於任務 9–12，待下階段 PR 實作。
 - **負載測試為本機迴路**：未經外網公網延遲與丟包抖動測試。
 
+### 玩家硬碰撞與每 tick 分離（2026-11-21，後端：Task 1～3）
+
+`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（185 個測試：lib 132、gameplay 14、loadtest 1、logging 1、login 10、metrics 3、protocol 12、websocket 12）在本機（Ubuntu Linux，rustc 1.93.1）通過。
+
+**規則與數值**：
+- 最小距離 `MIN_DIST = 0.60` 公尺，推動步長上限 `SEPARATE_PER_TICK = 0.10` 公尺。
+- 靜止穿透容許 `TOLERANCE = 0.15` 公尺（走近者被推回），分離判定容限 1 mm。
+- 延遲補償 `VIEW_DELAY_TICKS = 2`（0.2 秒歷史位置），補償位移差值 > 0.05 公尺時對 mover 糾正。
+- 糾正節流 `CORRECTION_GAP = 0.25` 秒（`Sync` 訊息）。
+- 定點動作 `rooted`：prostrate（禮拜 3200ms）、chant（念經 10800ms）、incense（上香 4000ms）、bell（撞鐘 1500ms），定點動作中玩家完全不可被推動；bowing（鞠躬 1200ms）則可被推動。
+- 殿門延伸：門前範圍往外延伸 `PORTAL_REACH = 1.2` 公尺（庭院入口矩形 `max_z` 擴展至 `-3.8`），確保殿門前擁擠時玩家不被卡在觸發範圍外。
+
+| 驗收項目 | 測試／驗證 |
+| --- | --- |
+| 碰撞純函式：對頭碰撞平分、rooted 不動、牆體阻擋停下、容差內不推、重合點確定性推離、每 tick 最大位移限制、rooted 雙方不推 | `src/collide.rs` 單元測試；`collide-script.json` 共用測試向量 |
+| 位置驗證與延遲補償：推動站立玩家、推動者收到 sync 且出現在 moves、定點動作不可推動、鞠躬可被推動、不穿牆推動、200ms 前離開的位置不糾正、撞飛與騎乘不參與碰撞、糾正節流限制 | `src/room/tests.rs`（`walking_into_a_standing_player_pushes_them_and_slows_the_walker`、`pushed_player_receives_a_sync_and_appears_in_moves`、`player_in_a_station_action_cannot_be_pushed`、`bowing_player_can_be_pushed`、`player_is_not_pushed_through_an_obstacle`、`moving_into_a_spot_the_other_player_left_200ms_ago_is_not_corrected`、`riders_knocked_and_grace_players_do_not_collide`、`two_players_pressing_against_each_other_get_at_most_one_sync_per_correction_gap`） |
+| 每 tick 分離與殿門範圍：同點出生自動漂移分開、殿門前人群不阻礙進殿切換、玩家可推擠穿過閒置人群線、分離絕不移動 rooted 玩家 | `src/room/tests.rs`（`players_spawned_on_the_same_point_drift_apart`、`a_crowd_standing_in_front_of_the_hall_door_does_not_stop_entry`、`a_player_can_push_through_a_line_of_idle_players`、`separation_never_moves_a_rooted_player`） |
+
+未做到／限制：
+- **僅完成後端實作**：前端與 mock 伺服器整合屬於第 2 段（Task 4～6），待下一階段實作。
+
 ## T9 部署與正式環境壓測（P1）
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。

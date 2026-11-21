@@ -141,8 +141,11 @@ const fn pad_rects<const N: usize>(solids: &[Rect; N]) -> [Rect; N] {
     out
 }
 
+/// 殿門觸發範圍往門前延伸的距離（公尺）。
+pub const PORTAL_REACH: f64 = crate::collide::PORTAL_REACH;
+
 /// 出入口範圍的容許誤差（公尺）。
-pub const PORTAL_TOLERANCE: f64 = 0.5;
+pub const PORTAL_TOLERANCE: f64 = 0.3;
 
 pub static COURTYARD_SOLIDS: [Rect; 16] = [
     raw_solid(-7.5, 7.5, -18.0, -6.2), // 主殿
@@ -182,7 +185,7 @@ pub static COURTYARD: Zone = Zone {
             min_x: -1.6,
             max_x: 1.6,
             min_z: -6.2,
-            max_z: -5.0,
+            max_z: -5.0 + PORTAL_REACH,
         },
         to: "hall",
         spawn: Pose {

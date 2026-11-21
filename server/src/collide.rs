@@ -6,6 +6,7 @@ pub const TOLERANCE: f64 = 0.15;
 pub const SEPARATE_PER_TICK: f64 = 0.1;
 pub const VIEW_DELAY_TICKS: usize = 2;
 pub const HISTORY_TICKS: usize = 4;
+pub const PORTAL_REACH: f64 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Body {
@@ -100,13 +101,15 @@ pub fn separate(bodies: &[Body], valid: impl Fn(f64, f64) -> bool) -> Vec<Moved>
     local.sort_by_key(|b| b.n);
 
     let len = local.len();
+    let mut deltas = vec![(0.0f64, 0.0f64); len];
+
     for i in 0..len {
         for j in (i + 1)..len {
             let dx = local[i].x - local[j].x;
             let dz = local[i].z - local[j].z;
             let d = (dx * dx + dz * dz).sqrt();
             let pen = MIN_DIST - d;
-            if pen <= 0.0 {
+            if pen <= 1e-3 {
                 continue;
             }
             if local[i].rooted && local[j].rooted {
@@ -121,30 +124,37 @@ pub fn separate(bodies: &[Body], valid: impl Fn(f64, f64) -> bool) -> Vec<Moved>
             };
 
             let (shift_i, shift_j) = if local[i].rooted {
-                (0.0, pen.min(SEPARATE_PER_TICK))
+                (0.0, pen)
             } else if local[j].rooted {
-                (pen.min(SEPARATE_PER_TICK), 0.0)
+                (pen, 0.0)
             } else {
-                (
-                    (pen / 2.0).min(SEPARATE_PER_TICK),
-                    (pen / 2.0).min(SEPARATE_PER_TICK),
-                )
+                (pen / 2.0, pen / 2.0)
             };
 
-            if shift_i > 0.0 {
-                let new_i = (local[i].x + ux * shift_i, local[i].z + uz * shift_i);
-                if valid(new_i.0, new_i.1) {
-                    local[i].x = new_i.0;
-                    local[i].z = new_i.1;
-                }
-            }
+            deltas[i].0 += ux * shift_i;
+            deltas[i].1 += uz * shift_i;
+            deltas[j].0 -= ux * shift_j;
+            deltas[j].1 -= uz * shift_j;
+        }
+    }
 
-            if shift_j > 0.0 {
-                let new_j = (local[j].x - ux * shift_j, local[j].z - uz * shift_j);
-                if valid(new_j.0, new_j.1) {
-                    local[j].x = new_j.0;
-                    local[j].z = new_j.1;
-                }
+    for i in 0..len {
+        if local[i].rooted {
+            continue;
+        }
+        let (dx, dz) = deltas[i];
+        let mag = (dx * dx + dz * dz).sqrt();
+        if mag > 1e-9 {
+            let scale = if mag > SEPARATE_PER_TICK {
+                SEPARATE_PER_TICK / mag
+            } else {
+                1.0
+            };
+            let new_x = local[i].x + dx * scale;
+            let new_z = local[i].z + dz * scale;
+            if valid(new_x, new_z) {
+                local[i].x = new_x;
+                local[i].z = new_z;
             }
         }
     }

@@ -560,7 +560,18 @@ impl Room {
         self.next_conn += 1;
         let conn = self.next_conn;
         let spawn = world::COURTYARD.spawn;
-        let (sx, sz) = (spawn.x + rand::random_range(-2.0..=2.0), spawn.z);
+        let mut sx = spawn.x + rand::random_range(-2.0..=2.0);
+        let sz = spawn.z;
+        for _ in 0..10 {
+            let occupied = self.players.values().any(|p| {
+                p.zone.id == world::COURTYARD.id
+                    && (p.x - sx).hypot(p.z - sz) < crate::collide::MIN_DIST
+            });
+            if !occupied {
+                break;
+            }
+            sx = spawn.x + rand::random_range(-2.0..=2.0);
+        }
         let player = Player {
             id: id.clone(),
             n,
@@ -1097,6 +1108,48 @@ impl Room {
                 p.dirty = true;
             }
         }
+
+        // 每 tick 呼叫 separate 分離玩家
+        let mut syncs_to_send = Vec::new();
+        for z in world::ZONES {
+            let mut bodies: Vec<crate::collide::Body> = self
+                .players
+                .values()
+                .filter(|p| p.zone.id == z.id && Self::collides(p, now))
+                .map(|p| crate::collide::Body {
+                    n: p.n,
+                    x: p.x,
+                    z: p.z,
+                    rooted: Self::rooted(p, now),
+                })
+                .collect();
+            bodies.sort_by_key(|b| b.n);
+            if bodies.len() > 1 {
+                let moved = crate::collide::separate(&bodies, |x, z_coord| z.is_valid(x, z_coord));
+                for m in moved {
+                    if let Some(p) = self
+                        .players
+                        .values_mut()
+                        .find(|p| p.n == m.n && p.zone.id == z.id)
+                    {
+                        p.x = m.x;
+                        p.z = m.z;
+                        p.dirty = true;
+                        if p.corrected_at
+                            .is_none_or(|t| now.saturating_duration_since(t) >= CORRECTION_GAP)
+                        {
+                            p.corrected_at = Some(now);
+                            syncs_to_send
+                                .push((p.id.clone(), ServerMessage::Sync { m: vec![tuple(p)] }));
+                        }
+                    }
+                }
+            }
+        }
+        for (target_id, sync_msg) in syncs_to_send {
+            self.send_to(&target_id, sync_msg, now);
+        }
+
         let states = self.states();
         for p in self.players.values_mut() {
             p.dirty = false;
