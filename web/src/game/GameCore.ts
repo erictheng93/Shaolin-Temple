@@ -333,6 +333,7 @@ export class GameCore {
 
     this.net = new NetworkClient({ url: opts.wsUrl, name: '', outfit: this.players.local.outfit })
     this.fleet = new CarFleet(this.renderer.scene, this.tracker)
+    // 模型到齊前是替代用的方塊；載入完成後重繪一次。
     void this.fleet.load().then(() => this.wake())
     this.vehicles = new Vehicles({
       fleet: this.fleet,
