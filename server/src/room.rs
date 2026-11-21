@@ -992,8 +992,7 @@ async fn run_room(
     let step_duration = Duration::from_nanos(1_000_000_000 / p_params.physics.hz as u64);
     let mut physics_tick = interval(step_duration);
     physics_tick.set_missed_tick_behavior(MissedTickBehavior::Burst);
-    let mut burst_steps = 0u32;
-    let mut burst_at = Instant::now();
+    let max_lag = step_duration * p_params.physics.max_catch_up_steps;
 
     loop {
         tokio::select! {
@@ -1033,20 +1032,13 @@ async fn run_room(
                     RoomCommand::Drive { who, seq, dir, mag } => room.drive(&who, seq, dir, mag, now),
                 }
             }
-            _ = physics_tick.tick() => {
+            deadline = physics_tick.tick() => {
                 let now = Instant::now();
-                if now.duration_since(burst_at) < Duration::from_millis(10) {
-                    burst_steps += 1;
-                    if burst_steps > p_params.physics.max_catch_up_steps {
-                        physics_tick.reset();
-                        burst_steps = 0;
-                        burst_at = now;
-                        continue;
-                    }
-                } else {
-                    burst_steps = 1;
+                // 落後超過 maxCatchUpSteps 步就放棄補步（Burst 會把欠的 tick 連續補發）。
+                // 以排定時間的落後量判斷，單步本身很慢時同樣有效。
+                if now.duration_since(deadline) > max_lag {
+                    physics_tick.reset();
                 }
-                burst_at = now;
                 if room.should_physics_step() {
                     let started = std::time::Instant::now();
                     room.physics_step(now);
