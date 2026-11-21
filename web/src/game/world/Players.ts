@@ -170,6 +170,21 @@ export class Players {
   }
 
   /** 以短編號套用 sync 的一筆：直接套用位置、面向與移動狀態，不插值。 */
+  /**
+   * 本機先行的推擠：把遠端玩家在畫面上平移到 (x, z)，插值的兩個端點一起平移。
+   * 只是先讓畫面不重疊，實際位置仍以伺服器之後送來的 moves 為準。
+   */
+  nudgeRemoteByN(n: number, x: number, z: number): void {
+    const r = this.byN.get(n)
+    if (!r) return
+    const dx = x - r.x
+    const dz = z - r.z
+    r.x = x
+    r.z = z
+    r.from = { ...r.from, x: r.from.x + dx, z: r.from.z + dz }
+    r.to = { ...r.to, x: r.to.x + dx, z: r.to.z + dz }
+  }
+
   syncRemoteByN(n: number, x: number, z: number, heading: number, moving: boolean, now: number): void {
     const r = this.byN.get(n)
     if (!r) return
