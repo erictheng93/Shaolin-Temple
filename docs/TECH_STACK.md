@@ -20,8 +20,8 @@
 | 資料庫 | PostgreSQL | 版本於後端實作時選定 |
 | 部署 | Dokploy、Linux VPS | 保留使用者選定方式 |
 | 物件儲存 | Cloudflare R2 | 模型、貼圖與音訊等素材 |
+| 物理 | Rapier（前端 `@dimforge/rapier3d-compat` 0.21.0，後端 `rapier3d` crate 0.36.0） | 已於庭院碰碰車正式啟用；見下方「物理引擎」 |
 | Phase 2 | Tauri Mobile | 尚未開始實作 |
-| 物理 | Rapier（前端 `@dimforge/rapier3d-compat` 0.21.0，後端 `rapier3d` crate 0.36.0） | 依賴已引入（2026-11-21），尚無玩法使用；見下方「物理引擎」 |
 
 前端依賴全部以精確版本寫入 `web/package.json`，並提交 `web/package-lock.json`：
 
@@ -274,6 +274,17 @@ swiftshader 的幀時間沒有參考價值，手機 GPU 的幀率、發熱與耗
 
 庭院多 1 個 draw call、288 三角形是撞木與繩子（6 個 12 邊圓柱）。殿內沒人誦經時不變；誦經時多 1 個 draw call（木魚與槌），誦經視角的三角形數與中段視角不可直接比較（角色位置不同，可見的神像與蒲團不同）。swiftshader 的幀時間沒有參考價值，手機未實測。
 
+#### 庭院碰碰車車輛與檔口量測（2026-11-21）
+
+庭院西南角新增車輛檔口（程序化幾何，直接合併進庭院靜態網格，不增加 draw call）與碰碰車車隊（`CarFleet`，InstancedMesh 批次繪製，0 台車時 count=0 不繪製，有車時車身與輪子各 1 個 draw call，標準畫質無陰影貼圖共 +2 draw calls；高畫質含陰影貼圖 pass，車身與輪子亦參與投影，共 +4 draw calls）：
+
+| 量測（桌面 Chromium 1280×720、非手機實測） | 庭院 0 台車 | 庭院 10 台車 | 說明 |
+| --- | --- | --- | --- |
+| 高畫質（high），桌面 1280×720 | 34 draw、32,813 三角形、CPU ~1.3 ms | 38 draw、約 44,400 三角形、CPU ~1.5 ms | +4 draw call（車身/輪子 InstancedMesh 各 1 + 陰影 pass 各 1），10 台車約 +11,600 三角形 |
+| 標準畫質（medium），桌面 1280×720 | 34 draw、32,813 三角形、CPU ~1.3 ms | 36 draw、約 44,400 三角形、CPU ~1.4 ms | +2 draw call（標準畫質無陰影貼圖 pass），10 台車約 +11,600 三角形 |
+
+註記：此數據為桌面無頭 Chromium 1280×720 模擬預算，非手機實測（目前無手機實機測試環境，見 AGENTS.md 說明）。車輛模型由 `build-cars.mjs` 程序化幾何產生（4 款車身與輪子共約 4,640 三角形，每款車約 1,160 三角形，10 台合計約 11,600 三角形），以 InstancedMesh 批次繪製。
+
 #### 寫實模型替換（2026-11-15）
 
 - **素材**：中央釋迦牟尼佛（Cleveland Museum of Art，CC0）、主佛左手邊觀世音菩薩（efyilin，CC BY 4.0）、右手邊媽祖（cadyunlin2021，CC BY 4.0）。來源、授權、處理方式與成品大小見 [ASSETS.md](ASSETS.md)。需要署名的兩件顯示在設定面板的「素材來源」。
@@ -338,7 +349,7 @@ swiftshader 的幀時間沒有參考價值，手機 GPU 的幀率、發熱與耗
 
 **決定（2026-11-15）**：需要物理時採用 Rapier；不改用 Godot、Bevy 等遊戲引擎。
 
-**引入（2026-11-21）**：為了庭院碰碰車（多人共享物理，見 `docs/superpowers/specs/2026-11-20-bumper-cars-design.md`），前後端的依賴已加入，各有一個相同情境的冒煙測試（無重力、初速 1 m/s、以 1/30 秒步進 30 次，前進 1 公尺）：`server/src/vehicles/mod.rs` 與 `web/src/game/vehicles/rapier.test.ts`。目前只有測試使用，正式程式還沒有 import，所以不影響建置產物。
+**引入（2026-11-21）**：正式用於庭院碰碰車（多人共享物理與客戶端預測重播，見 `docs/superpowers/specs/2026-11-20-bumper-cars-design.md` 與 `docs/superpowers/plans/2026-11-21-bumper-cars.md`）。後端 `server/src/vehicles/` 採用 `rapier3d` 權威模擬，前端 `web/src/game/vehicles/` 採用 `@dimforge/rapier3d-compat` 做客戶端預測與服務端回放校正（Reconciliation）。
 
 **版本配對**：兩邊必須是同一版核心，否則前端預測與伺服器結果會有落差。
 
@@ -349,16 +360,23 @@ swiftshader 的幀時間沒有參考價值，手機 GPU 的幀率、發熱與耗
 
 查證方式：npm 套件的 `gitHead`（`npm view @dimforge/rapier3d-compat@0.21.0 gitHead`）指向 `dimforge/rapier` 的提交，該提交的 `[workspace.package] version` 是 0.36.0，`bindings/typescript` 的 Cargo 範本也要求 `rapier3d = "0.36.0"`（0.20.0 起 JS 綁定已併入 rapier 主倉庫，舊的 `rapier.js` 倉庫停在 0.19.3）。crates.io 另有 0.36.1，不採用。**升級時兩邊一起升，並用同樣的方式重新查證。**
 
-現況：角色是平地上的運動學角色，碰撞由 `world/zones.ts` 的 2D 障礙物＋尋路處理，伺服器以移動額度與直線檢查驗證，沒有重力或剛體的需求。敲鐘、上香、木魚、坐禪等互動都是動畫片段，不是物理。
+**實作機制與生命週期**
 
-**何時需要、怎麼做**
+- **動態延遲載入**：WASM 與 JS 膠水代碼約 4.3 MB（gzip 約 1.6 MB）。透過動態 `import('@dimforge/rapier3d-compat')` 延遲載入，玩家靠近檔口 2.5 公尺內或點擊上車時才非同步啟動載入，不進入首頁 `index.html` 首包（亦不設 preload/prefetch）。資料節省模式（saveData）或 2g/3g 慢速網路時不載入 Rapier3D Wasm 模組，平滑降級為純內插顯示。
+- **擁有者**：Rapier 的 world 由 GameCore 的 `Vehicles` 子系統擁有（取代原先草案「由玩法模組擁有」的規劃）。下車時清空預測重播佇列（`clearHistory()`）；切換場景（進殿）時車輛模擬休眠；離開遊戲（`dispose()`）時明確調用 `world.free()` 釋放 WASM 記憶體。
+- **固定步長與頻率**：固定 30 Hz（1/30s）物理模擬步進，與渲染幀率（30/60 FPS）及網路廣播頻率（15 Hz）解耦；背景分頁時停止模擬。
 
-| 互動類型 | 例子 | 做法 |
-| --- | --- | --- |
-| 預先設計的動作 | 敲鐘、上香、合十 | `GameplayModule` 加動畫片段，不用物理 |
-| 地形有高低 | 台階、斜坡 | 先用高度資料＋射線；不夠再用 Rapier 的 `KinematicCharacterController` |
-| 本機裝飾性物理 | 投錢幣、落葉、搖籤筒 | 各自在本機模擬、不同步，只同步結果（例如「投中了」） |
-| 多人共享物理 | 一起踢毽子、推石球 | 伺服器以 `rapier3d` 權威模擬，前端用同一引擎預測；成本最高，非必要不做 |
+**量測結果**
+
+1. **客戶端預測與校正誤差量測**：
+   在單元測試 `VehicleSim.test.ts` 中以 150 ms 網路延遲（單趟約 75 ms、RTT 約 167 ms）、15 Hz 客戶端輸入節流、15 Hz 伺服器同步幀及網路量化進行單車行駛 60 秒（1800 步）無碰撞模擬：
+   - 誤差分佈 p95 實測約 0.058 公尺（5.8 公分），低於 0.30 公尺上線門檻。註：此為物理引擎單元測試環境下的回歸量測，非真實手機公網環境實測，真實公網環境表現受網路抖動影響。
+   - 平滑指數衰減：伺服器位置誤差在每幀以 `exp(-10 * dt)` 混合平滑，無碰撞行駛時無瞬移抽動感。
+2. **流量量測與預算判定**：
+   碰碰車下行二進位幀 `cars`（訊息代碼 0x04，表頭 3 bytes 帶 ack，每台車 12 bytes：旗標 byte、量化座標 x/z、朝向 heading、線速度 vx/vz 與角速度 w，15 Hz 廣播）：
+   - 單台活躍車 15 Hz 廣播酬載為 15 × (3 + 12) = 225 bytes/s；當庭院全部 10 台車（`shared/vehicles.json` 車輛庫存上限 10 台）同時處於活躍狀態時，廣播頻寬為 15 × (3 + 120) = 1,845 bytes/s（約 1.8 KB/s/人）。
+   - 對照專案 VPS 出站預算（每人每秒 150～460 bytes），極限 10 台活躍車全開動時超出預算約 4 倍（與 `moves` 在全場跑動時類似）。但單一房間人數上限為 50 人，單房出站峰值約 92 KB/s，在伺服器頻寬負荷內。
+   - 緩解機制：車輛僅在庭院且有移動或狀態變更時發送，全車靜止或無人使用時不發送廣播，殿內玩家亦不接收，因此正常靜心遊玩情境下出站頻寬仍保持在安全範圍。
 
 **為什麼選 Rapier**
 
@@ -366,13 +384,6 @@ swiftshader 的幀時間沒有參考價值，手機 GPU 的幀率、發熱與耗
 - 持續維護、效能好、靜止物體自動休眠。
 - 不選 cannon-es：純 JS、2022 年後幾乎沒有更新、較慢，後端無法共用。
 - 不改用 Godot／Bevy：網頁版首次下載數十 MB（Godot 4 引擎約 30～40 MB、Bevy WASM 約 10～30 MB），手機首次開啟慢，且要重寫已可運作的前端；物理可以單獨補上，不需要換掉整個引擎。若日後改做原生 App 且玩法轉為重度即時動作，再重新評估。
-
-**引入時的限制**
-
-- WASM 約 1.5～2 MB：以 `import()` 延遲載入，只有安裝了需要物理的玩法模組才下載，不進首次載入。
-- 固定步長，每秒 30 次模擬，與渲染頻率分開；背景分頁時停止。
-- Rapier 的 world 由該玩法模組擁有，`install()` 回傳的清除函式中釋放（`world.free()`）。
-- 新增依賴時依「Vue 版本與安裝規範」以精確版本寫入並記錄於上表。
 
 ## 後端：Axum
 

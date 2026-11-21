@@ -421,17 +421,20 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 
 | 驗收項目 | 測試／驗證 |
 | --- | --- |
-| 剛體模擬與碰撞：Rapier2d 整合、邊界與 16 個庭院障礙物阻擋、車車彈性碰撞（restitution 0.6）、動態阻尼 | `src/vehicles/world.rs` `vehicle_world_simulation_and_collision` 等單元測試；`tests/gameplay.rs` |
+| 剛體模擬與碰撞：Rapier3d 整合、邊界與 16 個庭院障礙物阻擋、車車彈性碰撞（restitution 0.6）、動態阻尼 | `src/vehicles/world.rs` `vehicle_world_simulation_and_collision` 等單元測試；`tests/gameplay.rs` |
 | 車輛駕駛動力學：純函式轉向 Gain、車速與倒車判定、側向抓地力衰減、阻尼衰減 | `src/vehicles/drive.rs` `drive_step_forward_and_turn` 等單元測試 |
-| 協定版本 5：二進位 `cars` 幀（0x04，10 bytes/車）、`claim`、`dismount`、`drive`、`car`、`carGone`、`knock` | `tests/protocol.rs`（二進位往返、JSON 往返、shared 向量檔驗證）、`tests/websocket.rs` |
+| 協定版本 5：二進位 `cars` 幀（0x04，表頭 3 bytes + 12 bytes/車）、`claim`、`ride`、`drive`、`car`、`carGone`、`knock` | `tests/protocol.rs`（二進位往返、JSON 往返、shared 向量檔驗證）、`tests/websocket.rs` |
 | 房間整合：檔口借車範圍驗證（2.5m 內）、冷卻時間（20s）、閒置下車（60s）、停放車輛淡出回收（15s）、下車位置偏移（1.1m） | `src/room/vehicles.rs`、`tests/websocket.rs` |
 | 撞飛與無敵機制：大於 2.5 m/s 撞擊步行動作者、拋物線飛行與恢復（各 900ms）、無敵保護（3000ms）、打斷當前動作 | `tests/gameplay.rs`、`src/room/vehicles.rs` |
 | 物理耗時指標：`temple_physics_step_seconds` 直方圖與 `temple_physics_step_seconds_max` 測量 | `tests/metrics.rs`、`/metrics` 端點實測 |
 | 負載工具與壓測：`loadtest --drivers <N>` 司機狀態機、10 房 100 車 500 連線 60 秒量測 | `tests/loadtest.rs`、[LOAD_TEST_2026-11-21_VEHICLES.md](LOAD_TEST_2026-11-21_VEHICLES.md)（平均每步 105 µs，cars 幀約 24 bytes/s） |
 
+更新（2026-11-21，前端已全部完成）：
+- 前端視覺、駕駛操控、檔口 UI、預測模擬與重播校正（PR #40、PR #41）已全數實作並通過驗證。
+- 負載測試為本機迴路：未經外網公網延遲與丟包抖動實測；前端已透過 `VehicleSim` 在 150 ms 模擬延遲下通過校正誤差 p95 < 0.30m 上線門檻（單元測試回歸量測實測約 0.058m）。
+
 未做到／限制：
-- **僅完成後端實作**：前端視覺（Three.js 車輛渲染、輪胎與車身擺動、粒子煙霧火花、檔口互動 UI、操縱桿駕駛控制）屬於任務 9–12，待下階段 PR 實作。
-- **負載測試為本機迴路**：未經外網公網延遲與丟包抖動測試。
+- **負載測試為本機迴路**：伺服器負載測試未經真實外網長距離延遲與公網丟包抖動測試。
 
 ## T9 部署與正式環境壓測（P1）
 
