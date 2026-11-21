@@ -6,7 +6,7 @@ import type { GameplayApi } from '../types'
 
 /**
  * 誦經敲木魚（只在殿內）：走到最近的空蒲團、面向神龕跪坐（不叩拜），身前地上一個木魚、合十的手握木魚槌，
- * 以穩定的節奏敲木魚，開頭與完整誦完時各一聲引磬。固定 24 秒；方向鍵、搖桿或按任何動作即提前起身
+ * 以穩定的節奏敲木魚，開頭與完整誦完時各一聲大磬。固定 24 秒；方向鍵、搖桿或按任何動作即提前起身
  * （送出 chant_end，其他玩家也停止）。沒有人聲。
  *
  * 多人同時誦經的聲音：所有人的木魚拍點對齊到同一個以伺服器時間為準的節拍格（每 CHANT_BEAT_MS 一拍），
@@ -28,7 +28,7 @@ const SIT_MS = 1_200
 const RISE_MS = 1_300
 /** 提前結束時的起身動作長度。 */
 export const CHANT_END_MS = 800
-/** 坐定後一聲引磬；木魚從 STRIKES_FROM_MS 之後的第一拍敲到 STRIKES_UNTIL_MS 之前的最後一拍；完整誦完再一聲引磬。 */
+/** 坐定後一聲大磬；木魚從 STRIKES_FROM_MS 之後的第一拍敲到 STRIKES_UNTIL_MS 之前的最後一拍；完整誦完再一聲大磬。 */
 export const QING_START_MS = 1_600
 export const STRIKES_FROM_MS = 2_800
 export const STRIKES_UNTIL_MS = CHANT_MS - 3_800
@@ -43,8 +43,7 @@ const HOVER = 0.35
 const REBOUND = 0.18
 const RAISE_END = 0.72
 
-/** 聲音：木魚放慢一點更沉（0.8 倍速）；聽者以外的誦經者依距離衰減；人多時的加大上限。 */
-const WOOD_RATE = 0.8
+/** 聲音：聽者以外的誦經者依距離衰減；人多時的加大上限。 */
 const WOOD_GAIN = 0.55
 const QING_GAIN = 0.5
 const REMOTE_GAIN = 0.7
@@ -52,7 +51,7 @@ const REMOTE_GAIN = 0.7
 export const CHANT_HEARING_RANGE = 20
 const CROWD_BOOST = 0.1
 const CROWD_BOOST_MAX_PEOPLE = 5
-/** 兩聲引磬相隔不到這麼近就只留一聲（兩人幾乎同時開始時）。 */
+/** 兩聲大磬相隔不到這麼近就只留一聲（兩人幾乎同時開始時）。 */
 const QING_MERGE_MS = 400
 /** 排程：每 TICK_MS 排好接下來 LOOKAHEAD_MS 內的拍點（AudioContext 時間軸，準確；提前起身最多多響一聲）。 */
 const TICK_MS = 100
@@ -122,7 +121,7 @@ export interface ChanterInfo {
 export interface PlannedSound {
   /** 播放的伺服器時間。 */
   atS: number
-  sound: 'wood' | 'qing'
+  sound: 'wood' | 'daqing'
   gain: number
 }
 
@@ -132,8 +131,8 @@ const chanterGain = (c: ChanterInfo) => (c.local ? 1 : REMOTE_GAIN * Math.max(0,
  * 排出 (fromS, toS] 之間要播放的聲音（純函式）：
  * - 木魚：節拍格上的每一拍，只要有一位聽得到的誦經者在這一拍敲，就只播一聲；
  *   音量 = 最大的個人音量 × (1 + 0.1 × (人數 − 1，最多算 5 人))，上限 1，再乘木魚的基本音量。
- * - 引磬：每位誦經者開始後 QING_START_MS 一聲、QING_END_MS 一聲（提前結束的人已從清單移除，不會響）；
- *   相隔 QING_MERGE_MS 內的引磬只留最大聲的一聲。
+ * - 大磬：每位誦經者開始後 QING_START_MS 一聲、QING_END_MS 一聲（提前結束的人已從清單移除，不會響）；
+ *   相隔 QING_MERGE_MS 內的大磬只留最大聲的一聲。
  */
 export function planChantSounds(chanters: readonly ChanterInfo[], fromS: number, toS: number): PlannedSound[] {
   const out: PlannedSound[] = []
@@ -154,12 +153,12 @@ export function planChantSounds(chanters: readonly ChanterInfo[], fromS: number,
   // 先在全部候選上合併、再切視窗：tick 每次只排一小段，若先切視窗，相近的兩聲落在不同呼叫就合併不到。
   const kept: typeof qings = []
   for (const q of qings) if (kept.every((k) => Math.abs(k.atS - q.atS) >= QING_MERGE_MS)) kept.push(q)
-  for (const q of kept) if (q.atS > fromS && q.atS <= toS) out.push({ atS: q.atS, sound: 'qing', gain: q.gain })
+  for (const q of kept) if (q.atS > fromS && q.atS <= toS) out.push({ atS: q.atS, sound: 'daqing', gain: q.gain })
   return out.sort((a, b) => a.atS - b.atS)
 }
 
 /**
- * 註冊誦經與提前結束（chant_end，不顯示在動作列），並以節拍格排程木魚與引磬。onConfirmed 是伺服器確認後的計數。
+ * 註冊誦經與提前結束（chant_end，不顯示在動作列），並以節拍格排程木魚與大磬。onConfirmed 是伺服器確認後的計數。
  * 排程計時器只在有人誦經時運作。回傳的函式清除全部註冊與計時器。
  */
 export function installChant(api: GameplayApi, onConfirmed: () => void): () => void {
@@ -189,7 +188,7 @@ export function installChant(api: GameplayApi, onConfirmed: () => void): () => v
     const fromS = Math.max(plannedUntil, now + o)
     const toS = now + o + LOOKAHEAD_MS
     for (const s of planChantSounds(list, fromS, toS)) {
-      api.audio.play(s.sound, { gain: s.gain, rate: s.sound === 'wood' ? WOOD_RATE : 1, at: s.atS - o })
+      api.audio.play(s.sound, { gain: s.gain, at: s.atS - o })
     }
     plannedUntil = toS
   }
@@ -227,7 +226,7 @@ export function installChant(api: GameplayApi, onConfirmed: () => void): () => v
         }
         tick()
       } else if (chanters.has(e.playerId)) {
-        // 提前起身（chant_end）或改做其他動作：之後的木魚與收尾引磬都不再排
+        // 提前起身（chant_end）或改做其他動作：之後的木魚與收尾大磬都不再排
         chanters.delete(e.playerId)
       }
     }),
