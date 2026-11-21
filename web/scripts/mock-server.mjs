@@ -183,6 +183,16 @@ const claimCar = (p, kind) => {
   const dz = p.z - VEHICLES.booth.counter.z
   if (Math.hypot(dx, dz) > VEHICLES.ride.boothRadius) return null
   if (p.claimAt && now() - p.claimAt < VEHICLES.ride.claimCooldownMs) return null
+  // 車種由伺服器依權重隨機分配（玩家不能挑）；已達數量上限的車種不參與抽選。
+  if (kind === undefined || kind === null) {
+    const stock = VEHICLES.kinds.map((k, i) => {
+      let n = 0
+      for (const car of cars.values()) if (car.kind === i) n++
+      return n < k.count ? (k.weight ?? 1) : 0
+    })
+    let roll = Math.random() * stock.reduce((a, b) => a + b, 0)
+    kind = stock.findIndex((w) => w > 0 && (roll -= w) < 0)
+  }
   if (kind < 0 || kind >= VEHICLES.kinds.length) return null
   let count = 0
   for (const car of cars.values()) if (car.kind === kind) count++
@@ -681,8 +691,7 @@ wss.on('connection', (ws) => {
         break
       case 'claim':
       case 'ride_claim': {
-        const kind = typeof m.kind === 'number' ? m.kind : 0
-        const c = claimCar(me, kind)
+        const c = claimCar(me, null)
         if (c === null) {
           send(ws, { t: 'error', code: 'car_unavailable', message: '目前無法領車' })
         }

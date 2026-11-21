@@ -1,18 +1,11 @@
 <script setup lang="ts">
+import { computed, onBeforeUnmount, watch } from 'vue'
 import type { RideUi } from '../game/vehicles/Vehicles'
 import { CAR_KINDS } from '../game/world/vehicles'
 import { t, type MessageKey } from '../i18n'
 
-const props = defineProps<{
-  ride: RideUi
-  onToggle?: () => void
-  onClaim?: (kind: number) => void
-}>()
-
-const emit = defineEmits<{
-  toggle: []
-  claim: [kind: number]
-}>()
+const props = defineProps<{ ride: RideUi }>()
+const emit = defineEmits<{ toggle: []; claim: []; close: [] }>()
 
 const RARITY_KEYS: Record<'common' | 'rare' | 'mythic', MessageKey> = {
   common: 'ride.rarity.common',
@@ -20,68 +13,70 @@ const RARITY_KEYS: Record<'common' | 'rare' | 'mythic', MessageKey> = {
   mythic: 'ride.rarity.mythic',
 }
 
-function leftCount(i: number): number {
-  return props.ride.booth?.left[i] ?? 0
-}
+const claim = computed(() => props.ride.claim ?? { open: false, pending: false, result: null, error: null })
+const won = computed(() => (claim.value.result === null ? null : (CAR_KINDS[claim.value.result] ?? null)))
+/** 右側按鈕：騎乘中是下車，旁邊有空車是上車，在領車 NPC 前是「領車」。 */
+const mode = computed(() => (props.ride.riding ? 'dismount' : props.ride.nearCar ? 'mount' : props.ride.booth ? 'talk' : null))
+const LABEL = { dismount: 'ride.dismount', mount: 'ride.mount', talk: 'ride.talk' } as const
+const ICON = { dismount: '🚪', mount: '🏎️', talk: '🎟️' } as const
 
-function handleToggle() {
-  props.onToggle?.()
-  emit('toggle')
-}
-
-function handleClaim(kind: number) {
-  props.onClaim?.(kind)
-  emit('claim', kind)
-}
+// 抽到車之後視窗自己收起來，玩家已經坐在車上了。
+let timer: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => claim.value.result,
+  (r) => {
+    if (timer) clearTimeout(timer)
+    timer = r === null ? null : setTimeout(() => emit('close'), 2600)
+  },
+)
+onBeforeUnmount(() => timer && clearTimeout(timer))
 </script>
 
 <template>
-  <!-- 右側欄、說話按鈕上方：上車／下車按鈕 -->
-  <button
-    v-if="ride.riding || ride.nearCar"
-    type="button"
-    class="ride-btn"
-    :class="{ riding: ride.riding }"
-    :aria-label="t(ride.riding ? 'ride.dismount' : 'ride.mount')"
-    @click="handleToggle"
-  >
-    <span class="ride-icon" aria-hidden="true">{{ ride.riding ? '🚪' : '🏎️' }}</span>
-    <span class="ride-label">{{ t(ride.riding ? 'ride.dismount' : 'ride.mount') }}</span>
+  <!-- 右側欄、說話按鈕上方：上車／下車／領車，鍵盤是 E -->
+  <button v-if="mode" type="button" class="ride-btn" :class="mode" :aria-label="t(LABEL[mode])" @click="emit('toggle')">
+    <span class="ride-icon" aria-hidden="true">{{ ICON[mode] }}</span>
+    <span class="ride-label">{{ t(LABEL[mode]) }}</span>
     <span class="key-hint" aria-hidden="true">E</span>
   </button>
 
-  <!-- 檔口前且未騎乘：四格領車面板（不可蓋住左下 45% 搖桿區與底端動作列） -->
-  <section
-    v-if="ride.booth && !ride.riding"
-    class="booth-panel panel"
-    :aria-label="t('ride.boothTitle')"
-  >
-    <div class="booth-header">
-      <span class="booth-title">{{ t('ride.boothTitle') }}</span>
-    </div>
+  <!-- 領車視窗：Q 版的紙卡，小沙彌從卡片上緣探頭 -->
+  <div v-if="claim.open" class="claim-veil" @click.self="emit('close')">
+    <section class="claim-card" role="dialog" aria-modal="true" :aria-label="t('ride.boothTitle')">
+      <div class="monk" aria-hidden="true">
+        <span class="ear left"></span><span class="ear right"></span>
+        <span class="face"><i class="eye l"></i><i class="eye r"></i><i class="blush l"></i><i class="blush r"></i><i class="mouth"></i></span>
+        <span class="hands"></span>
+      </div>
+      <button type="button" class="x" :aria-label="t('ride.modal.close')" @click="emit('close')">×</button>
 
-    <div class="booth-grid">
-      <button
-        v-for="(kind, i) in CAR_KINDS"
-        :key="kind.id"
-        type="button"
-        class="booth-card"
-        :class="kind.rarity"
-        :disabled="leftCount(i) <= 0"
-        @click="handleClaim(i)"
-      >
-        <div class="card-head">
-          <span class="kind-name">{{ t(kind.label) }}</span>
-          <span class="rarity" :class="kind.rarity">{{ t(RARITY_KEYS[kind.rarity]) }}</span>
+      <h2 class="title">{{ t('ride.boothTitle') }}</h2>
+
+      <template v-if="won">
+        <p class="bubble">{{ t('ride.modal.result') }}</p>
+        <div class="prize" :class="won.rarity">
+          <span class="ribbon">{{ t(RARITY_KEYS[won.rarity]) }}</span>
+          <span class="prize-name">{{ t(won.label) }}</span>
         </div>
-        <div class="card-meta">
-          <span class="count" :class="{ empty: leftCount(i) <= 0 }">
-            {{ leftCount(i) > 0 ? t('ride.left', { n: leftCount(i) }) : t('ride.soldOut') }}
-          </span>
-        </div>
-      </button>
-    </div>
-  </section>
+        <button type="button" class="go" @click="emit('close')">{{ t('ride.modal.go') }}</button>
+      </template>
+
+      <template v-else>
+        <p class="bubble" :class="{ warn: claim.error }">{{ claim.error ? t(claim.error as MessageKey) : t('ride.modal.greet') }}</p>
+        <ul class="odds">
+          <li v-for="(kind, i) in CAR_KINDS" :key="kind.id" :class="[kind.rarity, { out: (ride.booth?.left[i] ?? 0) <= 0 }]">
+            <span class="dot"></span>
+            <span class="odds-name">{{ t(kind.label) }}</span>
+            <span class="odds-rarity">{{ t(RARITY_KEYS[kind.rarity]) }}</span>
+          </li>
+        </ul>
+        <button type="button" class="go" :disabled="claim.pending" @click="emit('claim')">
+          {{ t(claim.pending ? 'ride.modal.drawing' : 'ride.modal.draw') }}
+        </button>
+        <p class="hint">{{ t('ride.modal.hint') }}</p>
+      </template>
+    </section>
+  </div>
 </template>
 
 <style scoped>
@@ -107,154 +102,195 @@ function handleClaim(kind: number) {
   transition: background 0.2s, transform 0.12s, border-color 0.2s;
   z-index: 10;
 }
-
-.ride-btn:hover {
-  background: var(--panel-strong);
-}
-
-.ride-btn:active {
-  transform: scale(0.96);
-}
-
-.ride-btn.riding {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
+.ride-btn:active { transform: scale(0.96); }
+.ride-btn.dismount, .ride-btn.talk { border-color: var(--accent); }
 .key-hint {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
+  padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.12);
-  color: var(--ink-soft);
-  margin-left: 2px;
-}
-
-@media (pointer: coarse) {
-  .key-hint {
-    display: none;
-  }
-}
-
-/* 檔口面板：置於右上區域（TopBar 下方），避開左下 45%×45% 搖桿區與底端動作列 */
-.booth-panel {
-  position: absolute;
-  top: calc(max(12px, env(safe-area-inset-top)) + 56px);
-  right: max(12px, env(safe-area-inset-right));
-  width: min(320px, calc(100% - 24px));
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  z-index: 15;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-}
-
-.booth-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.booth-title {
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: var(--ink);
-  letter-spacing: 0.5px;
-}
-
-.booth-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
-}
-
-.booth-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 8px 10px;
-  min-height: 58px;
-  border-radius: 8px;
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.05);
-  text-align: left;
+  color: var(--ink-soft);
+}
+@media (pointer: coarse) {
+  .key-hint { display: none; }
+}
+
+/* ---- 領車視窗 ---- */
+.claim-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(20, 16, 12, 0.38);
+}
+.claim-card {
+  --paper: #f7efdc;
+  --brown: #5a3b25;
+  position: relative;
+  width: min(340px, 100%);
+  margin-top: 46px;
+  padding: 54px 20px 18px;
+  border-radius: 28px;
+  border: 4px solid var(--brown);
+  background: var(--paper);
+  box-shadow: 0 8px 0 var(--brown), 0 18px 30px rgba(0, 0, 0, 0.35);
+  color: var(--brown);
+  text-align: center;
+  animation: pop 0.28s cubic-bezier(0.2, 1.5, 0.4, 1);
+}
+@keyframes pop {
+  from { transform: scale(0.7); opacity: 0; }
+}
+.title { margin: 0 0 8px; font-size: 1.25rem; letter-spacing: 0.12em; }
+.x {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  background: none;
+  color: var(--brown);
+  font-size: 1.6rem;
+  line-height: 1;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
 }
 
-.booth-card:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: var(--accent);
+/* 小沙彌：圓頭、豆豆眼、腮紅、合十的手，探出卡片上緣 */
+.monk {
+  position: absolute;
+  top: -58px;
+  left: 50%;
+  width: 104px;
+  height: 104px;
+  transform: translateX(-50%);
+  animation: bob 2.4s ease-in-out infinite;
+}
+@keyframes bob {
+  50% { transform: translateX(-50%) translateY(-4px); }
+}
+.monk .face, .monk .ear {
+  position: absolute;
+  background: #f1cfae;
+  border: 4px solid var(--brown);
+}
+.monk .face { inset: 0; border-radius: 50%; }
+.monk .ear { top: 44px; width: 20px; height: 26px; border-radius: 50%; }
+.monk .ear.left { left: -12px; }
+.monk .ear.right { right: -12px; }
+.monk i { position: absolute; display: block; }
+.monk .eye { top: 50px; width: 10px; height: 12px; border-radius: 50%; background: #2b1d14; }
+.monk .eye.l { left: 26px; }
+.monk .eye.r { right: 26px; }
+.monk .blush { top: 62px; width: 16px; height: 9px; border-radius: 50%; background: #f09a8a; opacity: 0.8; }
+.monk .blush.l { left: 12px; }
+.monk .blush.r { right: 12px; }
+.monk .mouth { top: 66px; left: 50%; width: 14px; height: 7px; margin-left: -7px; border: 3px solid #2b1d14; border-top: 0; border-radius: 0 0 14px 14px; }
+.monk .hands {
+  position: absolute;
+  left: 50%;
+  bottom: -10px;
+  width: 26px;
+  height: 30px;
+  margin-left: -13px;
+  border-radius: 14px 14px 8px 8px;
+  background: #f1cfae;
+  border: 4px solid var(--brown);
 }
 
-.booth-card:active:not(:disabled) {
-  transform: scale(0.97);
+.bubble {
+  position: relative;
+  margin: 10px 0 14px;
+  padding: 10px 14px;
+  border-radius: 18px;
+  border: 3px solid var(--brown);
+  background: #fff;
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
-
-.booth-card:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  filter: grayscale(0.6);
+.bubble::before {
+  content: '';
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  transform: rotate(45deg);
+  background: #fff;
+  border-left: 3px solid var(--brown);
+  border-top: 3px solid var(--brown);
 }
+.bubble.warn { background: #ffe9df; }
 
-.card-head {
-  display: flex;
+.odds { list-style: none; margin: 0 0 14px; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.odds li {
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  column-gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 3px solid var(--brown);
+  background: #fff8e8;
+  text-align: left;
 }
+.odds .dot { grid-row: span 2; width: 18px; height: 18px; border-radius: 50%; border: 3px solid var(--brown); background: #c9853a; }
+.odds .rare .dot { background: #2f6fb5; }
+.odds .mythic .dot { background: #f0691c; }
+.odds-name { font-size: 0.9rem; font-weight: 700; }
+.odds-rarity { font-size: 0.72rem; opacity: 0.75; }
+.odds li.out { opacity: 0.4; }
 
-.kind-name {
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.go {
+  width: 100%;
+  min-height: 52px;
+  border-radius: 999px;
+  border: 4px solid var(--brown);
+  background: #f2a03d;
+  box-shadow: 0 5px 0 var(--brown);
+  color: #3a2313;
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: transform 0.08s, box-shadow 0.08s;
 }
+.go:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 1px 0 var(--brown); }
+.go:disabled { opacity: 0.6; cursor: default; }
+.hint { margin: 12px 0 0; font-size: 0.78rem; opacity: 0.75; }
 
-.rarity {
-  font-size: 0.68rem;
-  padding: 1px 4px;
-  border-radius: 4px;
-  white-space: nowrap;
-  font-weight: 600;
+.prize {
+  position: relative;
+  margin: 6px 0 16px;
+  padding: 26px 12px 18px;
+  border-radius: 20px;
+  border: 4px solid var(--brown);
+  background: #fff8e8;
+  animation: pop 0.4s cubic-bezier(0.2, 1.7, 0.4, 1);
 }
-
-.rarity.common {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--ink-soft);
+.prize.rare { background: #dcebfb; }
+.prize.mythic { background: linear-gradient(160deg, #ffe08a, #ffb26b); }
+.prize-name { font-size: 1.5rem; font-weight: 800; letter-spacing: 0.08em; }
+.ribbon {
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 14px;
+  border-radius: 999px;
+  border: 3px solid var(--brown);
+  background: #c9853a;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
 }
+.prize.rare .ribbon { background: #2f6fb5; }
+.prize.mythic .ribbon { background: #c2281f; }
 
-.rarity.rare {
-  background: rgba(70, 140, 240, 0.2);
-  color: #72b0f4;
-  border: 1px solid rgba(70, 140, 240, 0.4);
-}
-
-.rarity.mythic {
-  background: rgba(227, 184, 102, 0.25);
-  color: var(--accent);
-  border: 1px solid rgba(227, 184, 102, 0.6);
-}
-
-.card-meta {
-  display: flex;
-  align-items: center;
-}
-
-.count {
-  font-size: 0.75rem;
-  color: var(--ink-soft);
-}
-
-.count.empty {
-  color: var(--bad);
+@media (prefers-reduced-motion: reduce) {
+  .claim-card, .prize, .monk { animation: none; }
 }
 </style>
