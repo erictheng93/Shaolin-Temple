@@ -37,7 +37,6 @@ export class VehicleSim {
   private accumulator = 0
   private latestSeq = 0
   private readonly seqStepMap = new Map<number, number>()
-  private simSteps = 0
   private simStep = 0
   private readonly otherCars = new Map<number, CarState>()
   private lastInputTime = performance.now()
@@ -141,21 +140,10 @@ export class VehicleSim {
     this.lastInputTime = performance.now()
 
     // 建立 seq 與物理步的對應
-    const targetStep = this.simSteps === 0 ? this.simStep + 1 : this.simStep + 1
-    this.seqStepMap.set(seq, targetStep)
+    this.seqStepMap.set(seq, this.simStep + 1)
     if (this.seqStepMap.size > 200) {
       const oldestKey = this.seqStepMap.keys().next().value
       if (oldestKey !== undefined) this.seqStepMap.delete(oldestKey)
-    }
-
-    // 當 advance 未執行過時（例如純單元測試情境），直接排入歷史以供驗證
-    if (this.simSteps === 0) {
-      this.simStep++
-      this.seqStepMap.set(seq, this.simStep)
-      this.history.push({ seq, step: this.simStep, input })
-      if (this.history.length > 120) {
-        this.history.shift()
-      }
     }
 
     if (this.selfCarId !== null) {
@@ -285,7 +273,6 @@ export class VehicleSim {
     while (this.accumulator >= 1 / 30 && steps < 3) {
       this.accumulator -= 1 / 30
       steps++
-      this.simSteps++
       this.simStep++
 
       // 每個物理步記錄輸入歷史
