@@ -3,7 +3,7 @@ import type { CarFleet, CarInstance } from '../render/CarFleet'
 import type { NetworkClient } from '../net/NetworkClient'
 import type { CarSnapshot, CarState } from '../net/protocol'
 import { REMOTE_SNAP_DISTANCE } from '../world/interp'
-import { VEHICLES } from '../world/vehicles'
+import { nearestEmptyCar, nearBooth, VEHICLES } from '../world/vehicles'
 import type { ZoneId } from '../world/zones'
 import { VehicleSim, keepOutside } from './VehicleSim'
 
@@ -83,6 +83,7 @@ export class Vehicles {
   private sim: VehicleSim | null = null
   private loadingSim = false
   private simLoadAttempted = false
+  private disposed = false
   /** 等下一幀處理的校正：一幀內到了好幾則 cars（網路卡住後一次到齊）時只用最新的一則。 */
   private pending: { ack: number; at: number } | null = null
   /** 最近幾次量到的來回延遲（毫秒），取最小值用，單次的尖峰不會讓車往前衝再拉回來。 */
@@ -173,7 +174,11 @@ export class Vehicles {
 
   setLocalZone(zone: ZoneId): void {
     this.zone = zone
-    if (zone !== 'courtyard') this.stopPredicting([])
+    this.deps.fleet.visible = zone === 'courtyard'
+    if (zone !== 'courtyard') {
+      this.deps.fleet.sync([], 0)
+      this.stopPredicting([])
+    }
   }
 
   onVisibilityChange(hidden: boolean): void {
@@ -258,6 +263,9 @@ export class Vehicles {
     } else if (this._riding === m.c && m.driver !== self) {
       this._riding = null
       this.stopPredicting(this.getCarStates())
+    } else if (this.sim !== null && this._riding !== null) {
+      // 開車途中別的車出現或換人：本機世界的車也要跟著更新
+      this.startPredicting(this.sim, this._riding)
     }
   }
 
@@ -266,6 +274,8 @@ export class Vehicles {
     if (this._riding === c) {
       this._riding = null
       this.stopPredicting(this.getCarStates())
+    } else if (this.sim !== null && this._riding !== null) {
+      this.startPredicting(this.sim, this._riding)
     }
   }
 
@@ -311,16 +321,10 @@ export class Vehicles {
   }
 
   setStick(dirX: number, dirZ: number): void {
-    const rawMag = Math.min(1, Math.hypot(dirX, dirZ))
-    this.stickMag = rawMag
+    const mag = Math.min(1, Math.hypot(dirX, dirZ))
+    this.stickMag = mag
     if (this._riding !== null) {
-      const rawDir = rawMag > 0.01 ? Math.atan2(dirX, dirZ) : 0
-      const qDir =
-        Math.round((((rawDir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * 256) & 0xff
-      const qMag = Math.round(rawMag * 255) & 0xff
-      const dir = (qDir * (Math.PI * 2)) / 256
-      const mag = qMag / 255
-
+      const dir = mag > 0.01 ? Math.atan2(dirX, dirZ) : 0
       const seq = this.deps.net.sendDrive(dir, mag)
       if (this.sim !== null) {
         // 預測用伺服器會看到的量化值，否則方向與油門有系統性的小誤差。
@@ -336,6 +340,7 @@ export class Vehicles {
   }
 
   claim(): void {
+    if (this.zone !== 'courtyard') return
     this.maybeLoadSim()
     this.deps.net.sendClaim()
   }

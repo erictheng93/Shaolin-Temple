@@ -84,12 +84,6 @@ export class VehicleSim {
   private knownCars = new Set<number>()
   private currentInput: DriveInput = { dir: 0, mag: 0 }
   private accumulator = 0
-  private latestSeq = 0
-  private readonly seqStepMap = new Map<number, number>()
-  private simSteps = 0
-  private simStep = 0
-  private readonly otherCars = new Map<number, CarState>()
-  private lastInputTime = performance.now()
 
   /** 最近每個本機物理步用的輸入（新的在後），校正時依延遲重播。 */
   private recent: DriveInput[] = []
@@ -99,12 +93,12 @@ export class VehicleSim {
   private shown = new Map<number, Shown>()
 
   /** 歷史輸入序列，上限 120 筆 */
-  readonly history: Array<{ seq: number; step: number; input: DriveInput }> = []
+  readonly history: Array<{ seq: number; input: DriveInput }> = []
 
   /** 當前殘餘誤差偏移 */
   readonly errorOffset: ErrorOffset = { x: 0, z: 0, heading: 0 }
 
-  /** 每次校正的位置修正量（公尺），供上線門檻量測，上限 1800 筆（涵蓋 60 秒 @ 30Hz） */
+  /** 每次校正的位置修正量（公尺），供上線門檻量測，上限 1800 筆（15 Hz 下約 2 分鐘） */
   readonly correction = {
     last: 0,
     samples: [] as number[],
@@ -186,28 +180,11 @@ export class VehicleSim {
    * 推送新的駕駛輸入，並排入歷史。
    */
   pushInput(seq: number, input: DriveInput): void {
-    this.latestSeq = seq
     this.currentInput = input
-    this.lastInputTime = performance.now()
-
-    // 建立 seq 與物理步的對應
-    const targetStep = this.simSteps === 0 ? this.simStep + 1 : this.simStep + 1
-    this.seqStepMap.set(seq, targetStep)
-    if (this.seqStepMap.size > 200) {
-      const oldestKey = this.seqStepMap.keys().next().value
-      if (oldestKey !== undefined) this.seqStepMap.delete(oldestKey)
+    this.history.push({ seq, input })
+    if (this.history.length > 120) {
+      this.history.shift()
     }
-
-    // 當 advance 未執行過時（例如純單元測試情境），直接排入歷史以供驗證
-    if (this.simSteps === 0) {
-      this.simStep++
-      this.seqStepMap.set(seq, this.simStep)
-      this.history.push({ seq, step: this.simStep, input })
-      if (this.history.length > 120) {
-        this.history.shift()
-      }
-    }
-
     if (this.selfCarId !== null) {
       this.world.setInput(this.selfCarId, input)
     }
@@ -218,7 +195,6 @@ export class VehicleSim {
    */
   setInput(input: DriveInput): void {
     this.currentInput = input
-    this.lastInputTime = performance.now()
     if (this.selfCarId !== null) {
       this.world.setInput(this.selfCarId, input)
     }
@@ -239,20 +215,10 @@ export class VehicleSim {
   reconcile(ack: number, server: CarState, others: CarState[], lagSec?: number): void {
     if (this.selfCarId === null || server.c !== this.selfCarId) return
 
-    // 更新其他車輛快照以供重播與外推
-    this.otherCars.clear()
-    for (const o of others) {
-      this.otherCars.set(o.c, { ...o })
-      this.world.setState(o.c, o)
-    }
-
-    // 1. 根據 ack 剔除已確認的歷史輸入
-    const ackStep = this.seqStepMap.get(ack)
+    // 1. 丟掉 seq <= ack 的歷史
     let i = 0
     while (i < this.history.length) {
-      const item = this.history[i]!
-      const isConfirmed = ackStep !== undefined ? item.step <= ackStep : isSeqLe(item.seq, ack)
-      if (isConfirmed) {
+      if (isSeqLe(this.history[i]!.seq, ack)) {
         this.history.splice(i, 1)
       } else {
         i++
@@ -292,7 +258,7 @@ export class VehicleSim {
     const jump = Math.hypot(ex, ez)
     this.correction.last = jump
     this.correction.samples.push(jump)
-    if (this.correction.samples.length > 300) {
+    if (this.correction.samples.length > 1800) {
       this.correction.samples.shift()
     }
 
@@ -389,10 +355,6 @@ export class VehicleSim {
       return
     }
 
-    // 伺服器 500 ms 輸入逾時建模（超過 500 ms 沒輸入時推力歸零）
-    const isTimedOut = performance.now() - this.lastInputTime > 500
-    const effectiveInput = isTimedOut ? { dir: 0, mag: 0 } : this.currentInput
-
     this.accumulator += dt
     let steps = 0
     while (this.accumulator >= STEP && steps < MAX_CATCH_UP) {
@@ -474,8 +436,6 @@ export class VehicleSim {
     this.errorOffset.x = 0
     this.errorOffset.z = 0
     this.errorOffset.heading = 0
-    this.seqStepMap.clear()
-    this.otherCars.clear()
   }
 
   /**
