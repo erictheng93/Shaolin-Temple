@@ -250,10 +250,10 @@ export class NetworkClient {
   private lastDriveDir = -1
   private lastDriveMag = -1
 
-  /** 領取碰碰車。 */
-  sendClaim(kind: number): void {
+  /** 向領車 NPC 抽一台碰碰車；車種由伺服器隨機分配。 */
+  sendClaim(): void {
     if (!this.enabled || this.status !== 'online') return
-    this.sendNow({ t: 'claim', kind })
+    this.sendNow({ t: 'claim' })
   }
 
   /** 上下車（car 為車編號，null 為下車）。 */
