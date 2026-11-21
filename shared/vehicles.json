@@ -1,9 +1,9 @@
 {
   "kinds": [
-    { "id": "classic", "rarity": "common", "count": 4 },
-    { "id": "woodfish", "rarity": "common", "count": 3 },
-    { "id": "racer", "rarity": "rare", "count": 2 },
-    { "id": "firewheel", "rarity": "mythic", "count": 1 }
+    { "id": "classic", "rarity": "common", "count": 4, "weight": 45 },
+    { "id": "woodfish", "rarity": "common", "count": 3, "weight": 35 },
+    { "id": "racer", "rarity": "rare", "count": 2, "weight": 15 },
+    { "id": "firewheel", "rarity": "mythic", "count": 1, "weight": 5 }
   ],
   "car": {
     "halfWidth": 0.55,

@@ -17,6 +17,8 @@ export interface RideUi {
   riding: boolean
   nearCar: boolean
   booth: { left: number[] } | null
+  /** 領車視窗（GameCore 填入）：是否開啟、等待伺服器中、剛抽到的車種、被拒絕的原因（字典 key）。 */
+  claim?: { open: boolean; pending: boolean; result: number | null; error: string | null }
 }
 
 interface LocalCar {
@@ -306,9 +308,9 @@ export class Vehicles {
     }
   }
 
-  claim(kind: number): void {
-    if (this.zone !== 'courtyard') return
-    this.deps.net.sendClaim(kind)
+  claim(): void {
+    this.maybeLoadSim()
+    this.deps.net.sendClaim()
   }
 
   toggleRide(localX: number, localZ: number): void {
