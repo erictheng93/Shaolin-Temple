@@ -1090,13 +1090,13 @@ async fn immune_player_is_not_knocked_again_for_3s_after_recovery() {
     let mut b = connect(&room).await;
     let mut c = connect(&room).await;
 
-    // a, c 先就定位到檔口
+    // a 先就定位到檔口並領車 0
     a.walk_to_counter().await;
-    c.walk_to_counter().await;
-
-    // a 領車 0
     a.claim(0).await;
     sleep(Duration::from_millis(50)).await;
+
+    // c 就定位到檔口
+    c.walk_to_counter().await;
 
     // b 走到 Bay 0 前方 (-10.5, 7.5)
     b.walk_to_bay0().await;

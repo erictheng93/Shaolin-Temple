@@ -568,6 +568,9 @@ impl Room {
                     pl.x = to_x;
                     pl.z = to_z;
                     pl.action = None;
+                    pl.action_rooted_until = None;
+                    pl.trail = [(to_x, to_z); 4];
+                    pl.trail_len = 1;
                     pl.moving = false;
                     pl.dirty = false;
                     knocks.push(msg);
