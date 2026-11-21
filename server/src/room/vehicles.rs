@@ -17,7 +17,39 @@ pub struct Car {
     pub fade_at: Option<f64>,
 }
 
+/// 依權重抽車種：stock 是各車種的權重（已額滿的填 0），roll 在 0..總和 之間。全部額滿回 None。
+pub(crate) fn pick_kind(stock: &[u32], mut roll: u32) -> Option<u8> {
+    stock
+        .iter()
+        .position(|&w| {
+            if roll < w {
+                return true;
+            }
+            roll -= w;
+            false
+        })
+        .map(|i| i as u8)
+}
+
 impl Room {
+    /// 抽這次領到的車種：已達 count 的車種不參與。全部額滿時回 0，由 claim 回 car_unavailable。
+    pub(crate) fn roll_kind(&self) -> u8 {
+        let stock: Vec<u32> = params()
+            .kinds
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let n = self.cars.values().filter(|c| c.kind as usize == i).count();
+                if n < k.count as usize { k.weight } else { 0 }
+            })
+            .collect();
+        let total: u32 = stock.iter().sum();
+        if total == 0 {
+            return 0;
+        }
+        pick_kind(&stock, rand::random_range(0..total)).unwrap_or(0)
+    }
+
     /// 領車：須在庭院、未騎乘、未撞飛、距檔口櫃台 ≤ boothRadius；
     /// 冷卻內回 claim_cooldown；該車種已達 count 回 car_unavailable；
     /// 依序找第一個 bay_is_free 的停車位，都沒有回 booth_crowded；
