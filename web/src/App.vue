@@ -153,7 +153,8 @@ function toggleMute() {
         v-if="ui.ride"
         :ride="ui.ride"
         @toggle="() => core?.toggleRide()"
-        @claim="(k) => core?.claimCar(k)"
+        @claim="() => core?.claimCar()"
+        @close="() => core?.setClaimOpen(false)"
       />
       <ChatPanel :chat="ui.chat" :send="(t) => core?.sendChat(t) ?? 'offline'" />
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
