@@ -10,8 +10,6 @@ const props = defineProps<{
   setStick: (x: number, y: number) => void
   /** 場景切換中：變成 true 時放開搖桿（同鍵盤清掉按鍵），要重新按下才會再走。 */
   suspended?: boolean
-  /** 放在哪一側的下方。橫向拿手機時放右下角（右手拇指），直向在左下角。 */
-  side?: 'left' | 'right'
 }>()
 
 const BASE = 120
@@ -47,9 +45,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onHidden)
   reset()
 })
-
-// 換邊時放開搖桿，免得手指還按在舊的那一側
-watch(() => props.side, reset)
 
 watch(
   () => props.suspended,
@@ -113,7 +108,6 @@ function onEnd(e: PointerEvent) {
     v-if="show"
     ref="zone"
     class="zone"
-    :class="{ right: side === 'right' }"
     @pointerdown.prevent="onDown"
     @pointermove="onMoveEvent"
     @pointerup="onEnd"
@@ -156,15 +150,6 @@ function onEnd(e: PointerEvent) {
   border: 2px solid rgba(255, 255, 255, 0.35);
   background: rgba(255, 255, 255, 0.1);
   pointer-events: none;
-}
-
-.zone.right {
-  left: auto;
-  right: 0;
-}
-.zone.right .base.idle {
-  left: auto;
-  right: calc(20px + env(safe-area-inset-right));
 }
 
 /* 閒置：在 ActionBar 上方的左下角顯示提示 */
