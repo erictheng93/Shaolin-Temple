@@ -222,13 +222,14 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     sim.setCars([makeCar(0, 0, 0, 0)], 0)
 
     sim.pushInput(1, { dir: 0, mag: 1 })
-    sim.reconcile(0, makeCar(0, 0.5, 0, 0), [])
+    // 校正量要超過柔性校正的範圍（0.6 公尺）才會產生誤差偏移
+    sim.reconcile(0, makeCar(0, 1.5, 0, 0), [])
 
     expect(sim.history.length).toBe(1)
     expect(Math.hypot(sim.errorOffset.x, sim.errorOffset.z)).toBeGreaterThan(0)
 
     // 下車 (self 設為 null)
-    sim.setCars([makeCar(0, 0.5, 0, 0)], null)
+    sim.setCars([makeCar(0, 1.5, 0, 0)], null)
 
     expect(sim.history.length).toBe(0)
     expect(sim.errorOffset.x).toBe(0)

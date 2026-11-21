@@ -771,6 +771,8 @@ export class GameCore {
       const dirX = Math.cos(yaw) * k.x + Math.sin(yaw) * k.y
       const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
       this.vehicles.setStick(dirX, dirZ)
+      // 先推進物理再讀騎士位置，騎士與車身才是同一個時間點。
+      this.vehicles.advance(dt)
 
       const rider = this.vehicles.riderCar(this.selfId ?? '')
       if (rider) {

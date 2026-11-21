@@ -13,6 +13,10 @@ export function isSeqLe(seq: number, ack: number): boolean {
   return diff <= 0
 }
 
+/** 校正量在這個距離（公尺）以內時不整個換成伺服器的狀態，只靠近 SOFT_PULL 的比例。約為最高速下兩個物理步。 */
+const SOFT_CORRECTION = 0.6
+const SOFT_PULL = 0.12
+
 export interface NetworkConnectionInfo {
   saveData?: boolean
   effectiveType?: string
@@ -208,14 +212,12 @@ export class VehicleSim {
       }
     }
 
-    // 限制單次最多重播 30 步
-    const replayHistory = this.history.slice(-30)
-
-    // 記錄校正前玩家眼見的視覺位置
-    const prePose = this.world.state(server.c)
-    const oldVisualX = prePose ? prePose.x + this.errorOffset.x : server.x
-    const oldVisualZ = prePose ? prePose.z + this.errorOffset.z : server.z
-    const oldVisualHeading = prePose ? wrapAngle(prePose.heading + this.errorOffset.heading) : server.heading
+    // 記錄校正前的模擬狀態與玩家眼見的位置（含外推與殘餘誤差）
+    const preState = this.world.state(server.c)
+    const prePose = this.selfPose()
+    const oldVisualX = prePose ? prePose.x : server.x
+    const oldVisualZ = prePose ? prePose.z : server.z
+    const oldVisualHeading = prePose ? prePose.heading : server.heading
 
     // 2. 將自己的車重設為伺服器權威狀態
     this.world.setState(server.c, server)
@@ -253,10 +255,14 @@ export class VehicleSim {
       this.world.step()
     }
 
-    // 4. 計算位置差與誤差偏移
-    const newPose = this.world.state(server.c)
-    if (newPose) {
-      const jump = Math.hypot(oldVisualX - newPose.x, oldVisualZ - newPose.z)
+    // 5. 計算位置差與誤差偏移
+    const newState = this.world.state(server.c)
+    if (newState) {
+      // 以「畫面上會看到的位置」比較：暫時拿掉殘餘誤差，取校正後含外推的位置。
+      const kept = { ...this.errorOffset }
+      this.errorOffset.x = this.errorOffset.z = this.errorOffset.heading = 0
+      const newPose = this.selfPose()!
+      const jump = Math.hypot(oldVisualX - kept.x - newPose.x, oldVisualZ - kept.z - newPose.z)
       this.correction.last = jump
       this.correction.samples.push(jump)
       if (this.correction.samples.length > 1800) {
@@ -265,9 +271,19 @@ export class VehicleSim {
 
       if (jump > 3.0) {
         // 超過 3 公尺直接套用，不平滑
-        this.errorOffset.x = 0
-        this.errorOffset.z = 0
-        this.errorOffset.heading = 0
+      } else if (jump <= SOFT_CORRECTION && preState) {
+        // 小誤差多半只是兩邊步進的時間點差不到一步。整個換成伺服器的狀態會讓車每秒 15 次前後抖，
+        // 所以留在本機的狀態，只往伺服器的結果靠近一小部分；殘餘誤差照舊衰減。
+        const k = SOFT_PULL
+        this.world.setState(server.c, {
+          x: preState.x + (newState.x - preState.x) * k,
+          z: preState.z + (newState.z - preState.z) * k,
+          heading: wrapAngle(preState.heading + wrapAngle(newState.heading - preState.heading) * k),
+          vx: preState.vx + (newState.vx - preState.vx) * k,
+          vz: preState.vz + (newState.vz - preState.vz) * k,
+          w: preState.w + (newState.w - preState.w) * k,
+        })
+        Object.assign(this.errorOffset, kept)
       } else {
         this.errorOffset.x = oldVisualX - newPose.x
         this.errorOffset.z = oldVisualZ - newPose.z
@@ -344,10 +360,13 @@ export class VehicleSim {
     if (this.disposed || this.selfCarId === null) return null
     const s = this.world.state(this.selfCarId)
     if (!s) return null
+    // 物理固定 30 Hz：不補的話 60 FPS 下車每兩幀才動一次、30 FPS 下每幀走 0、1 或 2 步，看起來一頓一頓。
+    // 累加器裡還沒湊滿一步的時間，以目前的速度往前外推（最多一步，約 33 毫秒）。
+    const ahead = Math.max(0, Math.min(1 / 30, this.accumulator))
     return {
-      x: s.x + this.errorOffset.x,
-      z: s.z + this.errorOffset.z,
-      heading: wrapAngle(s.heading + this.errorOffset.heading),
+      x: s.x + s.vx * ahead + this.errorOffset.x,
+      z: s.z + s.vz * ahead + this.errorOffset.z,
+      heading: wrapAngle(s.heading + s.w * ahead + this.errorOffset.heading),
     }
   }
 
