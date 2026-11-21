@@ -354,6 +354,6 @@ mod tests {
             min_z: 8.0,
             max_z: 10.5,
         };
-        assert!(COURTYARD.solids.iter().any(|s| *s == booth));
+        assert!(COURTYARD.solids.contains(&booth));
     }
 }
