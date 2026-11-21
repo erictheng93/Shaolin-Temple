@@ -1,3 +1,4 @@
+import { dequantizeDrive, quantizeDrive } from './drive'
 import type { CarFleet, CarInstance } from '../render/CarFleet'
 import type { NetworkClient } from '../net/NetworkClient'
 import type { CarSnapshot, CarState } from '../net/protocol'
@@ -36,6 +37,8 @@ export interface VehiclesDeps {
   net: Pick<NetworkClient, 'sendClaim' | 'sendRide' | 'sendDrive'>
   selfId: () => string | null
   sim?: VehicleSim | null
+  /** 估計的來回延遲（毫秒）；校正時依它決定要重播幾步。沒有時當作 0。 */
+  rttMs?: () => number | null
 }
 
 function getNetworkConnection(): { saveData?: boolean; effectiveType?: string } | undefined {
@@ -240,7 +243,9 @@ export class Vehicles {
       const selfCar = cars.find((c) => c.c === this._riding)
       if (selfCar) {
         const others = cars.filter((c) => c.c !== this._riding)
-        this.sim.reconcile(ack, selfCar, others)
+        // 伺服器的狀態對應到本機大約一個來回延遲之前的時間點，要把這段時間重播回來。
+        const lagSteps = Math.max(0, Math.min(15, Math.round(((this.deps.rttMs?.() ?? 0) / 1000) * VEHICLES.physics.hz)))
+        this.sim.reconcile(ack, selfCar, others, lagSteps)
       }
     }
   }
@@ -272,10 +277,13 @@ export class Vehicles {
       const dir = mag > 0.01 ? Math.atan2(dirX, dirZ) : 0
       const seq = this.deps.net.sendDrive(dir, mag)
       if (this.sim !== null) {
+        // 預測用伺服器會看到的量化值，否則方向與油門有系統性的小誤差。
+        const q = quantizeDrive(dir, mag)
+        const input = dequantizeDrive(q.dir, q.mag)
         if (seq !== null) {
-          this.sim.pushInput(seq, { dir, mag })
+          this.sim.pushInput(seq, input)
         } else {
-          this.sim.setInput({ dir, mag })
+          this.sim.setInput(input)
         }
       }
     }

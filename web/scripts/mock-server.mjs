@@ -18,6 +18,7 @@ import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
 import RAPIER from '@dimforge/rapier3d-compat'
 import { createSimWorld } from '../src/game/vehicles/simCore.ts'
+import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
 import { VEHICLES } from '../src/game/world/vehicles.ts'
 import { SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
@@ -334,8 +335,12 @@ const dismountPlayer = (p) => {
   })
 }
 
-// 物理世界模擬循環：30Hz
-setInterval(() => {
+// 物理世界模擬循環：30Hz。計時器的實際間隔不準（Windows 上常是 40 多毫秒），所以依經過的時間補步，
+// 否則模擬會比真實時間慢，前端預測就一直被拉回來。每 2 步廣播一次 cars（15 Hz）。
+const STEP_MS = 1000 / VEHICLES.physics.hz
+let physicsAt = Date.now()
+let physicsSteps = 0
+const physicsStep = () => {
   const t = now()
   for (const car of cars.values()) {
     if (car.driver && t - car.lastInputAt > VEHICLES.physics.inputTimeoutMs) {
@@ -370,7 +375,29 @@ setInterval(() => {
       broadcast({ t: 'carGone', c })
     }
   }
-}, 1000 / 30)
+  if (++physicsSteps % VEHICLES.physics.broadcastEverySteps === 0) broadcastCars()
+}
+const broadcastCars = () => {
+  const allCars = sim.cars()
+  if (!allCars.length) return
+  for (const to of players.values()) {
+    if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
+      const frame = encodeCars(to.lastDriveSeq ?? 0, allCars)
+      if (frame) to.ws.send(frame)
+    }
+  }
+}
+setInterval(() => {
+  const t = now()
+  let steps = Math.floor((t - physicsAt) / STEP_MS)
+  if (steps > VEHICLES.physics.maxCatchUpSteps) {
+    steps = VEHICLES.physics.maxCatchUpSteps
+    physicsAt = t
+  } else {
+    physicsAt += steps * STEP_MS
+  }
+  for (let i = 0; i < steps; i++) physicsStep()
+}, 10)
 /** 房內短編號：取目前未使用的最小值，玩家離開後回收。超過 MAX_SHORT_ID（二進位幀只有 7 位元）時回傳 null。 */
 const allocN = () => {
   const used = new Set([...players.values()].map((p) => p.n))
@@ -525,17 +552,6 @@ setInterval(() => {
     }
     dirty.clear()
   }
-  // 廣播碰碰車狀態（10Hz）：送給所有在庭院的真人玩家
-  const allCars = sim.cars()
-  if (allCars.length) {
-    for (const to of players.values()) {
-      if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
-        const ack = to.lastDriveSeq ?? 0
-        const frame = encodeCars(ack, allCars)
-        if (frame) to.ws.send(frame)
-      }
-    }
-  }
 }, 100)
 
 wss.on('connection', (ws) => {
@@ -688,8 +704,8 @@ wss.on('connection', (ws) => {
       case 'drive': {
         if (me.riding !== null && me.riding !== undefined) {
           me.lastDriveSeq = m.seq ?? 0
-          const dir = typeof m.dir === 'number' ? m.dir : 0
-          const mag = typeof m.mag === 'number' ? m.mag : 0
+          // 線上值是量化過的整數（0..255），要換回弧度與 0..1 才能交給模擬。
+          const { dir, mag } = dequantizeDrive(typeof m.dir === 'number' ? m.dir : 0, typeof m.mag === 'number' ? m.mag : 0)
           sim.setInput(me.riding, { dir, mag })
           const car = cars.get(me.riding)
           if (car) {

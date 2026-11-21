@@ -339,6 +339,7 @@ export class GameCore {
       fleet: this.fleet,
       net: this.net,
       selfId: () => this.selfId,
+      rttMs: () => this.rtt,
     })
     this.vehicleAudio = new VehicleAudio(this.audio)
     this.moveCfg = {
