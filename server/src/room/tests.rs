@@ -330,18 +330,44 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     let room = spawn_room(RoomConfig::new(50));
     let mut clients = Vec::new();
     for _ in 0..50 {
-        clients.push(connect(&room).await);
+        clients.push(connect_with(&room, 512).await);
     }
-    sleep(Duration::from_secs(2)).await;
-    let (x0, z0) = (clients[7].x, 9.5);
-    clients[7].position(x0, z0, 0.0, false).await;
-    sleep(Duration::from_secs(2)).await;
+    let ns: Vec<u8> = clients.iter().map(|c| c.n).collect();
+    let mut positions: Vec<f64> = clients.iter().map(|c| c.x).collect();
+    loop {
+        let mut any_moves = false;
+        for _ in 0..50 {
+            sleep(TICK).await;
+            for c in &mut clients {
+                for msg in c.drain() {
+                    any_moves = true;
+                    if let ServerMessage::Moves { m } = msg {
+                        for entry in m {
+                            if let Some(idx) = ns.iter().position(|&n| n == entry.0) {
+                                positions[idx] = entry.1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !any_moves {
+            break;
+        }
+    }
+    sleep(Duration::from_secs(1)).await;
     clients.iter_mut().for_each(|c| _ = c.drain());
-    let (x, z) = (x0 + 0.123_456, z0 - 0.014_9);
-    clients[7].position(x, z, 7.0, true).await;
+    let (mover_idx, &mover_x) = positions
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap();
+    let mover_n = clients[mover_idx].n;
+    let (x, z) = (mover_x + 0.123_456, 11.0 - 0.014_9);
+    clients[mover_idx].position(x, z, 7.0, true).await;
     sleep(TICK * 2).await;
     let expected = (
-        7,
+        mover_n,
         round2(x),
         round2(z),
         round2(7.0 - 2.0 * PI),
@@ -349,7 +375,7 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     );
     for (i, c) in clients.iter_mut().enumerate() {
         let got = c.drain();
-        if i == 7 {
+        if i == mover_idx {
             assert!(got.is_empty(), "the mover does not receive itself");
         } else {
             assert_eq!(kinds(&got), ["moves"], "client {i}");
@@ -358,12 +384,22 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     }
     // 靜止不再重送
     sleep(TICK * 5).await;
+    for (i, c) in clients.iter_mut().enumerate() {
+        let got = c.drain();
+        if !got.is_empty() {
+            eprintln!("client {i} received at line 385: {got:#?}");
+        }
+    }
     assert!(clients.iter_mut().all(|c| c.drain().is_empty()));
     // 停下時送一次 moving: 0，之後不再重送（重複的 stop 沒有變化，也不送）
-    clients[7].position(x, z, 7.0, false).await;
-    clients[7].position(x, z, 7.0, false).await;
+    clients[mover_idx].position(x, z, 7.0, false).await;
+    clients[mover_idx].position(x, z, 7.0, false).await;
     sleep(TICK * 2).await;
-    for (i, c) in clients.iter_mut().enumerate().filter(|(i, _)| *i != 7) {
+    for (i, c) in clients
+        .iter_mut()
+        .enumerate()
+        .filter(|(i, _)| *i != mover_idx)
+    {
         let got = move_tuples(&c.drain());
         assert_eq!(got.len(), 1, "client {i}");
         assert_eq!(got[0].4, Moving::Stopped);
@@ -458,8 +494,11 @@ async fn zone_change_broadcasts_zone_then_syncs_the_switcher() {
     let mut hall = connect(&room).await;
     let mut mover = connect(&room).await;
     hall.enter_hall().await;
+    sleep(Duration::from_secs(1)).await;
+    hall.position(1.5, 7.4, PI, false).await;
     sleep(TICK).await;
     yard.drain();
+    hall.drain();
     mover.drain();
     // 離殿門太遠（伺服器依速度上限拒絕該位置）時，位置仍在庭院中央
     mover.position(0.0, -5.6, PI, false).await;
@@ -512,14 +551,14 @@ async fn only_portal_positions_may_change_zone() {
             "{zone}: {got:?}"
         );
     }
-    // 出入口外 0.6 公尺（容許 0.5）仍是 invalid_zone
+    // 出入口外（門前延伸 1.0 公尺後的新邊界外）仍是 invalid_zone
     p.walk_to_door().await;
-    p.position(0.0, -4.4, PI, false).await;
+    p.position(0.0, -3.4, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
     assert_eq!(count(&p.drain(), "error"), 1);
     // 容許誤差內成功，且位置是伺服器的落點
-    p.position(0.0, -4.6, PI, false).await;
+    p.position(0.0, -4.2, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
     let got = p.drain();
@@ -580,6 +619,7 @@ async fn positions_are_clamped_rejected_and_use_each_zones_bounds() {
     b.enter_hall().await;
     hall_watcher.enter_hall().await;
     sleep(Duration::from_secs(3)).await;
+    hall_watcher.drain();
     b.position(9.0, 8.9, 0.0, false).await;
     sleep(TICK * 2).await;
     let got = move_tuples(&hall_watcher.drain());
@@ -1612,4 +1652,179 @@ async fn two_players_pressing_against_each_other_get_at_most_one_sync_per_correc
         "1 秒內 sync 次數應受 CORRECTION_GAP 節流限制，實際收到 {a_sync_count} 次"
     );
     assert!(a_sync_count >= 1, "互相推擠應至少收到 1 次 sync");
+}
+
+// ---- 玩家碰撞：每 tick 分離與殿門範圍（Task 3） ----
+
+#[tokio::test(start_paused = true)]
+async fn players_spawned_on_the_same_point_drift_apart() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut watcher = connect(&room).await;
+    watcher.enter_hall().await;
+    sleep(Duration::from_secs(2)).await;
+    watcher.position(2.0, 7.4, 0.0, false).await;
+    sleep(TICK * 2).await;
+    watcher.drain();
+
+    // A 與 B 走到門口，同時送出 zone("hall") 進殿，伺服器進殿落點都在 (0.0, 7.4)
+    let a = connect(&room).await;
+    let b = connect(&room).await;
+    a.walk_to_door().await;
+    b.walk_to_door().await;
+    a.zone("hall").await;
+    b.zone("hall").await;
+    watcher.drain();
+
+    let mut last_a = (0.0, 7.4);
+    let mut last_b = (0.0, 7.4);
+    let mut ticks = 0;
+    for _ in 0..10 {
+        sleep(TICK).await;
+        ticks += 1;
+        let moves = move_tuples(&watcher.drain());
+        if let Some(m) = moves.iter().find(|m| m.0 == a.n) {
+            let step = (m.1 - last_a.0).hypot(m.2 - last_a.1);
+            assert!(
+                step <= crate::collide::SEPARATE_PER_TICK + 1e-4,
+                "A 每個 tick 位移應 <= 0.1，實際為 {step}"
+            );
+            last_a = (m.1, m.2);
+        }
+        if let Some(m) = moves.iter().find(|m| m.0 == b.n) {
+            let step = (m.1 - last_b.0).hypot(m.2 - last_b.1);
+            assert!(
+                step <= crate::collide::SEPARATE_PER_TICK + 1e-4,
+                "B 每個 tick 位移應 <= 0.1，實際為 {step}"
+            );
+            last_b = (m.1, m.2);
+        }
+        let dist = (last_a.0 - last_b.0).hypot(last_a.1 - last_b.1);
+        if dist >= crate::collide::MIN_DIST - 1e-4 {
+            break;
+        }
+    }
+    let final_dist = (last_a.0 - last_b.0).hypot(last_a.1 - last_b.1);
+    assert!(
+        final_dist >= crate::collide::MIN_DIST - 1e-4,
+        "10 個 tick 內兩人距離應 >= 0.6，實際為 {final_dist}"
+    );
+    assert!(ticks <= 10, "應在 10 個 tick 內分開");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crowd_standing_in_front_of_the_hall_door_does_not_stop_entry() {
+    let room = spawn_room(RoomConfig::new(50));
+    // 4 人並排站在殿門前 (z = -5.0)
+    let mut c1 = connect_with(&room, 256).await;
+    let mut c2 = connect_with(&room, 256).await;
+    let mut c3 = connect_with(&room, 256).await;
+    let mut c4 = connect_with(&room, 256).await;
+    let mut p5 = connect_with(&room, 256).await;
+
+    // 依移動額度將所有人繞過香爐走到殿門口附近
+    for (wx, wz) in [(2.0, 5.0), (2.0, -4.0)] {
+        sleep(Duration::from_secs(6)).await;
+        c1.drain();
+        c2.drain();
+        c3.drain();
+        c4.drain();
+        p5.drain();
+        c1.position(wx, wz, 0.0, false).await;
+        c2.position(wx, wz, 0.0, false).await;
+        c3.position(wx, wz, 0.0, false).await;
+        c4.position(wx, wz, 0.0, false).await;
+        p5.position(wx, wz, 0.0, false).await;
+    }
+    sleep(Duration::from_secs(3)).await;
+    c1.drain();
+    c2.drain();
+    c3.drain();
+    c4.drain();
+    p5.drain();
+    c1.position(-0.9, -5.0, 0.0, false).await;
+    c2.position(-0.3, -5.0, 0.0, false).await;
+    c3.position(0.3, -5.0, 0.0, false).await;
+    c4.position(0.9, -5.0, 0.0, false).await;
+    sleep(Duration::from_secs(3)).await;
+    p5.drain();
+
+    // 第 5 人走到門前 1 公尺內 (z = -4.2，且在門寬 [-1.6, 1.6] 內)
+    p5.position(0.0, -4.2, 0.0, false).await;
+    sleep(Duration::from_secs(1)).await;
+    p5.drain();
+
+    // 送出切換場景
+    p5.zone("hall").await;
+    sleep(TICK * 2).await;
+
+    let got = p5.drain();
+    assert!(
+        got.iter().any(|m| match m {
+            ServerMessage::Zone { zone, .. } => zone == "hall",
+            _ => false,
+        }),
+        "第 5 人在門前 1 公尺內應成功切換進殿，收到: {got:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_player_can_push_through_a_line_of_idle_players() {
+    let room = spawn_room(RoomConfig::new(50));
+    let b1 = connect(&room).await;
+    let b2 = connect(&room).await;
+    let b3 = connect(&room).await;
+    let mut a = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // 3 人橫排擋路站在 z = 8.0
+    b1.position(-0.6, 8.0, 0.0, false).await;
+    b2.position(0.0, 8.0, 0.0, false).await;
+    b3.position(0.6, 8.0, 0.0, false).await;
+    // A 站在橫排後方 z = 8.8
+    a.position(0.0, 8.8, PI, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+
+    // A 持續往前走 5 秒（朝 -z 方向前進）
+    let mut cur_z = 8.8;
+    for _ in 0..50 {
+        cur_z -= 0.05;
+        a.position(0.0, cur_z, PI, true).await;
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    // 取得最新 sync 或最新狀態，驗證 A 通過那條線 (z < 8.0)
+    let syncs = corrections(&mut a);
+    let final_z = syncs.last().map(|s| s.2).unwrap_or(cur_z);
+    assert!(
+        final_z < 8.0,
+        "A 持續往前走 5 秒應能通過人牆 (z 應 < 8.0)，實際為 {final_z}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn separation_never_moves_a_rooted_player() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut b = connect(&room).await;
+    let a = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    b.position(0.0, 8.0, 0.0, false).await;
+    // B 執行定點動作（跪拜，持續 1.6 秒）
+    b.action("r1", "prostrate", true).await;
+    sleep(TICK).await;
+    b.drain();
+
+    // A 走到與 B 重疊的位置 (0.1, 8.0)（距離 0.1 < 0.6）
+    a.position(0.1, 8.0, 0.0, false).await;
+    b.drain();
+
+    // 經歷 5 個 tick 的分離
+    sleep(TICK * 5).await;
+
+    let b_syncs = corrections(&mut b);
+    assert!(
+        b_syncs.is_empty(),
+        "定點動作中的 B 絕不能被分離機制移動或收到 sync，收到: {b_syncs:?}"
+    );
 }

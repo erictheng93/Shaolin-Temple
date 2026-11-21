@@ -46,6 +46,14 @@ async fn next(ws: &mut Ws) -> Message {
         .unwrap()
         .unwrap()
 }
+async fn next_text(ws: &mut Ws) -> String {
+    loop {
+        let msg = next(ws).await;
+        if let Ok(text) = msg.to_text() {
+            return text.to_string();
+        }
+    }
+}
 async fn closed(ws: &mut Ws, code: u16) {
     match next(ws).await {
         Message::Close(Some(frame)) => assert_eq!(u16::from(frame.code), code),
@@ -197,17 +205,22 @@ async fn fifty_one_players_split_and_leave_is_room_local() {
             room_a = welcome["room"].as_str().unwrap().into();
         }
         assert_eq!(welcome["room"] == room_a, i < 50);
-        assert!(ids.insert(welcome["selfId"].as_str().unwrap().to_owned()));
+        let self_id = welcome["selfId"].as_str().unwrap();
+        assert!(ids.insert(self_id.to_owned()));
         for p in welcome["players"].as_array().unwrap() {
             assert_eq!(p["zone"], "courtyard");
             assert_eq!(p["z"], 11.0);
-            assert!((-2.0..=2.0).contains(&p["x"].as_f64().unwrap()));
+            if p["id"] == self_id {
+                assert!((-2.0..=2.0).contains(&p["x"].as_f64().unwrap()));
+            } else {
+                assert!((-19.0..=19.0).contains(&p["x"].as_f64().unwrap()));
+            }
             assert_eq!(p["heading"], std::f64::consts::PI);
         }
         // Drain joins so the test measures room separation rather than receiver backlog.
         if i < 50 {
             for previous in &mut clients {
-                assert!(next(previous).await.to_text().unwrap().contains("join"));
+                assert!(next_text(previous).await.contains("join"));
             }
         }
         clients.push(ws);
@@ -215,8 +228,7 @@ async fn fifty_one_players_split_and_leave_is_room_local() {
     let leaving = clients.remove(0);
     drop(leaving);
     for client in &mut clients[..49] {
-        let event: serde_json::Value =
-            serde_json::from_str(next(client).await.to_text().unwrap()).unwrap();
+        let event: serde_json::Value = serde_json::from_str(&next_text(client).await).unwrap();
         assert_eq!(event["t"], "leave");
     }
     assert!(
