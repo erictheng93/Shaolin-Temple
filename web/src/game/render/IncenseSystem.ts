@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { CenserDef, ZoneId } from '../world/zones'
 import type { ResourceTracker } from './ResourceTracker'
+import { setAttributeUpdateRange } from './bufferRange'
 
 /** 一支香燒完的時間（毫秒）：長度從 100% 燒到 BURNT_FRACTION 後消失，最後幾秒煙漸淡。 */
 export const STICK_LIFE_MS = 120_000
@@ -203,14 +204,11 @@ export class IncenseSystem {
     this.stickMesh.visible = n > 0
     this.smokeMesh.visible = puffs > 0
     if (n > 0) {
-      this.stickMesh.instanceMatrix.updateRanges = [{ start: 0, count: n * 16 }]
-      this.stickMesh.instanceMatrix.needsUpdate = true
+      setAttributeUpdateRange(this.stickMesh.instanceMatrix, 0, n * 16)
     }
     if (puffs > 0) {
-      this.smokeMesh.instanceMatrix.updateRanges = [{ start: 0, count: puffs * 16 }]
-      this.smokeMesh.instanceMatrix.needsUpdate = true
-      this.smokeAlpha.updateRanges = [{ start: 0, count: puffs }]
-      this.smokeAlpha.needsUpdate = true
+      setAttributeUpdateRange(this.smokeMesh.instanceMatrix, 0, puffs * 16)
+      setAttributeUpdateRange(this.smokeAlpha, 0, puffs)
     }
   }
 
