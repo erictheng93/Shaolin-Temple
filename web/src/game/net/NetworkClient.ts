@@ -244,6 +244,52 @@ export class NetworkClient {
     return this.sendNow({ t: 'chat', text: clean }) ? 'sent' : 'offline'
   }
 
+  private driveSeq = 0
+  private lastDriveAt = -Infinity
+  private lastDriveDir = -1
+  private lastDriveMag = -1
+
+  /** 領取碰碰車。 */
+  sendClaim(kind: number): void {
+    if (!this.enabled || this.status !== 'online') return
+    this.sendNow({ t: 'claim', kind })
+  }
+
+  /** 上下車（car 為車編號，null 為下車）。 */
+  sendRide(car: number | null): void {
+    if (!this.enabled || this.status !== 'online') return
+    this.sendNow({ t: 'ride', car })
+  }
+
+  /**
+   * 駕駛輸入。dir 弧度、mag 0..1。
+   * 送出前量化成 0..255；回傳用掉的 seq（被節流時為 null）；自帶 15 Hz 節流與 500 ms 心跳。
+   */
+  sendDrive(dir: number, mag: number): number | null {
+    if (!this.enabled || this.status !== 'online') return null
+    const now = performance.now()
+
+    const qDir = Math.round(((dir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 256) & 0xff
+    const qMag = Math.round(Math.max(0, Math.min(1, mag)) * 255) & 0xff
+
+    const changed = qDir !== this.lastDriveDir || qMag !== this.lastDriveMag
+    const minInterval = changed ? 1000 / 15 : 200
+
+    if (this.lastDriveAt > -Infinity && now - this.lastDriveAt < minInterval) {
+      return null
+    }
+
+    const seq = this.driveSeq
+    this.driveSeq = (this.driveSeq + 1) & 0xffff
+
+    this.lastDriveAt = now
+    this.lastDriveDir = qDir
+    this.lastDriveMag = qMag
+
+    this.sendNow({ t: 'drive', seq, dir: qDir, mag: qMag })
+    return seq
+  }
+
   /**
    * 更換衣裝。記住目前衣裝（之後每次 hello 都帶，含重連）；已連線時送出 outfit 訊息。
    * 超過限速時只保留最新的選擇、不排隊，額度恢復後補送；斷線時不送（重連的 hello 會帶）。

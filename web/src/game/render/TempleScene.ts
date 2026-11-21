@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { QualityPreset } from '../core/settings'
-import { BELL_PAVILION, CENSER, HALL, LANTERNS, TREES } from '../world/layout'
+import { BELL_PAVILION, BOOTH, CENSER, HALL, LANTERNS, TREES } from '../world/layout'
 import { BAKED_FINGERPRINT } from './courtyardBake.generated'
 import { collectBakeSetup, lightmapUrl, patchBakedSun, prepareLightmapUvs, type CourtyardBakeSetup } from './courtyardBake'
 import { buildInteriorBackdrop, hallToFacade, HALL_FACADE, INTERIOR_VIEW_VERSION } from './doorwayView'
@@ -397,6 +397,36 @@ export function buildCourtyard(m: CourtyardSurfaces, tracker: ResourceTracker, i
     box(m.lantern, [l.x, 1.3, l.z], [0.45, 0.4, 0.45])
     add(pyramid, m.stone, [l.x, 1.5, l.z], [0.9, 0.45, 0.9])
   }
+
+  // 碰碰車檔口：古色古香小亭，面向庭院停車位
+  const boothCx = (BOOTH.minX + BOOTH.maxX) / 2
+  const boothCz = (BOOTH.minZ + BOOTH.maxZ) / 2
+  const boothW = BOOTH.maxX - BOOTH.minX
+  const boothD = BOOTH.maxZ - BOOTH.minZ
+  const boothBase = 0.25
+  const boothH = 2.4
+  // 石基
+  box(m.stone, [boothCx, boothBase / 2, boothCz], [boothW + 0.2, boothBase, boothD + 0.2])
+  // 四角木柱
+  const boothPillars: Array<{ pos: V3; scale: V3 }> = []
+  for (const [dx, dz] of [
+    [-boothW / 2 + 0.15, -boothD / 2 + 0.15],
+    [boothW / 2 - 0.15, -boothD / 2 + 0.15],
+    [-boothW / 2 + 0.15, boothD / 2 - 0.15],
+    [boothW / 2 - 0.15, boothD / 2 - 0.15],
+  ] as const) {
+    boothPillars.push({ pos: [boothCx + dx, boothBase + boothH / 2, boothCz + dz], scale: [0.24, boothH, 0.24] })
+  }
+  many(cylinder, m.lacquer, boothPillars)
+  // 西、南、北三面半牆
+  box(m.plaster, [BOOTH.minX + 0.1, boothBase + 0.7, boothCz], [0.18, 1.4, boothD - 0.3])
+  box(m.plaster, [boothCx, boothBase + 0.7, BOOTH.minZ + 0.1], [boothW - 0.3, 1.4, 0.18])
+  box(m.plaster, [boothCx, boothBase + 0.7, BOOTH.maxZ - 0.1], [boothW - 0.3, 1.4, 0.18])
+  // 東側服務櫃檯（面對庭院停車位）
+  box(m.woodDark, [BOOTH.maxX - 0.2, boothBase + 0.45, boothCz], [0.4, 0.9, boothD - 0.6])
+  // 橫樑與屋頂
+  box(m.woodDark, [boothCx, boothBase + boothH + 0.1, boothCz], [boothW + 0.2, 0.2, boothD + 0.2])
+  roof([boothCx, boothBase + boothH + 0.2, boothCz], boothW + 1.2, boothD + 1.2, 1.1, boothW * 0.4, 0, 0.35)
 
   // 圍牆：石基、紅牆、瓦頂；正面留山門缺口。離可走範圍約 3 公尺，鏡頭在牆外時不會擋住角色。
   const WALL = { x: 22.5, back: -22, front: 21.5, gate: 2.6 }

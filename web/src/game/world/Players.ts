@@ -220,6 +220,15 @@ export class Players {
     this.cullTimer = CULL_INTERVAL_S
   }
 
+  /** 遠端玩家被撞飛：設定位移起訖點、時間區間與鎖定。 */
+  applyKnock(r: RemotePlayer, fromX: number, fromZ: number, toX: number, toZ: number, startAt: number, endAt: number): void {
+    r.from = { x: fromX, z: fromZ, heading: r.heading, t: startAt }
+    r.to = { x: toX, z: toZ, heading: r.heading, t: endAt }
+    r.serverMoving = false
+    r.lastMoveAt = startAt
+    sampleBetween(r.from, r.to, startAt, r)
+  }
+
   /** 本機玩家切換場景後立即重新計算可見性。 */
   setLocalZone(zone: string): void {
     this.localZone = zone
@@ -254,16 +263,34 @@ export class Players {
     return this.remotes.has(playerId) && this.setOutfit(playerId, outfit)
   }
 
-  /** 每幀更新。回傳是否仍有動態需要重繪。 */
-  update(now: number, dt: number, t: number): boolean {
+  /** 每幀更新。回傳是否仍有動態需要重繪。riderLookup 存在時，騎車中的玩家以車的位置與面向擺放、不播走路。 */
+  update(
+    now: number,
+    dt: number,
+    t: number,
+    riderLookup?: (playerId: string) => { x: number; z: number; heading: number } | null,
+  ): boolean {
     let active = false
     for (const r of this.remotes.values()) {
-      // 看門狗：移動中卻太久沒收到位置（對方切到背景、封包遺失），視為已停止。
-      if (r.serverMoving && now - r.lastMoveAt > REMOTE_MOVE_TIMEOUT_MS) r.serverMoving = false
-      this.place(r, now)
-      // 還沒走到最新位置時也要播走路動畫（停止訊息到達後仍有最後一小段路）。
-      const arriving = now < r.to.t && (r.from.x !== r.to.x || r.from.z !== r.to.z)
-      r.anim.moving = now < r.lockedUntil ? false : r.serverMoving || arriving
+      const car = riderLookup?.(r.id)
+      if (car) {
+        this.snapTo(r, car.x, car.z, car.heading, now)
+        r.anim.moving = false
+        if (r.anim.clip !== 'ride' && r.anim.clip !== 'knocked') {
+          this.anim.play(r.anim, 'ride', now, Infinity)
+        }
+      } else {
+        if (r.anim.clip === 'ride') {
+          r.anim.clip = null
+          this.snapTo(r, r.x, r.z, r.heading, now)
+        }
+        // 看門狗：移動中卻太久沒收到位置（對方切到背景、封包遺失），視為已停止。
+        if (r.serverMoving && now - r.lastMoveAt > REMOTE_MOVE_TIMEOUT_MS) r.serverMoving = false
+        this.place(r, now)
+        // 還沒走到最新位置時也要播走路動畫（停止訊息到達後仍有最後一小段路）。
+        const arriving = now < r.to.t && (r.from.x !== r.to.x || r.from.z !== r.to.z)
+        r.anim.moving = now < r.lockedUntil ? false : r.serverMoving || arriving
+      }
       if (!r.avatar.root.visible) continue
       r.avatar.root.position.set(r.x, 0, r.z)
       r.avatar.root.rotation.y = r.heading
