@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { GameCore, type UiState } from './game/GameCore'
 import { clearAuth, consumeAuthRedirect, httpBaseFromWs, loadAuth, loginUrl, markLoginPending, type AuthProvider } from './game/core/auth'
 import { assetPresetFor, loadSettings, saveSettings } from './game/core/settings'
@@ -33,8 +33,7 @@ const entered = ref(false)
 const entering = ref(false)
 const settingsOpen = ref(false)
 
-// 觸控裝置與螢幕方向：橫向時移動輪盤一律在右下角、右側按鈕換到左邊（走路與開車相同，上車時手指不用換位置）；
-// 直向時輪盤在左下角，開車會提示轉橫向。
+// 觸控裝置與螢幕方向：直向開車時提示轉成橫向。移動輪盤一律在左下角（左手移動、右手按鈕）。
 const coarseMq = window.matchMedia('(any-pointer: coarse)')
 const landscapeMq = window.matchMedia('(orientation: landscape)')
 const touch = ref(coarseMq.matches)
@@ -49,7 +48,6 @@ onBeforeUnmount(() => {
   coarseMq.removeEventListener('change', onMq)
   landscapeMq.removeEventListener('change', onMq)
 })
-const driveRight = computed(() => touch.value && landscape.value)
 const fatal = ref(false)
 const toasts = ref<Array<{ id: number; text: string }>>([])
 let toastId = 0
@@ -153,7 +151,7 @@ function toggleMute() {
 </script>
 
 <template>
-  <main class="stage" :class="{ 'drive-right': driveRight }">
+  <main class="stage">
     <canvas ref="canvas" class="scene" :aria-label="t('app.sceneLabel')" tabindex="0" />
     <!-- 場景切換黑幕；淡出時間需與 GameCore 的 FADE_MS 一致 -->
     <div class="fade" :class="{ on: ui?.fading }" aria-hidden="true" />
@@ -165,7 +163,7 @@ function toggleMute() {
         @toggle-mute="toggleMute"
         @open-settings="settingsOpen = true"
       />
-      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" :suspended="ui.fading" :side="driveRight ? 'right' : 'left'" />
+      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" :suspended="ui.fading" />
       <ActionBar :actions="ui.actions" @perform="(id) => core?.performAction(id)" />
       <RidePanel
         v-if="ui.ride"

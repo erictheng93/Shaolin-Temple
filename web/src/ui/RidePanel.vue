@@ -48,7 +48,7 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
     <span class="key-hint" aria-hidden="true">E</span>
   </button>
 
-  <!-- 觸控裝置直向開車：建議轉成橫向（橫向時移動輪盤在右下角）。每次上車出現一次，可以關掉。 -->
+  <!-- 觸控裝置直向開車：建議轉成橫向（畫面比較寬，看得到前面的路）。每次上車出現一次，可以關掉。 -->
   <div v-if="rotateHint" class="rotate-hint" role="status">
     <span class="rotate-icon" aria-hidden="true">📱</span>
     <span>{{ t('ride.rotateHint') }}</span>
