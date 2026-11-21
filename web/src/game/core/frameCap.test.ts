@@ -21,6 +21,11 @@ describe('frameCap', () => {
   it('低電量加久放取較小者', () => {
     expect(frameCap({ activeFps: 60, idleMs: 90_000, lowBattery: true })).toBe(10)
   })
+  it('觸控設備閒置超過 8 秒提前降到 20 FPS', () => {
+    expect(frameCap({ activeFps: 60, idleMs: 8_000, lowBattery: false, touch: true })).toBe(60)
+    expect(frameCap({ activeFps: 60, idleMs: 8_001, lowBattery: false, touch: true })).toBe(20)
+    expect(frameCap({ activeFps: 30, idleMs: 10_000, lowBattery: false, touch: true })).toBe(20)
+  })
 })
 
 describe('isLowBattery', () => {
