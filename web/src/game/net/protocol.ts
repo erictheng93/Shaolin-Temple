@@ -1,5 +1,5 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式（協定版本 4）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 5）。
  *
  * 位置廣播 moves／sync 與動作廣播 action 是 WebSocket 二進位幀（格式與位元組配置見 binaryFrame.ts），
  * 其餘訊息與所有上行都是 JSON 文字。編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
@@ -142,7 +142,7 @@ export type ClientMessage =
   | { t: 'claim'; kind: number }
   /** 上車（帶 car: 0..15）或下車（缺少 car 或 null）。 */
   | { t: 'ride'; car?: number | null }
-  /** 碰碰車搖桿輸入：dir 角度（弧度）、mag 搖桿推量（0..1）、seq 序號。 */
+  /** 碰碰車搖桿輸入：dir 角度量化（0..255，一格 2π/256）、mag 搖桿推量量化（0..255）、seq 序號（0..65535）。 */
   | { t: 'drive'; seq: number; dir: number; mag: number }
 
 export type ServerMessage =

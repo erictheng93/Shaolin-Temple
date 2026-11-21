@@ -44,7 +44,7 @@ function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
   const spec: Record<SynthName, { seconds: number; partials: Array<[ratio: number, amp: number, decay: number]>; f0: number; click?: number }> = {
     // 寺鐘：不和諧泛音、長衰減
     bell: { seconds: 7, f0: 98, partials: [[1, 1, 3.2], [2.0, 0.6, 2.2], [2.76, 0.45, 1.6], [5.4, 0.25, 0.9], [8.93, 0.12, 0.5]] },
-    // 木魚：短促、帶敲擊聲
+    // 木魚：中頻短促敲擊
     wood: { seconds: 0.35, f0: 620, partials: [[1, 1, 0.07], [2.31, 0.4, 0.04]], click: 0.004 },
     // 頌缽：拍頻造成的嗡嗡聲
     bowl: { seconds: 6, f0: 294, partials: [[1, 1, 3.5], [1.006, 0.8, 3.5], [2.71, 0.35, 2], [5.15, 0.12, 1]] },

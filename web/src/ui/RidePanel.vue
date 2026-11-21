@@ -5,8 +5,6 @@ import { t, type MessageKey } from '../i18n'
 
 const props = defineProps<{
   ride: RideUi
-  onToggle?: () => void
-  onClaim?: (kind: number) => void
 }>()
 
 const emit = defineEmits<{
@@ -25,12 +23,10 @@ function leftCount(i: number): number {
 }
 
 function handleToggle() {
-  props.onToggle?.()
   emit('toggle')
 }
 
 function handleClaim(kind: number) {
-  props.onClaim?.(kind)
   emit('claim', kind)
 }
 </script>

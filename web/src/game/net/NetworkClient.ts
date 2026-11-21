@@ -269,11 +269,11 @@ export class NetworkClient {
     if (!this.enabled || this.status !== 'online') return null
     const now = performance.now()
 
-    const qDir = Math.round(((dir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 255) & 0xff
+    const qDir = Math.round(((dir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 256) & 0xff
     const qMag = Math.round(Math.max(0, Math.min(1, mag)) * 255) & 0xff
 
     const changed = qDir !== this.lastDriveDir || qMag !== this.lastDriveMag
-    const minInterval = changed ? 1000 / 15 : 500
+    const minInterval = changed ? 1000 / 15 : 200
 
     if (this.lastDriveAt > -Infinity && now - this.lastDriveAt < minInterval) {
       return null

@@ -44,6 +44,55 @@ function patchCarMaterial(mat: THREE.Material): void {
   }
 }
 
+function createFallbackGeometry(): THREE.BufferGeometry {
+  const box = new THREE.BoxGeometry(0.8, 0.4, 1.2).toNonIndexed()
+  const pos = box.getAttribute('position')!
+  const norm = box.getAttribute('normal')!
+  const count = pos.count
+  const totalCount = count * 4
+
+  const positions = new Float32Array(totalCount * 3)
+  const normals = new Float32Array(totalCount * 3)
+  const colors = new Float32Array(totalCount * 3)
+  const carKinds = new Float32Array(totalCount)
+
+  const palette: Array<readonly [number, number, number]> = [
+    [0.9, 0.2, 0.2], // 經典碰碰車（紅）
+    [0.8, 0.6, 0.2], // 木魚車（木色）
+    [0.2, 0.5, 0.9], // 跑車（藍）
+    [0.9, 0.5, 0.1], // 風火輪（橙）
+  ]
+
+  for (let k = 0; k < 4; k++) {
+    const offset = k * count
+    const [cr, cg, cb] = palette[k] as readonly [number, number, number]
+    for (let i = 0; i < count; i++) {
+      const idx = offset + i
+      positions[idx * 3] = pos.getX(i)
+      positions[idx * 3 + 1] = pos.getY(i)
+      positions[idx * 3 + 2] = pos.getZ(i)
+
+      normals[idx * 3] = norm.getX(i)
+      normals[idx * 3 + 1] = norm.getY(i)
+      normals[idx * 3 + 2] = norm.getZ(i)
+
+      colors[idx * 3] = cr
+      colors[idx * 3 + 1] = cg
+      colors[idx * 3 + 2] = cb
+
+      carKinds[idx] = k
+    }
+  }
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  geo.setAttribute('carKind', new THREE.BufferAttribute(carKinds, 1))
+  box.dispose()
+  return geo
+}
+
 export class CarFleet {
   private mesh: THREE.InstancedMesh
   private kindAttr: THREE.InstancedBufferAttribute
@@ -51,14 +100,13 @@ export class CarFleet {
   private dummy = new THREE.Object3D()
   private tracker: ResourceTracker
   private loaded = false
+  private disposed = false
 
   constructor(parent: THREE.Object3D, tracker: ResourceTracker) {
     this.tracker = tracker
 
-    // 備用方塊幾何
-    const fallbackGeo = tracker.track(new THREE.BoxGeometry(0.8, 0.4, 1.2))
-    const posCount = fallbackGeo.attributes.position!.count
-    fallbackGeo.setAttribute('carKind', new THREE.BufferAttribute(new Float32Array(posCount).fill(0), 1))
+    // 備用方塊幾何：四種車型各自帶 carKind (0..3) 與辨識顏色，避免著色器收合消失
+    const fallbackGeo = tracker.track(createFallbackGeometry())
 
     const mat = tracker.trackMaterial(
       new THREE.MeshStandardMaterial({
@@ -88,6 +136,7 @@ export class CarFleet {
     this.mesh.customDepthMaterial = depthMat
     this.mesh.castShadow = true
     this.mesh.receiveShadow = false
+    this.mesh.frustumCulled = false
     this.mesh.count = 0
 
     // 初始化所有實例矩陣為縮放 0
@@ -102,7 +151,7 @@ export class CarFleet {
   }
 
   async load(): Promise<void> {
-    if (this.loaded) return
+    if (this.loaded || this.disposed) return
     try {
       const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
       const baseUrl = typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL ? import.meta.env.BASE_URL : '/'
@@ -112,6 +161,8 @@ export class CarFleet {
         new GLTFLoader().load(url, resolve, undefined, reject)
       })
 
+      if (this.disposed) return
+
       const loadedMesh = gltf.scene.getObjectByName('cars') as THREE.Mesh | undefined
       if (!loadedMesh || !loadedMesh.geometry) {
         console.warn('cars.glb 缺少 cars 幾何體')
@@ -119,6 +170,11 @@ export class CarFleet {
       }
 
       const geo = loadedMesh.geometry
+      if (this.disposed) {
+        geo.dispose()
+        return
+      }
+
       const kindAttr = geo.getAttribute('_kind')
       if (kindAttr) {
         geo.setAttribute('carKind', kindAttr)
@@ -179,6 +235,8 @@ export class CarFleet {
   }
 
   dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
     this.mesh.removeFromParent()
   }
 }

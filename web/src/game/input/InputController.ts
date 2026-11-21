@@ -135,7 +135,7 @@ export class InputController {
 
   private onKeyDown = (e: KeyboardEvent): void => {
     if (this.isTyping(e) || e.metaKey || e.ctrlKey || e.altKey) return
-    this.cb.onKey?.(e.code)
+    if (!e.repeat) this.cb.onKey?.(e.code)
     if (!(e.code in MOVE_KEYS)) return
     e.preventDefault()
     if (!this.keys.has(e.code)) {
