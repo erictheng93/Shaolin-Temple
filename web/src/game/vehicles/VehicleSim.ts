@@ -42,6 +42,9 @@ export class VehicleSim {
   private readonly otherCars = new Map<number, CarState>()
   private lastInputTime = performance.now()
 
+  /** 最近每個本機物理步用的輸入（新的在後），校正時依延遲重播。 */
+  private recent: DriveInput[] = []
+
   /** 歷史輸入序列，上限 120 筆 */
   readonly history: Array<{ seq: number; step: number; input: DriveInput }> = []
 
@@ -182,7 +185,7 @@ export class VehicleSim {
    * 4. 依序重播剩餘的未確認輸入（單次最多 30 步以避免卡頓）。
    * 5. 依位置差計算誤差偏移並以指數平滑（>3m 則直接瞬移）。
    */
-  reconcile(ack: number, server: CarState, others: CarState[]): void {
+  reconcile(ack: number, server: CarState, others: CarState[], lagSteps?: number): void {
     if (this.selfCarId === null || server.c !== this.selfCarId) return
 
     // 更新其他車輛快照以供重播與外推
@@ -217,10 +220,30 @@ export class VehicleSim {
     // 2. 將自己的車重設為伺服器權威狀態
     this.world.setState(server.c, server)
 
-    // 3. 重播未確認輸入，並同步外推其他車輛
+    // 3. 其他車設成各自的伺服器狀態並隨重播步數外推
+    const otherClones = others.map((o) => ({
+      c: o.c,
+      x: o.x,
+      z: o.z,
+      heading: o.heading,
+      vx: o.vx,
+      vz: o.vz,
+      w: o.w,
+    }))
+    for (const o of otherClones) {
+      this.world.setState(o.c, o)
+    }
+
+    // 4. 重播。伺服器的狀態比本機晚大約一個來回延遲：給了 lagSteps 就重播最近那幾步實際用過的輸入
+    //    （輸入只在改變時送出，按住不放時沒有未確認的訊息，但時間差仍然存在）；
+    //    沒給時退回「每則未確認的輸入重播一步」。
     const dt = 1 / 30
-    for (const h of replayHistory) {
-      for (const o of this.otherCars.values()) {
+    const replay =
+      lagSteps === undefined
+        ? this.history
+        : this.recent.slice(Math.max(0, this.recent.length - lagSteps)).map((input) => ({ input }))
+    for (const h of replay) {
+      for (const o of otherClones) {
         o.x += o.vx * dt
         o.z += o.vz * dt
         o.heading = wrapAngle(o.heading + o.w * dt)
@@ -305,6 +328,8 @@ export class VehicleSim {
 
       this.world.setInput(this.selfCarId, effectiveInput)
       this.world.step()
+      this.recent.push(this.currentInput)
+      if (this.recent.length > 30) this.recent.shift()
     }
 
     if (this.accumulator >= 1 / 30) {
@@ -331,6 +356,7 @@ export class VehicleSim {
    */
   clearHistory(): void {
     this.history.length = 0
+    this.recent.length = 0
     this.errorOffset.x = 0
     this.errorOffset.z = 0
     this.errorOffset.heading = 0
