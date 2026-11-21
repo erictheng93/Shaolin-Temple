@@ -1,5 +1,7 @@
 /** 平常就省電：這麼久沒有操作也沒有移動，就把幀率上限降到 IDLE_FPS；一有操作立即恢復。 */
 export const IDLE_AFTER_MS = 15_000
+/** 觸控設備（手機/平板）更積極散熱：手放開 8 秒即進入 20 FPS，避免 SoC 持續積熱；一有觸控立即恢復。 */
+export const TOUCH_IDLE_AFTER_MS = 8_000
 /** 20 FPS 對緩慢的環境動畫（落葉、樹冠、香煙）仍然順，繪製量是 60 FPS 的三分之一。 */
 export const IDLE_FPS = 20
 /** 久放（掛機）：更久沒有操作也沒有移動，降到 10 FPS；遠端玩家的插值以時間計，只會變得比較不滑順，速度不變。 */
@@ -14,12 +16,15 @@ export interface FrameCapInput {
   /** 距離上次操作或移動過了多久（毫秒）。 */
   idleMs: number
   lowBattery: boolean
+  /** 是否為觸控設備（如手機），觸控設備閒置時更早降頻散熱。 */
+  touch?: boolean
 }
 
 /** 目前的幀率上限：操作中取畫質上限（低電量時再壓到 LOW_BATTERY_FPS），閒置與久放再往下取較小者。 */
-export function frameCap({ activeFps, idleMs, lowBattery }: FrameCapInput): number {
+export function frameCap({ activeFps, idleMs, lowBattery, touch }: FrameCapInput): number {
   let fps = lowBattery ? Math.min(LOW_BATTERY_FPS, activeFps) : activeFps
-  if (idleMs > IDLE_AFTER_MS) fps = Math.min(fps, IDLE_FPS)
+  const idleThreshold = touch ? TOUCH_IDLE_AFTER_MS : IDLE_AFTER_MS
+  if (idleMs > idleThreshold) fps = Math.min(fps, IDLE_FPS)
   if (idleMs > DEEP_IDLE_AFTER_MS) fps = Math.min(fps, DEEP_IDLE_FPS)
   return fps
 }
