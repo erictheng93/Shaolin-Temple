@@ -327,16 +327,21 @@ export class Vehicles {
     }
   }
 
-  update(now: number, serverNow: number, dt: number): boolean {
+  /**
+   * 推進本機的物理預測。每幀要在讀取騎士位置（riderCar）之前呼叫一次：
+   * 否則騎士用的是推進前的位置、車身用的是推進後的位置，人會相對於車前後晃。
+   */
+  advance(dt: number): void {
+    if (this.zone === 'courtyard' && this.sim !== null && this._riding !== null) this.sim.advance(dt)
+  }
+
+  update(now: number, serverNow: number, _dt: number): boolean {
     if (this.zone !== 'courtyard') {
       return false
     }
 
     let active = false
-    if (this.sim !== null && this._riding !== null) {
-      this.sim.advance(dt)
-      active = true
-    }
+    if (this.sim !== null && this._riding !== null) active = true
 
     const instances: CarInstance[] = []
 
