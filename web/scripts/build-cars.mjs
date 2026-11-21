@@ -10,8 +10,15 @@ const [out = 'public/models/cars.glb'] = process.argv.slice(2)
 // 造型須在 1.1 × 0.9 × 1.8 內（carModel.test.ts）。騎士站在車的正中央、往下沉 0.18（'ride' 片段），
 // 所以正中央半徑 0.3 內、高於 0.5 的地方不可以有東西；椅背在 z < -0.4、方向盤在 z > 0.3。
 // 造型要改就改這裡的數字，重跑 npm run build:cars 並把 CarFleet 的 CAR_MODEL_VERSION 加一。
-const m = { p: [], n: [], col: [], kind: [], indices: [] }
+const m = { p: [], n: [], col: [], kind: [], paint: [], indices: [] }
 let currentKind = 0
+/** 烤漆係數：0 用頂點色；大於 0 的部位改用每台車自己的烤漆色乘上這個係數（經典碰碰車的四種顏色）。 */
+let currentPaint = 0
+const painted = (k, fn) => {
+  currentPaint = k
+  fn()
+  currentPaint = 0
+}
 
 const norm = (v) => {
   const l = Math.hypot(...v) || 1
@@ -35,6 +42,7 @@ function vert(c, at, n, color) {
   m.n.push(...norm(n))
   m.col.push(...color)
   m.kind.push(currentKind)
+  m.paint.push(currentPaint)
 }
 function grid(base, rings, segs) {
   for (let a = 0; a < rings; a++) {
@@ -134,8 +142,9 @@ const C = {
   ink: hex('#1f1d1f'),
   wood: hex('#8a5330'),
   woodDark: hex('#4a2e1c'),
-  blue: hex('#2f6fb5'),
-  blueDark: hex('#234a7a'),
+  racing: hex('#d40000'),
+  racingDark: hex('#8f0a0a'),
+  badge: hex('#ffd21f'),
   steel: hex('#9a9a9a'),
   flame: hex('#f0691c'),
   flameTip: hex('#ffc93c'),
@@ -157,14 +166,14 @@ function steering(z, y, rimColor, rim = 0.11) {
 currentKind = 0
 {
   ring([0, 0.14, 0], 0.44, 0.77, 0.095, C.rubber, 16, 5) // 厚橡膠防撞圈
-  ellipsoid([0, 0.26, 0], [0.43, 0.2, 0.76], C.red, 12) // 車身
+  painted(1, () => ellipsoid([0, 0.26, 0], [0.43, 0.2, 0.76], C.red, 12)) // 車身（烤漆色）
   ring([0, 0.27, 0], 0.432, 0.762, 0.022, C.cream, 16, 3) // 腰線
   ellipsoid([0, 0.35, 0.48], [0.25, 0.09, 0.24], C.gold, 10) // 金色車鼻
   for (const s of [-1, 1]) {
     ellipsoid([s * 0.2, 0.31, 0.665], [0.085, 0.085, 0.06], C.cream, 8) // 車燈（眼白）
     ellipsoid([s * 0.2, 0.31, 0.715], [0.04, 0.045, 0.025], C.ink, 6) // 瞳孔
   }
-  ellipsoid([0, 0.5, -0.5], [0.3, 0.2, 0.1], C.redDark, 10) // 椅背
+  painted(0.6, () => ellipsoid([0, 0.5, -0.5], [0.3, 0.2, 0.1], C.redDark, 10)) // 椅背（烤漆色的暗色）
   ellipsoid([0, 0.66, -0.5], [0.2, 0.06, 0.09], C.cream, 8) // 頭枕
   steering(0.33, 0.52, C.ink)
   tube([0, 0.56, -0.7], 0.016, 0.016, 0.55, C.steel, 5, [0, 1, 0], false) // 車尾的桿子
@@ -197,13 +206,13 @@ currentKind = 1
 }
 
 // ========================================================
-// 車型 2：跑車（稀有）——低扁的青藍車身、白色賽車線、四顆外露的大輪子、金色尾翼
+// 車型 2：跑車（稀有）——低扁的正紅車身、車鼻一塊黃色徽章、四顆外露的大輪子、黑色尾翼（不放任何廠牌標誌）
 // ========================================================
 currentKind = 2
 {
-  ellipsoid([0, 0.2, 0], [0.36, 0.14, 0.84], C.blue, 14) // 車身
+  ellipsoid([0, 0.2, 0], [0.36, 0.14, 0.84], C.racing, 14) // 車身
   ellipsoid([0, 0.1, -0.02], [0.33, 0.09, 0.5], C.ink, 8) // 底盤：蓋住騎士的袍腳
-  ellipsoid([0, 0.215, 0.3], [0.09, 0.132, 0.5], C.cream, 8) // 賽車線
+  ellipsoid([0, 0.318, 0.42], [0.07, 0.012, 0.09], C.badge, 8) // 車鼻的黃色徽章
   box([0, 0.08, 0.74], [0.5, 0.03, 0.16], C.ink) // 前下擾流
   for (const s of [-1, 1]) {
     ellipsoid([s * 0.17, 0.22, 0.7], [0.06, 0.05, 0.05], C.goldBright, 6) // 車燈
@@ -212,13 +221,13 @@ currentKind = 2
       tube([s * 0.43, 0.165, z], 0.075, 0.075, 0.11, C.gold, 6, [1, 0, 0]) // 輪圈
     }
     tube([s * 0.26, 0.46, -0.76], 0.02, 0.02, 0.3, C.ink, 5, [0, 1, 0], false) // 尾翼支架
-    box([s * 0.45, 0.6, -0.78], [0.03, 0.13, 0.2], C.red) // 尾翼端板
+    box([s * 0.45, 0.6, -0.78], [0.03, 0.13, 0.2], C.racing) // 尾翼端板
     tube([s * 0.12, 0.16, -0.84], 0.035, 0.035, 0.08, C.steel, 6, [0, 0, 1]) // 排氣管
   }
-  box([0, 0.62, -0.78], [0.87, 0.035, 0.2], C.gold) // 尾翼
-  ring([0, 0.32, -0.02], 0.27, 0.3, 0.03, C.red, 14, 3) // 座艙的紅邊
-  ellipsoid([0, 0.4, -0.46], [0.2, 0.2, 0.2], C.blueDark, 10) // 頭枕後的整流罩
-  steering(0.31, 0.43, C.red, 0.09)
+  box([0, 0.62, -0.78], [0.87, 0.035, 0.2], C.ink) // 尾翼
+  ring([0, 0.32, -0.02], 0.27, 0.3, 0.03, C.ink, 14, 3) // 座艙的黑邊
+  ellipsoid([0, 0.4, -0.46], [0.2, 0.2, 0.2], C.racingDark, 10) // 頭枕後的整流罩
+  steering(0.31, 0.43, C.ink, 0.09)
 }
 
 // ========================================================
@@ -349,6 +358,7 @@ const attributes = {
   POSITION: accessor(new Float32Array(m.p), 'VEC3', 34962, true),
   NORMAL: accessor(new Float32Array(m.n), 'VEC3', 34962),
   COLOR_0: accessor(new Float32Array(m.col), 'VEC3', 34962),
+  _PAINT: accessor(new Float32Array(m.paint), 'SCALAR', 34962),
   _KIND: accessor(new Float32Array(m.kind), 'SCALAR', 34962),
 }
 
