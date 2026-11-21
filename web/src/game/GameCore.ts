@@ -166,6 +166,7 @@ export class GameCore {
   /** 小幅糾正還沒滑完的位移。 */
   private slideX = 0
   private slideZ = 0
+  private posTrail: Array<{ t: number; x: number; z: number }> = []
   /** 被人擋住、完全走不動的起始時間。 */
   private blockedSince: number | null = null
   /** 離開各場景前的鏡頭，回來時還原（只用於 restoreCamera 的場景）。 */
@@ -855,10 +856,17 @@ export class GameCore {
     }
 
     // 走進出入口（從外面踏入，避免出生點剛好在出入口時來回觸發）
-    // 小幅糾正：約 150 毫秒內滑到伺服器給的位置（每幀補掉剩餘位移的一部分）
+    // 小幅糾正：約 150 毫秒內補完（每幀補掉剩餘位移的一部分）。補上去的量也加到位置紀錄裡，
+    // 之後的糾正才不會把同一段差額再算一次。
     if (this.slideX !== 0 || this.slideZ !== 0) {
       const a = 1 - Math.exp(-dt / 0.05)
       const p = resolveCollisions(local.mover.x + this.slideX * a, local.mover.z + this.slideZ * a, this.moveCfg)
+      const ax = p.x - local.mover.x
+      const az = p.z - local.mover.z
+      for (const s of this.posTrail) {
+        s.x += ax
+        s.z += az
+      }
       local.mover.x = p.x
       local.mover.z = p.z
       this.slideX *= 1 - a
@@ -866,6 +874,9 @@ export class GameCore {
       if (Math.hypot(this.slideX, this.slideZ) < 0.005) this.slideX = this.slideZ = 0
       moving = true
     }
+    // 最近 1.5 秒走過的位置，糾正時用來找「伺服器算那個位置時本機在哪裡」
+    this.posTrail.push({ t: now, x: local.mover.x, z: local.mover.z })
+    while (this.posTrail.length > 2 && this.posTrail[0]!.t < now - 1500) this.posTrail.shift()
     const portal = portalAt(this.zone, local.mover.x, local.mover.z)
     if (portal) {
       if (riding) {
@@ -1073,15 +1084,33 @@ export class GameCore {
     return advanced
   }
 
-  /** 伺服器把本機玩家放到 (x, z)：差距小（被人推了一下、碰撞結果略有出入）就滑過去，差距大才瞬移。 */
+  /**
+   * 伺服器把本機玩家放到 (x, z)。這個位置是伺服器「一個來回延遲之前」算的，那之後本機已經又走了一段：
+   * 所以拿它和本機當時的位置比，只把差額補到現在的位置上（伺服器照單全收時差額是 0，完全不動）。
+   * 差額小（被人推了一下、碰撞結果略有出入）就滑過去，差額大（下車、被撞飛落地、被拒絕）才瞬移到伺服器的位置。
+   */
   private correctLocal(x: number, z: number): void {
     const cur = this.players.local.mover
-    if (Math.hypot(x - cur.x, z - cur.z) < SMOOTH_CORRECTION_M) {
-      this.slideX += x - cur.x - this.slideX
-      this.slideZ += z - cur.z - this.slideZ
+    const at = performance.now() - (this.rtt ?? 0)
+    // 走過的位置紀錄裡，時間不晚於 at 的最後一筆；沒有紀錄就用現在的位置
+    let past: { x: number; z: number } = cur
+    for (let i = this.posTrail.length - 1; i >= 0; i--) {
+      if (this.posTrail[i]!.t <= at) {
+        past = this.posTrail[i]!
+        break
+      }
+      past = this.posTrail[i]!
+    }
+    const dx = x - past.x
+    const dz = z - past.z
+    if (Math.hypot(dx, dz) < SMOOTH_CORRECTION_M) {
+      // 已經在補的位移也算在「當時的位置」裡，所以直接換成新的差額
+      this.slideX = dx
+      this.slideZ = dz
       this.wake()
       return
     }
+    this.posTrail.length = 0
     this.slideX = this.slideZ = 0
     const pos = resolveCollisions(x, z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, target: null })
