@@ -23,6 +23,7 @@ import { IncenseSystem } from './render/IncenseSystem'
 import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
 import { CarFleet } from './render/CarFleet'
+import { BOOTH_NPC } from './world/vehicles'
 import { Vehicles, type RideUi } from './vehicles/Vehicles'
 import { VehicleAudio } from './vehicles/sfx'
 import { handleKnock, type KnockFlight } from './vehicles/knock'
@@ -172,6 +173,8 @@ export class GameCore {
   /** 鐘亭的撞木（只在庭院顯示）。 */
   private striker: BellStriker
   readonly fleet: CarFleet
+  private npcNod: () => void = () => {}
+  private claimUi: { open: boolean; pending: boolean; result: number | null; error: string | null } = { open: false, pending: false, result: null, error: null }
   readonly vehicles: Vehicles
   private lastPortalToastAt = -Infinity
   private fading = false
@@ -333,7 +336,10 @@ export class GameCore {
 
     this.net = new NetworkClient({ url: opts.wsUrl, name: '', outfit: this.players.local.outfit })
     this.fleet = new CarFleet(this.renderer.scene, this.tracker)
+    // 模型到齊前是替代用的方塊；載入完成後重繪一次。
     void this.fleet.load().then(() => this.wake())
+    // 領車 NPC：站在檔口櫃台後的凳子上（櫃台頂 1.15 公尺，不墊高只看得到頭頂）。
+    this.npcNod = this.players.addNpc({ name: t('ride.npcName'), zone: 'courtyard', ...BOOTH_NPC })
     this.vehicles = new Vehicles({
       fleet: this.fleet,
       net: this.net,
@@ -346,7 +352,10 @@ export class GameCore {
     }
     this.net.events.on('status', () => this.pushUi(true))
     this.net.events.on('message', (m) => this.onServerMessage(m))
-    this.net.events.on('rtt', (ms) => (this.rtt = ms))
+    this.net.events.on('rtt', (ms) => {
+      this.rtt = ms
+      this.vehicles.onRtt(ms)
+    })
     this.net.events.on('sessionExpired', () => {
       // 權杖失效：清掉本機權杖，照常以訪客身份遊玩（權杖本身不出現在提示或 console）
       clearAuth()
@@ -446,16 +455,30 @@ export class GameCore {
     this.wake()
   }
 
-  /** 切換上下車。 */
+  /** E 鍵與上下車按鈕：騎乘中下車；旁邊有空車就上車；否則在領車 NPC 前開關領車視窗。 */
   toggleRide(): void {
     if (this.fading || performance.now() < this.players.local.lockedUntil) return
     const local = this.players.local.mover
+    const ride = this.vehicles.ui(local.x, local.z)
+    if (!ride.riding && !ride.nearCar && ride.booth) {
+      this.setClaimOpen(!this.claimUi.open)
+      return
+    }
     this.vehicles.toggleRide(local.x, local.z)
   }
 
-  /** 向檔口領取碰碰車。 */
-  claimCar(kind: number): void {
-    this.vehicles.claim(kind)
+  /** 開關領車視窗。 */
+  setClaimOpen(open: boolean): void {
+    this.claimUi = { open, pending: false, result: null, error: null }
+    this.pushUi(true)
+  }
+
+  /** 在領車視窗裡按「抽一台」：車種由伺服器隨機分配。 */
+  claimCar(): void {
+    if (this.claimUi.pending) return
+    this.claimUi = { open: true, pending: true, result: null, error: null }
+    this.vehicles.claim()
+    this.pushUi(true)
   }
 
   /**
@@ -750,6 +773,8 @@ export class GameCore {
       const dirX = Math.cos(yaw) * k.x + Math.sin(yaw) * k.y
       const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
       this.vehicles.setStick(dirX, dirZ)
+      // 先推進物理再讀騎士位置，騎士與車身才是同一個時間點。
+      this.vehicles.advance(dt, now)
 
       const rider = this.vehicles.riderCar(this.selfId ?? '')
       if (rider) {
@@ -832,11 +857,12 @@ export class GameCore {
     }
     this.inPortal = portal !== null && !riding && this.knockFlight === null
 
+    // 車先算好這一幀的位置，騎在上面的人（players.update 會讀 riderCar）才不會比車晚一幀。
+    const serverNow = now + this.serverOffset
+    const vehiclesActive = this.vehicles.update(now, serverNow, dt)
     const playersActive = this.players.update(now, dt, t, (id) => this.vehicles.riderCar(id))
     this.incense.update(now, t)
     const striking = this.zone === 'courtyard' && this.striker.update(now)
-    const serverNow = now + this.serverOffset
-    const vehiclesActive = this.vehicles.update(now, serverNow, dt)
     if (this.zone === 'hall') this.hall?.update(t, dt)
     else this.temple.update(t, dt)
     // 殿內越靠近神龕（z 從 1 到 -3.5），鏡頭注視點越往上抬，像抬頭仰望神像。
@@ -1112,6 +1138,11 @@ export class GameCore {
         break
       case 'car':
         this.vehicles.onCar(m)
+        // 自己剛領到車：視窗顯示抽到的車種，NPC 點頭。
+        if (this.claimUi.pending && m.driver !== null && m.driver === this.selfId) {
+          this.claimUi = { open: true, pending: false, result: m.kind, error: null }
+          this.npcNod()
+        }
         this.pushUi(true)
         this.wake()
         break
@@ -1134,6 +1165,12 @@ export class GameCore {
         this.wake()
         break
       case 'error':
+        if (this.claimUi.pending) {
+          // 領車被拒絕：原因顯示在視窗裡，不另外跳提示。
+          this.claimUi = { open: true, pending: false, result: null, error: SERVER_ERRORS.get(m.code) ?? 'server.error' }
+          this.pushUi(true)
+          break
+        }
         this.toast(SERVER_ERRORS.get(m.code) ?? 'server.error')
         break
     }
@@ -1287,7 +1324,10 @@ export class GameCore {
     }
 
     const curRide = this.vehicles.ui(this.players.local.mover.x, this.players.local.mover.z)
-    const curRideKey = `${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}`
+    // 走離 NPC 就關掉領車視窗（剛抽到車、正在看結果時不關）。
+    if (this.claimUi.open && !curRide.booth && this.claimUi.result === null) this.claimUi = { open: false, pending: false, result: null, error: null }
+    curRide.claim = this.claimUi
+    const curRideKey = `${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}:${this.claimUi.open}:${this.claimUi.pending}:${this.claimUi.result}:${this.claimUi.error}`
 
     let dirty = force
     if (!dirty) {

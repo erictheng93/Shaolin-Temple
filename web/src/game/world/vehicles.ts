@@ -10,6 +10,8 @@ export interface VehicleParams {
     id: string
     rarity: 'common' | 'rare' | 'mythic'
     count: number
+    /** 抽車的權重（伺服器隨機分配時用）。 */
+    weight?: number
   }>
   car: {
     halfWidth: number
@@ -175,3 +177,6 @@ export function nearestEmptyCar(cars: Iterable<CarView>, x: number, z: number): 
 export function nearBooth(x: number, z: number): boolean {
   return Math.hypot(x - VEHICLES.booth.counter.x, z - VEHICLES.booth.counter.z) <= VEHICLES.ride.boothRadius
 }
+
+/** 領車 NPC：站在檔口櫃台後、面朝東。y 是腳底高度（墊一張凳子，胸口以上露出櫃台）。衣裝是行腳僧（戴斗笠，好認）。 */
+export const BOOTH_NPC = { x: -13.45, y: 0.75, z: 9.25, heading: Math.PI / 2, outfit: 6 }

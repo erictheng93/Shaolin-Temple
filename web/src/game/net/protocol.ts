@@ -139,7 +139,7 @@ export type ClientMessage =
   /** 更換衣裝（不需 reqId／ack）：伺服器驗證、限速（同聊天）、與目前相同不廣播，否則廣播 outfit 給同房所有人（含本人）。 */
   | { t: 'outfit'; outfit: number }
   /** 領車：指定車種（0..KIND_COUNT-1），需在車棚範圍內。 */
-  | { t: 'claim'; kind: number }
+  | { t: 'claim' }
   /** 上車（帶 car: 0..15）或下車（缺少 car 或 null）。 */
   | { t: 'ride'; car?: number | null }
   /** 碰碰車搖桿輸入：dir 角度量化（0..255，一格 2π/256）、mag 搖桿推量量化（0..255）、seq 序號（0..65535）。 */

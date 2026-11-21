@@ -85,3 +85,17 @@ export function drive(m: CarMotion, input: DriveInput, p: CarParams): DriveOutpu
     lateralKeep,
   }
 }
+
+/** 上行 `drive` 的線上值：dir 一格 2π/256（0..255）、mag 0..255。前端、mock 與伺服器都用這個換算。 */
+export function quantizeDrive(dir: number, mag: number): { dir: number; mag: number } {
+  const turn = Math.PI * 2
+  return {
+    dir: Math.round((((dir % turn) + turn) % turn) / turn * 256) & 0xff,
+    mag: Math.round(Math.max(0, Math.min(1, mag)) * 255) & 0xff,
+  }
+}
+
+/** 線上值換回模擬用的輸入；預測必須用這個（伺服器看到的值），不是搖桿的原始值。 */
+export function dequantizeDrive(qDir: number, qMag: number): DriveInput {
+  return { dir: wrapAngle((qDir & 0xff) * ((Math.PI * 2) / 256)), mag: (qMag & 0xff) / 255 }
+}
