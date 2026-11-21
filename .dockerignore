@@ -1,0 +1,10 @@
+# 映像的建置情境是專案根目錄（images.yml 的 context: .），忽略清單要放在這裡才會生效。
+.git
+**/node_modules
+**/target
+web/dist
+**/.env*
+!**/.env.example
+web/.bake
+web/.statues-src
+web/assets

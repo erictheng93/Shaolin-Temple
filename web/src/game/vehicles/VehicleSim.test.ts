@@ -137,6 +137,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
 
     for (let i = 1; i <= 10; i++) {
       sim.pushInput(i, { dir: 0, mag: 1 })
+      sim.advance(1 / 30)
     }
 
     expect(sim.history.length).toBe(10)
@@ -164,6 +165,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     const seqs = [65530, 65534, 65535, 0, 1, 5, 6, 10]
     for (const seq of seqs) {
       sim.pushInput(seq, { dir: 0, mag: 1 })
+      sim.advance(1 / 30)
     }
 
     expect(sim.history.length).toBe(8)
@@ -222,6 +224,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     sim.setCars([makeCar(0, 0, 0, 0)], 0)
 
     sim.pushInput(1, { dir: 0, mag: 1 })
+    sim.advance(1 / 30)
     sim.reconcile(0, makeCar(0, 0.5, 0, 0), [])
 
     expect(sim.history.length).toBe(1)
