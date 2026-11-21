@@ -33,7 +33,8 @@ const entered = ref(false)
 const entering = ref(false)
 const settingsOpen = ref(false)
 
-// 觸控裝置與螢幕方向：開車時直向會提示轉橫向；橫向開車時移動輪盤放右下角、右側按鈕換到左邊。
+// 觸控裝置與螢幕方向：橫向時移動輪盤一律在右下角、右側按鈕換到左邊（走路與開車相同，上車時手指不用換位置）；
+// 直向時輪盤在左下角，開車會提示轉橫向。
 const coarseMq = window.matchMedia('(any-pointer: coarse)')
 const landscapeMq = window.matchMedia('(orientation: landscape)')
 const touch = ref(coarseMq.matches)
@@ -48,7 +49,7 @@ onBeforeUnmount(() => {
   coarseMq.removeEventListener('change', onMq)
   landscapeMq.removeEventListener('change', onMq)
 })
-const driveRight = computed(() => touch.value && landscape.value && ui.value?.ride?.riding === true)
+const driveRight = computed(() => touch.value && landscape.value)
 const fatal = ref(false)
 const toasts = ref<Array<{ id: number; text: string }>>([])
 let toastId = 0
