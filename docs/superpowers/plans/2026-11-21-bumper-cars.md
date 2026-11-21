@@ -215,7 +215,7 @@ impl VehicleWorld {
   - `idle_world_falls_asleep`：生一台車不給輸入，步進 120 次 → `any_awake() == false`。
   - `walker_pushes_an_empty_car_but_not_an_occupied_one`：車在 `(0, 8)`；步行者由 `(0, 6)` 以每步 0.1 公尺走到 `(0, 8)`。空車時車的 `z` 增加超過 0.5；`set_occupied(c, true)` 時車位移小於 0.01。
   - `spawn_returns_none_when_sixteen_exist`。
-  - `drive_script_matches_fixture`：讀 `server/tests/drive-script.json` 的 `script`（每步一筆 `{dir, mag}`，90 步：直行 30 步、右轉 30 步、對著東側邊界牆全速 30 步；起點 `(0, 8)`、朝向 0），模擬後每 10 步的 `{x, z, heading}` 與檔案的 `expected` 相差小於 `1e-4`。設環境變數 `UPDATE_FIXTURES=1` 時改為把結果寫回檔案。
+  - `drive_script_matches_fixture`：讀 `server/tests/drive-script.json` 的 `script`（每步一筆 `{dir, mag}`，90 步：直行 30 步、右轉 30 步、對著東側邊界牆全速 30 步；起點 `(0, 8)`、朝向 0），模擬後每 10 步的 `{x, z, heading}` 與檔案的 `expected` 相差小於 `1e-3`（2026-11-21 稽核後由 `1e-4` 放寬：固定資料在 Linux 產生，Windows 上撞牆後的第 90 步差 1.5e-4，是平台間浮點數差異）。設環境變數 `UPDATE_FIXTURES=1` 時改為把結果寫回檔案。
 - [ ] **步驟 2：** `cargo test vehicles::world` 失敗。
 - [ ] **步驟 3：實作。** 碰撞群組：車之間、車與靜態一律碰撞；步行者（運動學、半徑 0.35 的球）只與未被佔用的車碰撞。
 - [ ] **步驟 4：** 先以 `UPDATE_FIXTURES=1 cargo test drive_script` 產生 `expected`，再不帶環境變數執行 `cargo test vehicles::world`，全數通過。
@@ -304,7 +304,7 @@ impl Room {
 
 **規則（數值皆取自 `params()`）：**
 
-- `run_room` 的 `select!` 加一個 `interval(1/30 s)`，`MissedTickBehavior::Burst` 並自行限制每次醒來最多補 3 步；`cars` 為空或（無人騎乘且 `!vehicles.any_awake()`）時不呼叫 `step()`。
+- `run_room` 的 `select!` 加一個 `interval(1/30 s)`，`MissedTickBehavior::Burst` 並自行限制每次醒來最多補 3 步；`cars` 為空時不呼叫 `step()`；有車時，只有「無人騎乘、`!vehicles.any_awake()`、而且沒有任何庭院步行者（即會被 `set_walker` 放進世界的玩家）距任何一台車 `distance_to_car ≤ 1.0` 公尺」三者同時成立才不步進。（2026-11-21 稽核後修正：原本沒有步行者這一條，休眠的空車因此推不動。）
 - `claim`：須在庭院、未騎乘、未撞飛、距 `booth.counter` ≤ `boothRadius`；冷卻內回 `claim_cooldown`；該車種已達 `count` 回 `car_unavailable`；依序找第一個 `bay_is_free` 的停車位，都沒有回 `booth_crowded`；成功則生車、玩家上車、廣播 `car`。
 - `ride(Some(c))`：須在庭院、未騎乘、未撞飛、車存在且無人、`distance_to_car ≤ mountRadius`，否則回 `car_unavailable`。成功廣播 `car`（`driver` 設為玩家、`fadeAt` 為 null）。
 - `ride(None)`／`dismount`：落點依序試車的左、右、後方 `dismountOffset` 公尺，取第一個在邊界內且不在加邊障礙物內的；都不行就用車的位置。玩家座標設為落點，對本人送一筆 `sync`；車 `set_occupied(false)`、清除輸入、`empty_since = now`，廣播 `car`（`fadeAt = 伺服器毫秒 + idleMs`）。
@@ -332,7 +332,8 @@ impl Room {
   - `idle_rider_is_dismounted_after_60s_even_while_sending_zero_drive`
   - `empty_car_is_removed_after_60s_and_stock_returns`：推進 60 s 後收到 `carGone`，再領同一車種成功。
   - `remounting_during_fade_cancels_it`：第 50 秒上車，廣播的 `fadeAt == null`，第 61 秒車仍在。
-  - `physics_does_not_step_when_no_car_is_awake`：`physics_steps` 在車休眠後不再增加。
+  - `physics_does_not_step_when_no_car_is_awake`：`physics_steps` 在車休眠後不再增加（步行者都離車超過 1 公尺）。
+  - `walker_can_push_a_sleeping_empty_car`：車休眠且無人騎乘後，步行者朝車走過去 → `physics_steps` 重新增加、車的位置移動超過 0.3 公尺；步行者走開、車再次休眠後又停止步進。
   - `entering_the_courtyard_receives_every_car_including_sleeping_ones`
   - `cars_frames_only_reach_courtyard_players_but_car_events_reach_the_hall`
   - `welcome_and_resume_carry_cars_and_resumed_player_is_on_foot`
