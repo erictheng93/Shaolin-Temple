@@ -104,9 +104,9 @@ describe('Vehicles 子系統', () => {
   })
 
   it('新狀態與畫面有落差時滑過去，不會跳', () => {
-    vehicles.onCar({ c: 0, kind: 0, driver: null, x: 0, z: 0, heading: 0, fadeAt: null })
+    vehicles.onCar({ c: 0, kind: 0, driver: null, x: 0, z: 9, heading: 0, fadeAt: null })
     vehicles.update(1000, 1000, 0)
-    vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 2, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
+    vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 2, z: 9, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
 
     vehicles.update(1016, 1016, 0.016)
     expect(lastShown().x).toBeGreaterThan(0)
@@ -131,7 +131,8 @@ describe('Vehicles 子系統', () => {
     vehicles.update(1000, 1000, 0)
     vehicles.onCars(0, [moving(18, 8)], 1000)
     vehicles.update(1200, 1200, 0.2)
-    expect(lastShown().x).toBeLessThanOrEqual(19 - VEHICLES.car.halfWidth)
+    // 車頭朝 +x：車身在 x 方向佔半個車長
+    expect(lastShown().x).toBeLessThanOrEqual(19 - VEHICLES.car.halfLength + 1e-9)
   })
 
   it('淡出的不透明度（fadeAt 前為 1、過一半為 0.5、結束為 0）', () => {
