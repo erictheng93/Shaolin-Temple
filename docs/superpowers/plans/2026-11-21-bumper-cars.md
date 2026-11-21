@@ -1,6 +1,6 @@
 # 庭院碰碰車 實作計畫
 
-> **執行方式：** 由需求方（人）依任務順序實作；Claude 不寫產品程式，只在每一段（PR）完成後依「稽核方式」檢查。步驟用 `- [ ]` 勾選追蹤。
+> **執行方式：** 2026-11-21 起後端由需求方（人）實作、Claude 稽核，前端由 Claude 實作（見文末「分工」）；每一段（PR）完成後依「稽核方式」檢查。步驟用 `- [ ]` 勾選追蹤。
 
 **目標：** 庭院內可領車、開車、撞車、撞飛行人的碰碰車玩法，伺服器以 rapier3d 權威模擬、前端以 Rapier WASM 預測自己的車。
 
@@ -707,7 +707,79 @@ export const BOOTH_NPC: { x: number; z: number; heading: number }
 
 **稽核方式：** 跑前端三個檢查與 `cargo test`；看擷圖比對 NPC 與鋪面是否同一種 Q 版風格、NPC 不是神明形象；記錄 draw call。
 
-### 任務 18：領車時機與稀有度（待決定後補）
+### 分工（2026-11-21 起）
+
+**後端（`server/`、`shared/vehicles.json`、`server/tests/` 的固定資料）由使用者實作，Claude 稽核；前端（`web/`，含 mock 伺服器）由 Claude 實作。** 協定變更仍須在同一個 PR：使用者先在 `feat/bumper-cars-server` 推後端與固定資料，Claude 接著在同一個分支補 `protocol.ts`、mock 與前端測試。任務 9–15、17、19 歸 Claude；任務 2–8、18 歸使用者。
+
+### 任務 18：廟會時段、遊戲區免撞與第 1 段稽核修正（後端，使用者）
+
+**分支：** `feat/bumper-cars-server`（PR #37）。**檔案：** `shared/vehicles.json`、`server/src/vehicles/params.rs`、`server/src/vehicles/world.rs`、`server/src/room.rs`、`server/src/room/vehicles.rs`、`server/src/room/vehicle_tests.rs`、`server/src/main.rs`（或讀環境變數處）、`server/src/bin/loadtest.rs`、`server/tests/protocol-v5.json`、`docs/LOAD_TEST_2026-11-21_VEHICLES.md`、`docs/BACKEND_TASKS.md`；新增專案根目錄的 `.dockerignore`。
+
+**`shared/vehicles.json` 新增：**
+
+```json
+"session": { "periodMs": 3600000, "openMs": 1800000, "offsetMs": 0 },
+"booth": { "...既有欄位": "不動",
+  "zone": { "minX": -18.5, "maxX": -9.3, "minZ": 6.0, "maxZ": 13.2 },
+  "npc": { "x": -12.8, "z": 9.25, "heading": 1.5708 } }
+```
+
+**介面（產出）：**
+
+```rust
+// params.rs
+pub struct Session { pub period_ms: u64, pub open_ms: u64, pub offset_ms: u64 }
+pub fn session_open(server_ms: f64, s: &Session) -> bool;   // (server_ms - offset) mod period < open
+// room.rs
+pub enum SessionClock { Wall, Fixed { base_ms: f64 }, AlwaysOpen }   // RoomConfig.session_clock，預設 Wall
+impl Room { fn session_ms(&self, now: Instant) -> f64; }    // Wall: now_ms()；Fixed: base_ms + 房間建立至 now 的毫秒
+```
+
+**A. 廟會時段規則**
+
+- `claim`、`ride(Some)` 在 `!session_open` 時回 `error session_closed`（檢查放在其他條件之前；`ride(None)` 下車不受影響）。
+- 每個 tick（10 Hz 的那個，不是物理步；沒有車在跑時物理不步進）偵測「上一個 tick 開放、這一個 tick 關閉」：對所有騎士呼叫 `dismount`；之後把每台車的 `empty_since` 設成讓它在 `fadeMs` 後到期（即 `now − idleMs`）、`fade_at = 結束時刻 + fadeMs`，各廣播一則 `car`。
+- `SessionClock::AlwaysOpen` 給負載工具與既有測試：環境變數 `VEHICLE_SESSION=always` 時使用；既有的車輛測試一律改用 `Fixed { base_ms: 0.0 }`（開場時刻），否則在真實時間的關閉半小時內會失敗。
+- 固定資料 `server` 區加一筆 `{"t":"error","code":"session_closed","message":"..."}`。
+
+**B. 遊戲區免撞**：撞飛判定跳過位置在 `params().booth.zone` 內的玩家（含邊界）。
+
+**C. 第 1 段稽核修正**（2026-11-21 稽核 PR #37 的結果）
+
+1. `drive_script_matches_fixture` 容許值改 `1e-3`（任務 4 已改）。
+2. `should_physics_step` 加步行者條件（任務 6 已改）：有庭院步行者距任何一台車 ≤ 1.0 公尺時也要步進。
+3. 補步上限：現在以 `now == burst_at` 判斷同一次醒來，真實時間下幾乎不會相等。改成 `MissedTickBehavior::Skip` 加上「每次醒來依落後時間算出要補幾步，最多 `maxCatchUpSteps`」，或其他在真實時間下成立的做法。
+4. `bumped` 在兩次廣播之間累積：任何一步撞到，下一則 `cars` 就要帶旗標，廣播後清除。
+5. 專案根目錄加 `.dockerignore`（合併 `web/.dockerignore` 與 `server/.dockerignore` 的內容並加上路徑前綴：`web/node_modules`、`web/dist`、`web/.env*`、`!web/.env.example`、`web/.bake`、`web/.statues-src`、`web/assets`、`server/target`、`.git`），刪掉已不被讀取的兩個舊檔。
+6. 刪掉 `RoomCommand` 三個變體上多餘的 `#[allow(dead_code)]`；還原 `rate_limit.rs` 被誤刪的註解「連續超出多久就關閉連線」。
+7. 重做負載報告：負載工具的司機要平均分到每個房間（例如每個房間的前 `drivers / 房間數` 條連線），報告須附 `temple_physics_step_seconds_count`，並說明它與「房間數 × 30 Hz × 秒數」是否相符；修正報告中 `Rapier2d`、`cars` 幀格式（3 bytes 標頭＋每台 12 bytes）與 Rust 版本的敘述，用專案的工具鏈（1.95）量。
+
+- [ ] **步驟 1：寫測試**（名稱照下列；任務 6 原訂而目前缺少或較弱的測試一併補上）
+  - `params::tests::session_open_follows_period_and_open_window`：毫秒 0、1_799_999 開放；1_800_000、3_599_999 關閉；3_600_000 開放。
+  - `params::tests::zone_contains_booth_counter_bays_and_npc`（同任務 17）。
+  - `claim_and_ride_are_refused_with_session_closed_outside_the_window`
+  - `closing_the_session_dismounts_riders_and_fades_every_car`：`Fixed { base_ms: 0.0 }` 下推進到 30 分鐘 → 騎士收到 `driver: null` 的 `car` 且 `fadeAt == 1_800_000 + 15_000`（±一個 tick）；再 15 秒後收到 `carGone`；之後 `claim` 回 `session_closed`。
+  - `players_inside_the_game_zone_are_not_knocked`：同一台快車，區內的人不被撞、區外的人被撞。
+  - `walker_can_push_a_sleeping_empty_car`（任務 6 已列）。
+  - `a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame`
+  - `catch_up_is_capped_at_three_steps_after_a_long_stall`：以不暫停時間或可注入時鐘的方式證明落後 1 秒後只補 3 步。
+  - 任務 6 缺的六個：`two_players_mounting_the_same_car_only_one_wins`（同一個 tick）、`rider_is_absent_from_moves_and_their_move_messages_are_ignored`、`zone_change_while_riding_is_refused_with_dismount_first`、`dismount_falls_back_to_the_car_position_when_all_sides_are_blocked`、`entering_the_courtyard_receives_every_car_including_sleeping_ones`、車輛事件會送到殿內（併入 `cars_frames_only_reach_courtyard_players_but_car_events_reach_the_hall`）。
+  - 任務 6 較弱的四個補上斷言：下車落點距車 `1.1 ± 0.01` 且 `fadeAt == now_ms + 45000`；60 秒自動下車期間持續送 `mag = 0` 的 `drive`；空車移除後同車種可再領；`resume` 的 `welcome` 帶 `cars`。
+- [ ] **步驟 2–4：** 失敗 → 實作 → `cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test` 通過（Linux 與 Windows 都要過）。
+- [ ] **步驟 5：** 重跑負載量測並更新報告；`docs/BACKEND_TASKS.md` 補上廟會時段、免撞區與 `session_closed`。
+- [ ] **步驟 6：提交並推送**，通知 Claude 稽核。
+
+**稽核方式：** 我在 Windows 跑三個 cargo 檢查；逐條對照上列測試名稱與斷言；讀 `should_physics_step`、補步邏輯與時段結束的處理；核對負載報告的步數是否與房間數相符；`docker build -f web/Dockerfile .` 的建置情境不含 `node_modules` 與 `.env*`（以 CI 紀錄或本機建置確認）。
+
+### 任務 19：廟會倒數、領車面板與 mock 的時段（前端，Claude）
+
+**檔案：** `web/src/game/net/protocol.ts`、`web/scripts/mock-server.mjs`、`web/src/game/world/vehicles.ts`、`web/src/game/vehicles/Vehicles.ts`、`web/src/ui/RidePanel.vue`、`web/src/i18n/*.ts` 與對應測試。
+
+- `sessionState(serverMs)`：回傳 `{ open, msToChange }`，與 Rust 的 `session_open` 用同一組邊界值測試。
+- HUD 顯示倒數（「廟會 mm:ss 後開始」／「廟會進行中，剩 mm:ss」），只在庭院顯示；NPC 名牌下方同步顯示。倒數每秒更新一次，經 `UiState` 的低頻摘要，不進每幀。
+- 關閉時領車面板與上車按鈕變暗，按下提示 `session_closed` 的翻譯；`SERVER_ERRORS` 與四語字典補 `session_closed`。
+- mock 伺服器實作同樣的時段、時段結束的下車與淡出、遊戲區免撞；`MOCK_SESSION=always` 可強制開放。
+- 測試：邊界值、時段結束時本機騎乘狀態清除、關閉時面板停用、四語字典齊全。
 
 ---
 
