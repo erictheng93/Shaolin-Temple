@@ -24,7 +24,8 @@ use std::{
 };
 use temple_server::{
     protocol::{
-        BatchKind, FRAME_ACTION, OUTFIT_COUNT, PROTOCOL_VERSION, decode_action, decode_batch,
+        BatchKind, FRAME_ACTION, FRAME_CARS, OUTFIT_COUNT, PROTOCOL_VERSION, decode_action,
+        decode_batch, decode_cars,
     },
     world::ACTIONS,
 };
@@ -51,6 +52,7 @@ struct Args {
     url: String,
     origin: String,
     connections: usize,
+    drivers: usize,
     moving_ratio: f64,
     seconds: u64,
     ramp_ms: u64,
@@ -62,6 +64,7 @@ fn parse_args() -> Result<Args, String> {
         url: "ws://127.0.0.1:8080/ws".into(),
         origin: "http://localhost:5173".into(),
         connections: 50,
+        drivers: 0,
         moving_ratio: 0.5,
         seconds: 60,
         ramp_ms: 5,
@@ -78,6 +81,7 @@ fn parse_args() -> Result<Args, String> {
             "--url" => args.url = value,
             "--origin" => args.origin = value,
             "--connections" => args.connections = num(&value)? as _,
+            "--drivers" => args.drivers = num(&value)? as _,
             "--moving-ratio" => args.moving_ratio = num(&value)? as _,
             "--seconds" => args.seconds = num(&value)? as _,
             "--ramp-ms" => args.ramp_ms = num(&value)? as _,
@@ -85,21 +89,32 @@ fn parse_args() -> Result<Args, String> {
             _ => return Err(format!("不認得的參數 {flag}")),
         }
     }
-    if args.connections == 0 || args.seconds == 0 || !(0.0..=1.0).contains(&args.moving_ratio) {
-        return Err("connections、seconds 須大於 0，moving-ratio 須在 0～1".into());
+    if args.connections == 0
+        || args.seconds == 0
+        || !(0.0..=1.0).contains(&args.moving_ratio)
+        || args.drivers > args.connections
+    {
+        return Err(
+            "connections、seconds 須大於 0，moving-ratio 須在 0～1，drivers 須 ≤ connections"
+                .into(),
+        );
     }
     Ok(args)
 }
 
 /// 依訊息種類分開統計接收量，順序對應 `kind_of`。
-const KINDS: [&str; 11] = [
-    "moves", "sync", "action", "ack", "pong", "join", "leave", "zone", "welcome", "error", "other",
+const KINDS: [&str; 15] = [
+    "moves", "sync", "action", "ack", "pong", "join", "leave", "zone", "welcome", "error", "cars",
+    "car", "carGone", "knock", "other",
 ];
 const OTHER: usize = KINDS.len() - 1;
 fn kind_of(message: &Message) -> usize {
     match message {
         Message::Binary(raw) if raw.first() == Some(&FRAME_ACTION) => {
             decode_action(raw).map_or(OTHER, |_| 2)
+        }
+        Message::Binary(raw) if raw.first() == Some(&FRAME_CARS) => {
+            decode_cars(raw).map_or(OTHER, |_| 10)
         }
         Message::Binary(raw) => match decode_batch(raw) {
             Ok((BatchKind::Moves, _)) => 0,
@@ -110,8 +125,8 @@ fn kind_of(message: &Message) -> usize {
         Message::Text(raw) => raw
             .strip_prefix(r#"{"t":""#)
             .and_then(|rest| rest.split('"').next())
-            .and_then(|t| KINDS[2..OTHER].iter().position(|k| *k == t))
-            .map_or(OTHER, |i| i + 2),
+            .and_then(|t| KINDS[0..OTHER].iter().position(|k| *k == t))
+            .unwrap_or(OTHER),
         _ => OTHER,
     }
 }
@@ -170,10 +185,15 @@ impl Stats {
     }
 }
 
+struct Intervals {
+    moves: Vec<u32>,
+    cars: Vec<u32>,
+}
+
 enum Joined {
     Failed(String),
-    /// 回傳量測期間收到的 `moves` 間隔（微秒）。
-    Done(Vec<u32>),
+    /// 回傳量測期間收到的 `moves` 與 `cars` 間隔（微秒）。
+    Done(Intervals),
 }
 
 /// 隨機走動：以固定速度前進，碰到邊界就轉向，偶爾隨機轉彎。
@@ -252,6 +272,20 @@ async fn player(
     if welcome["t"] != "welcome" {
         return Joined::Failed(format!("welcome: got {}", welcome["t"]));
     }
+    let my_id = welcome["selfId"].as_str().unwrap_or("").to_string();
+    let is_driver = (index * args.drivers / args.connections)
+        != ((index + 1) * args.drivers / args.connections);
+    enum DriverPhase {
+        Walking,
+        Claiming { kind: u8, retry_at: Instant },
+        Driving { seq: u16 },
+    }
+    let mut driver_phase = if is_driver {
+        Some(DriverPhase::Walking)
+    } else {
+        None
+    };
+
     let me = welcome["players"]
         .as_array()
         .and_then(|list| list.iter().find(|p| p["id"] == welcome["selfId"]));
@@ -275,23 +309,68 @@ async fn player(
         period,
     );
     move_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut driver_timer = interval(Duration::from_millis(66));
+    driver_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut ping_timer = interval_at(start + PING_EVERY.mul_f64(rand::random()), PING_EVERY);
     let mut action_timer = interval(Duration::from_millis(500));
     let mut next_action = Instant::now() + Duration::from_secs_f64(rand::random_range(5.0..25.0));
     let mut req = 0u64;
-    let mut intervals = Vec::new();
+    let mut moves_intervals = Vec::new();
+    let mut cars_intervals = Vec::new();
     let mut last_moves: Option<Instant> = None;
+    let mut last_cars: Option<Instant> = None;
     loop {
         let outgoing = tokio::select! {
             _ = stop.changed() => break,
-            _ = move_timer.tick(), if moving => {
+            _ = driver_timer.tick(), if is_driver => {
+                if let Some(phase) = &mut driver_phase {
+                    match phase {
+                        DriverPhase::Walking => {
+                            let dx = -11.5 - walker.x;
+                            let dz = 9.25 - walker.z;
+                            let dist = dx.hypot(dz);
+                            if dist > 1.0 {
+                                let step = dist.min(0.25);
+                                walker.x += (dx / dist) * step;
+                                walker.z += (dz / dist) * step;
+                                walker.heading = dx.atan2(dz);
+                                walker.seq += 1;
+                                Some(json!({"t": "move", "x": round2(walker.x), "z": round2(walker.z), "heading": round2(walker.heading), "seq": walker.seq}).to_string())
+                            } else {
+                                let kind = (index % 4) as u8;
+                                *phase = DriverPhase::Claiming {
+                                    kind,
+                                    retry_at: Instant::now() + Duration::from_millis(1000),
+                                };
+                                Some(json!({"t": "claim", "kind": kind}).to_string())
+                            }
+                        }
+                        DriverPhase::Claiming { kind, retry_at } => {
+                            if Instant::now() >= *retry_at {
+                                *retry_at = Instant::now() + Duration::from_millis(500);
+                                Some(json!({"t": "claim", "kind": *kind}).to_string())
+                            } else {
+                                None
+                            }
+                        }
+                        DriverPhase::Driving { seq } => {
+                            *seq = seq.wrapping_add(1);
+                            let dir = rand::random::<u8>();
+                            Some(json!({"t": "drive", "seq": *seq, "dir": dir, "mag": 255}).to_string())
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            _ = move_timer.tick(), if !is_driver && moving => {
                 let (x, z, heading) = walker.step();
                 Some(json!({"t": "move", "x": x, "z": z, "heading": heading, "seq": walker.seq}).to_string())
             }
             _ = ping_timer.tick() => {
                 Some(json!({"t": "ping", "ts": start.elapsed().as_secs_f64() * 1000.0}).to_string())
             }
-            _ = action_timer.tick() => {
+            _ = action_timer.tick(), if !is_driver => {
                 if Instant::now() >= next_action {
                     next_action = Instant::now() + Duration::from_secs_f64(rand::random_range(10.0..25.0));
                     req += 1;
@@ -307,8 +386,23 @@ async fn player(
                         let len = message.len();
                         let kind = kind_of(&message);
                         let is_moves = kind == 0;
+                        let is_cars = kind == 10;
                         if matches!(message, Message::Binary(_)) && kind == OTHER {
                             stats.invalid_frames.fetch_add(1, Relaxed);
+                        }
+                        if let Message::Text(raw) = &message
+                            && let Some(DriverPhase::Claiming { kind, retry_at }) =
+                                &mut driver_phase
+                            && let Ok(val) = serde_json::from_str::<Value>(raw)
+                        {
+                            if val["t"] == "car" && val["driver"].as_str() == Some(&my_id) {
+                                driver_phase = Some(DriverPhase::Driving { seq: 0 });
+                            } else if val["t"] == "error" && val["code"] == "car_unavailable" {
+                                *kind = (*kind + 1) % 4;
+                                *retry_at = Instant::now();
+                            } else if val["t"] == "error" && val["code"] == "booth_crowded" {
+                                *retry_at = Instant::now() + Duration::from_millis(150);
+                            }
                         }
                         if stats.measuring.load(Relaxed) {
                             stats.recv_bytes.fetch_add(len as u64, Relaxed);
@@ -321,16 +415,26 @@ async fn player(
                                 stats.moves_msgs.fetch_add(1, Relaxed);
                                 let now = Instant::now();
                                 if let Some(previous) = last_moves {
-                                    intervals.push(now.duration_since(previous).as_micros().min(u128::from(u32::MAX)) as u32);
+                                    moves_intervals.push(now.duration_since(previous).as_micros().min(u128::from(u32::MAX)) as u32);
                                 }
                                 last_moves = Some(now);
+                            }
+                            if is_cars {
+                                let now = Instant::now();
+                                if let Some(previous) = last_cars {
+                                    cars_intervals.push(now.duration_since(previous).as_micros().min(u128::from(u32::MAX)) as u32);
+                                }
+                                last_cars = Some(now);
                             }
                         }
                         None
                     }
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
                         stats.closed_by_server.fetch_add(1, Relaxed);
-                        return Joined::Done(intervals);
+                        return Joined::Done(Intervals {
+                            moves: moves_intervals,
+                            cars: cars_intervals,
+                        });
                     }
                     Some(Ok(_)) => None,
                 }
@@ -346,7 +450,10 @@ async fn player(
         }
     }
     let _ = ws.close(None).await;
-    Joined::Done(intervals)
+    Joined::Done(Intervals {
+        moves: moves_intervals,
+        cars: cars_intervals,
+    })
 }
 
 fn percentile(sorted: &[u32], p: f64) -> f64 {
@@ -396,19 +503,22 @@ async fn main() {
     let _ = stop_tx.send(true);
 
     let mut failures: Vec<String> = Vec::new();
-    let mut intervals: Vec<u32> = Vec::new();
+    let mut moves_intervals: Vec<u32> = Vec::new();
+    let mut cars_intervals: Vec<u32> = Vec::new();
     let mut connected = 0usize;
     for task in tasks {
         match task.await {
-            Ok(Joined::Done(list)) => {
+            Ok(Joined::Done(int)) => {
                 connected += 1;
-                intervals.extend(list);
+                moves_intervals.extend(int.moves);
+                cars_intervals.extend(int.cars);
             }
             Ok(Joined::Failed(reason)) => failures.push(reason),
             Err(error) => failures.push(format!("task: {error}")),
         }
     }
-    intervals.sort_unstable();
+    moves_intervals.sort_unstable();
+    cars_intervals.sort_unstable();
     // 連線失敗的原因只列出種類與次數，避免輸出過長。
     let mut reasons: std::collections::BTreeMap<String, usize> = Default::default();
     for reason in &failures {
@@ -442,6 +552,7 @@ async fn main() {
     let result = json!({
         "url": args.url,
         "connections": args.connections,
+        "drivers": args.drivers,
         "moving_ratio": args.moving_ratio,
         "moving_players": movers,
         "seconds": round2(elapsed),
@@ -459,16 +570,22 @@ async fn main() {
         "sent_msgs_per_conn_s": round2(sent_msgs / elapsed / per_conn),
         "total_recv_bytes_s": round2(recv_bytes / elapsed),
         "moves_interval_ms": {
-            "samples": intervals.len(),
-            "p50": round2(percentile(&intervals, 0.5)),
-            "p99": round2(percentile(&intervals, 0.99)),
-            "max": round2(percentile(&intervals, 1.0)),
+            "samples": moves_intervals.len(),
+            "p50": round2(percentile(&moves_intervals, 0.5)),
+            "p99": round2(percentile(&moves_intervals, 0.99)),
+            "max": round2(percentile(&moves_intervals, 1.0)),
+        },
+        "cars_interval_ms": {
+            "samples": cars_intervals.len(),
+            "p50": round2(percentile(&cars_intervals, 0.5)),
+            "p99": round2(percentile(&cars_intervals, 0.99)),
+            "max": round2(percentile(&cars_intervals, 1.0)),
         },
         "failure_reasons": reasons,
     });
     println!(
-        "連線 {connected}/{}（移動中 {movers}），量測 {elapsed:.1} 秒",
-        args.connections
+        "連線 {connected}/{}（移動中 {movers}，司機 {}），量測 {elapsed:.1} 秒",
+        args.connections, args.drivers
     );
     println!(
         "每連線接收：{:.0} bytes/s、{:.1} 則/s（其中 moves {:.0} bytes/s、{:.1} 則/s）",
@@ -484,11 +601,20 @@ async fn main() {
     );
     println!(
         "moves 間隔：p50 {:.1} ms、p99 {:.1} ms、max {:.1} ms（{} 筆）",
-        percentile(&intervals, 0.5),
-        percentile(&intervals, 0.99),
-        percentile(&intervals, 1.0),
-        intervals.len()
+        percentile(&moves_intervals, 0.5),
+        percentile(&moves_intervals, 0.99),
+        percentile(&moves_intervals, 1.0),
+        moves_intervals.len()
     );
+    if !cars_intervals.is_empty() {
+        println!(
+            "cars 間隔：p50 {:.1} ms、p99 {:.1} ms、max {:.1} ms（{} 筆）",
+            percentile(&cars_intervals, 0.5),
+            percentile(&cars_intervals, 0.99),
+            percentile(&cars_intervals, 1.0),
+            cars_intervals.len()
+        );
+    }
     println!(
         "連線失敗 {}、被伺服器關閉 {}",
         failures.len(),

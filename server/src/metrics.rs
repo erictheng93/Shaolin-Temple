@@ -17,9 +17,9 @@ use std::{
 };
 
 /// 伺服器訊息種類，順序對應 `kind_index`。
-const KINDS: [&str; 14] = [
+const KINDS: [&str; 18] = [
     "welcome", "join", "leave", "move", "moves", "sync", "action", "ack", "zone", "pong", "error",
-    "chat", "outfit", "name",
+    "chat", "outfit", "name", "car", "carGone", "knock", "cars",
 ];
 fn kind_index(message: &ServerMessage) -> usize {
     match message {
@@ -37,6 +37,10 @@ fn kind_index(message: &ServerMessage) -> usize {
         ServerMessage::Chat { .. } => 11,
         ServerMessage::Outfit { .. } => 12,
         ServerMessage::Name { .. } => 13,
+        ServerMessage::Car { .. } => 14,
+        ServerMessage::CarGone { .. } => 15,
+        ServerMessage::Knock { .. } => 16,
+        ServerMessage::Cars { .. } => 17,
     }
 }
 
@@ -61,6 +65,11 @@ const TICK_BUCKETS_US: [u64; 10] = [
     50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 100_000,
 ];
 
+/// 物理步處理時間直方圖的上界（微秒）；超過最後一個上界的落在 `+Inf`。
+const PHYSICS_BUCKETS_US: [u64; 10] = [
+    50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 25_000, 100_000,
+];
+
 #[derive(Default)]
 pub struct Metrics {
     connections: AtomicU64,
@@ -79,6 +88,10 @@ pub struct Metrics {
     tick_buckets: [AtomicU64; TICK_BUCKETS_US.len() + 1],
     tick_sum_us: AtomicU64,
     tick_max_us: AtomicU64,
+    /// 物理步處理時間，最後一格是 `+Inf`。
+    physics_buckets: [AtomicU64; PHYSICS_BUCKETS_US.len() + 1],
+    physics_sum_us: AtomicU64,
+    physics_max_us: AtomicU64,
 }
 
 /// 連線存活期間持有；離開時自動減少連線數。
@@ -144,6 +157,16 @@ impl Metrics {
         self.tick_buckets[slot].fetch_add(1, Relaxed);
         self.tick_sum_us.fetch_add(us, Relaxed);
         self.tick_max_us.fetch_max(us, Relaxed);
+    }
+    pub fn physics_done(&self, took: Duration) {
+        let us = took.as_micros().min(u128::from(u64::MAX)) as u64;
+        let slot = PHYSICS_BUCKETS_US
+            .iter()
+            .position(|b| us <= *b)
+            .unwrap_or(PHYSICS_BUCKETS_US.len());
+        self.physics_buckets[slot].fetch_add(1, Relaxed);
+        self.physics_sum_us.fetch_add(us, Relaxed);
+        self.physics_max_us.fetch_max(us, Relaxed);
     }
 
     pub fn render(&self) -> String {
@@ -278,6 +301,43 @@ impl Metrics {
             o,
             "temple_tick_seconds_max {}",
             get(&self.tick_max_us) as f64 / 1e6
+        );
+        header_lines(
+            &mut o,
+            "temple_physics_step_seconds",
+            "histogram",
+            "Room physics step processing time.",
+        );
+        let mut cumulative_physics = 0;
+        for (bound, count) in PHYSICS_BUCKETS_US.iter().zip(&self.physics_buckets) {
+            cumulative_physics += get(count);
+            let _ = writeln!(
+                o,
+                "temple_physics_step_seconds_bucket{{le=\"{}\"}} {cumulative_physics}",
+                *bound as f64 / 1e6
+            );
+        }
+        cumulative_physics += get(&self.physics_buckets[PHYSICS_BUCKETS_US.len()]);
+        let _ = writeln!(
+            o,
+            "temple_physics_step_seconds_bucket{{le=\"+Inf\"}} {cumulative_physics}"
+        );
+        let _ = writeln!(
+            o,
+            "temple_physics_step_seconds_sum {}",
+            get(&self.physics_sum_us) as f64 / 1e6
+        );
+        let _ = writeln!(o, "temple_physics_step_seconds_count {cumulative_physics}");
+        header_lines(
+            &mut o,
+            "temple_physics_step_seconds_max",
+            "gauge",
+            "Longest room physics step processing time since start.",
+        );
+        let _ = writeln!(
+            o,
+            "temple_physics_step_seconds_max {}",
+            get(&self.physics_max_us) as f64 / 1e6
         );
         o
     }

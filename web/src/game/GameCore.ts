@@ -67,6 +67,10 @@ const CHAT_BUBBLE_MS = 6000
 const SERVER_ERRORS = new Map<string, MessageKey>([
   ['unsupported_version', 'server.unsupportedVersion'],
   ['invalid_zone', 'server.invalidZone'],
+  ['car_unavailable', 'server.carUnavailable'],
+  ['booth_crowded', 'server.boothCrowded'],
+  ['claim_cooldown', 'server.claimCooldown'],
+  ['dismount_first', 'server.dismountFirst'],
 ])
 
 /** 動作 ack 失敗的提示：timeout（本機逾時）有專屬訊息，其餘（unknown_action、unsupported_data…）通用訊息附上原始 code。 */

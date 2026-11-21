@@ -78,6 +78,10 @@ const zhHant = {
   'action.failedUnknown': '動作未完成',
   'server.unsupportedVersion': '遊戲已更新，請重新整理頁面',
   'server.invalidZone': '這裡無法切換場景，請走到門口再試',
+  'server.carUnavailable': '碰碰車目前無法使用',
+  'server.boothCrowded': '取車處太擠了，請稍後再試',
+  'server.claimCooldown': '領車冷卻中，請稍候',
+  'server.dismountFirst': '下車才能進殿',
   'server.error': '伺服器發生問題，請稍後再試',
 
   'chat.label': '聊天',

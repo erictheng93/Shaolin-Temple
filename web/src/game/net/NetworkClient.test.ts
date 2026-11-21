@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient, PENALTY_RECONNECT_MS } from './NetworkClient'
 import { encodeAction, encodeBatch } from './binaryFrame'
-import type { ServerMessage } from './protocol'
+import { PROTOCOL_VERSION, type ServerMessage } from './protocol'
 
 class FakeSocket {
   static OPEN = 1
@@ -376,7 +376,7 @@ describe('NetworkClient 改名', () => {
     client.setName('清泉')
     connectOnline()
     vi.advanceTimersByTime(100)
-    expect(hellos()).toEqual([{ t: 'hello', v: 4, name: '清泉' }])
+    expect(hellos()).toEqual([{ t: 'hello', v: PROTOCOL_VERSION, name: '清泉' }])
     expect(last().sent.some((m) => m.t === 'rename')).toBe(false)
   })
 })

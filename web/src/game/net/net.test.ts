@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import { FRAME_MOVES, FRAME_SYNC, MAX_COORD_CM, MOVE_ENTRY_BYTES, encodeBatch, quantizeCoord } from './binaryFrame'
-import { MAX_MESSAGE_BYTES, decode, encode, type MoveTuple } from './protocol'
+import { MAX_MESSAGE_BYTES, PROTOCOL_VERSION, decode, encode, type MoveTuple } from './protocol'
 
 describe('decode', () => {
   it('接受合法訊息', () => {
@@ -96,7 +96,7 @@ describe('decode', () => {
   })
 
   it('welcome.auth 必填，只接受 guest／google／line', () => {
-    const base = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [] }
+    const base = { t: 'welcome', selfId: 'a', room: 'r', resumeToken: 't', serverTime: 0, players: [], cars: [] }
     for (const auth of ['guest', 'google', 'line']) expect(decode(JSON.stringify({ ...base, auth }))).toEqual({ ...base, auth })
     expect(decode(JSON.stringify(base))).toBeNull()
     for (const auth of ['admin', 'Google', '', null, 1, ['guest']]) expect(decode(JSON.stringify({ ...base, auth })), String(auth)).toBeNull()
@@ -119,9 +119,9 @@ describe('encode', () => {
   })
 
   it('hello 帶 session 時才有這個欄位', () => {
-    expect(JSON.parse(encode({ t: 'hello', v: 4, name: 'n', session: 's' }))).toEqual({ t: 'hello', v: 4, name: 'n', session: 's' })
-    const without = JSON.parse(encode({ t: 'hello', v: 4, name: 'n', resumeToken: undefined, session: undefined }))
-    expect(without).toEqual({ t: 'hello', v: 4, name: 'n' })
+    expect(JSON.parse(encode({ t: 'hello', v: PROTOCOL_VERSION, name: 'n', session: 's' }))).toEqual({ t: 'hello', v: PROTOCOL_VERSION, name: 'n', session: 's' })
+    const without = JSON.parse(encode({ t: 'hello', v: PROTOCOL_VERSION, name: 'n', resumeToken: undefined, session: undefined }))
+    expect(without).toEqual({ t: 'hello', v: PROTOCOL_VERSION, name: 'n' })
     expect('session' in without).toBe(false)
   })
 })

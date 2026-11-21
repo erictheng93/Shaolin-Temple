@@ -3,9 +3,9 @@ name: web
 on:
   push:
     branches: [main]
-    paths: ['web/**', '.github/workflows/web.yml']
+    paths: ['web/**', 'shared/**', '.github/workflows/web.yml']
   pull_request:
-    paths: ['web/**', '.github/workflows/web.yml']
+    paths: ['web/**', 'shared/**', '.github/workflows/web.yml']
 
 jobs:
   build:
@@ -24,7 +24,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
-      - run: docker build -t temple-web:test .
+      - run: docker build -t temple-web:test -f web/Dockerfile .
+        working-directory: .
       - uses: actions/upload-artifact@v4
         with:
           name: web-dist
