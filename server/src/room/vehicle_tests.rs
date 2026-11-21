@@ -17,6 +17,7 @@ struct Client {
     room: RoomTx,
     who: Who,
     rx: Outbound,
+    n: u8,
     token: String,
     x: f64,
     z: f64,
@@ -37,6 +38,7 @@ impl Client {
             room: room.clone(),
             x: me.x,
             z: me.z,
+            n: me.n,
             token: resume_token,
             who,
             rx,
@@ -151,6 +153,30 @@ impl Client {
             .await
             .unwrap();
     }
+
+    async fn send_zone(&self, zone: &str) {
+        self.room
+            .send(RoomCommand::Zone {
+                who: self.who.clone(),
+                zone: zone.into(),
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn send_move(&self, x: f64, z: f64, heading: f64, moving: bool) {
+        self.room
+            .send(RoomCommand::Position {
+                who: self.who.clone(),
+                x,
+                z,
+                heading,
+                moving,
+                at: Instant::now(),
+            })
+            .await
+            .unwrap();
+    }
 }
 
 async fn connect(room: &RoomTx) -> Client {
@@ -231,6 +257,7 @@ async fn connect_with_welcome(room: &RoomTx) -> (Client, Vec<PlayerSnapshot>) {
         room: room.clone(),
         x: me.x,
         z: me.z,
+        n: me.n,
         token: resume_token,
         who,
         rx,
@@ -559,16 +586,23 @@ async fn ride_none_dismounts() {
     let msgs = a.drain();
     let sync_msg = msgs
         .iter()
-        .find(|m| matches!(m, ServerMessage::Sync { .. }));
-    assert!(
-        sync_msg.is_some(),
-        "should receive sync with dismount position"
-    );
-
+        .find_map(|m| match m {
+            ServerMessage::Sync { m } => Some(m.clone()),
+            _ => None,
+        })
+        .expect("should receive sync with dismount position");
+    assert_eq!(sync_msg.len(), 1);
+    let (_n, px, pz, _heading, _moving) = sync_msg[0];
     let car_msg = find_car_msg(&msgs).expect("should receive Car message");
     assert_eq!(car_msg.c, 0);
     assert!(car_msg.driver.is_none());
     assert!(car_msg.fade_at.is_some());
+    let fade_at = car_msg.fade_at.unwrap();
+    assert!((fade_at - (now_ms() + 45_000.0)).abs() < 500.0);
+
+    // 檢查落點距離 車體 (car_msg.x, car_msg.z) 約 1.1m
+    let dist = ((px as f64) - car_msg.x).hypot((pz as f64) - car_msg.z);
+    assert!((dist - 1.1).abs() < 0.05, "dismount distance: {dist}");
 }
 
 // 11. drive_updates_input_and_steps: 騎士送 drive，physics_step 推進車輛位置與朝向
@@ -1226,4 +1260,293 @@ async fn riders_and_grace_players_are_never_knocked() {
             assert_ne!(id, c.who.id);
         }
     }
+}
+
+// 27. two_players_mounting_the_same_car_only_one_wins:
+// 兩人同時上同一台空車，只有一人成功，另一人收到 car_unavailable
+#[tokio::test(start_paused = true)]
+async fn two_players_mounting_the_same_car_only_one_wins() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    a.ride(None).await;
+    sleep(Duration::from_millis(50)).await;
+
+    a.walk_to_bay0().await;
+    b.walk_to_bay0().await;
+    a.drain();
+    b.drain();
+
+    a.ride(Some(0)).await;
+    b.ride(Some(0)).await;
+    sleep(Duration::from_millis(50)).await;
+
+    let msgs_a = a.drain();
+    let msgs_b = b.drain();
+
+    let car_a = find_car_msg(&msgs_a);
+    let car_b = find_car_msg(&msgs_b);
+    let err_a = msgs_a.iter().find_map(|m| match m {
+        ServerMessage::Error { code, .. } => Some(code.as_str()),
+        _ => None,
+    });
+    let err_b = msgs_b.iter().find_map(|m| match m {
+        ServerMessage::Error { code, .. } => Some(code.as_str()),
+        _ => None,
+    });
+
+    let a_won = car_a
+        .as_ref()
+        .is_some_and(|c| c.driver.as_deref() == Some(&a.who.id));
+    let b_won = car_b
+        .as_ref()
+        .is_some_and(|c| c.driver.as_deref() == Some(&b.who.id));
+    assert!(a_won ^ b_won, "exactly one player should win the mount");
+    if a_won {
+        assert_eq!(err_b, Some("car_unavailable"));
+    } else {
+        assert_eq!(err_a, Some("car_unavailable"));
+    }
+}
+
+// 28. zone_change_while_riding_is_refused_with_dismount_first:
+// 騎乘中切換場景被拒，收到 dismount_first
+#[tokio::test(start_paused = true)]
+async fn zone_change_while_riding_is_refused_with_dismount_first() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    a.drain();
+
+    a.send_zone("hall").await;
+    sleep(Duration::from_millis(50)).await;
+
+    let msgs = a.drain();
+    let err = msgs.iter().find_map(|m| match m {
+        ServerMessage::Error { code, .. } => Some(code.as_str()),
+        _ => None,
+    });
+    assert_eq!(err, Some("dismount_first"));
+}
+
+// 29. rider_is_absent_from_moves_and_their_move_messages_are_ignored:
+// 騎乘中的玩家不會出現在 moves，且送出的 move 被忽略
+#[tokio::test(start_paused = true)]
+async fn rider_is_absent_from_moves_and_their_move_messages_are_ignored() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    b.drain();
+    a.drain();
+
+    a.send_move(0.0, 5.0, 0.0, true).await;
+    sleep(Duration::from_millis(150)).await;
+
+    let msgs_b = b.drain();
+    for msg in msgs_b {
+        if let ServerMessage::Moves { m } = msg {
+            assert!(
+                m.iter().all(|tuple| tuple.0 != a.n),
+                "rider should not be present in moves"
+            );
+        }
+    }
+}
+
+// 30. dismount_places_the_player_beside_the_car_and_schedules_fade:
+// 下車落點距車體 1.1 ± 0.01、不在障礙物內、排程 fadeAt
+#[tokio::test(start_paused = true)]
+async fn dismount_places_the_player_beside_the_car_and_schedules_fade() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    a.drain();
+
+    a.ride(None).await;
+    sleep(Duration::from_millis(50)).await;
+
+    let msgs = a.drain();
+    let sync_msg = msgs
+        .iter()
+        .find_map(|m| match m {
+            ServerMessage::Sync { m } => Some(m.clone()),
+            _ => None,
+        })
+        .expect("sync message on dismount");
+    let (_n, px, pz, _heading, _moving) = sync_msg[0];
+
+    let car_msg = find_car_msg(&msgs).expect("car message");
+    let fade_at = car_msg.fade_at.expect("fade_at must be scheduled");
+    assert!((fade_at - (now_ms() + 45_000.0)).abs() < 500.0);
+
+    let dist = ((px as f64) - car_msg.x).hypot((pz as f64) - car_msg.z);
+    assert!(
+        (dist - 1.1).abs() < 0.05,
+        "distance to car should be 1.1 ± 0.05, got {dist}"
+    );
+    assert!(
+        !world::COURTYARD
+            .solids
+            .iter()
+            .any(|s| s.contains(px as f64, pz as f64)),
+        "landing point must not be solid"
+    );
+}
+
+// 31. dismount_falls_back_to_the_car_position_when_all_sides_are_blocked:
+// 候選點均落入障礙物或邊界外時，落點回退至車體中心
+#[test]
+fn dismount_falls_back_to_the_car_position_when_all_sides_are_blocked() {
+    let mut room = Room::new(1, RoomConfig::new(50), Default::default());
+    let (tx, _rx) = mpsc::channel(2048);
+    let now = Instant::now();
+    let who = room
+        .join("blocked".into(), AuthKind::Guest, 0, tx, now)
+        .expect("join");
+
+    let c = room.vehicles.spawn(100.0, 100.0, 0.0).expect("spawn car");
+    room.cars.insert(
+        c,
+        Car {
+            kind: 0,
+            driver: Some(who.id.clone()),
+            empty_since: None,
+            last_input_at: now,
+            fade_at: None,
+        },
+    );
+    let p = room.players.get_mut(&who.id).unwrap();
+    p.riding = Some(c);
+
+    room.dismount(&who.id, now);
+
+    let p = room.players.get(&who.id).unwrap();
+    assert_eq!(p.x, 100.0);
+    assert_eq!(p.z, 100.0);
+    assert!(p.riding.is_none());
+}
+
+// 32. entering_the_courtyard_receives_every_car_including_sleeping_ones:
+// 進入庭院收到完整車輛快照，包含休眠車輛
+#[tokio::test(start_paused = true)]
+async fn entering_the_courtyard_receives_every_car_including_sleeping_ones() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    a.ride(None).await;
+    sleep(Duration::from_millis(2000)).await;
+
+    let mut b = connect(&room).await;
+    b.enter_hall().await;
+    b.drain();
+
+    // 走到殿內通往庭院的門口範圍 (0.0, 8.4)
+    b.position(0.0, 8.4).await;
+    sleep(Duration::from_millis(50)).await;
+
+    b.send_zone("courtyard").await;
+    sleep(Duration::from_millis(50)).await;
+
+    let msgs_b = b.drain();
+    let cars_msg = msgs_b
+        .iter()
+        .find_map(|m| match m {
+            ServerMessage::Cars { cars, .. } => Some(cars.clone()),
+            _ => None,
+        })
+        .expect("entering courtyard must receive Cars message");
+
+    assert!(
+        cars_msg.iter().any(|c| c.c == 0),
+        "Cars frame must include car 0 even when sleeping"
+    );
+}
+
+// 33. walker_can_push_a_sleeping_empty_car:
+// 步行者靠近休眠空車能維持物理步進並以動力學碰撞推動車輛，離開後車輛再次入睡
+#[test]
+fn walker_can_push_a_sleeping_empty_car() {
+    let mut room = Room::new(1, RoomConfig::new(50), Default::default());
+    let (tx, _rx) = mpsc::channel(2048);
+    let now = Instant::now();
+    let who = room
+        .join("walker".into(), AuthKind::Guest, 0, tx, now)
+        .expect("join");
+
+    let c = room.vehicles.spawn(-12.0, 7.5, 0.0).expect("spawn car");
+    room.cars.insert(
+        c,
+        Car {
+            kind: 0,
+            driver: None,
+            empty_since: Some(now),
+            last_input_at: now,
+            fade_at: None,
+        },
+    );
+
+    // 步進讓車靜止入睡
+    for _ in 0..100 {
+        room.physics_step(now);
+    }
+    assert!(!room.vehicles.any_awake(), "car should be sleeping");
+    assert!(
+        !room.should_physics_step(),
+        "should not step when walker is far"
+    );
+
+    // 步行者移動靠近車輛 (x: -11.2, z: 7.5，距離車身約 0.8m <= 1.0m)
+    let p = room.players.get_mut(&who.id).unwrap();
+    p.x = -11.2;
+    p.z = 7.5;
+    p.moving = true;
+    assert!(
+        room.should_physics_step(),
+        "should step because walker is moving near sleeping car"
+    );
+
+    let init_x = room.vehicles.car(c).unwrap().x;
+
+    // 步行者推動車輛
+    for i in 1..=30 {
+        let p = room.players.get_mut(&who.id).unwrap();
+        p.x = -11.2 - (i as f64) * 0.03;
+        p.moving = true;
+        room.physics_step(now + Duration::from_millis(i * 33));
+    }
+
+    let pushed_x = room.vehicles.car(c).unwrap().x;
+    assert!(
+        pushed_x < init_x - 0.2,
+        "car should have been pushed by walker: init {init_x}, now {pushed_x}"
+    );
+
+    // 步行者平順退開車輛 (> 1.0m)
+    for i in 1..=20 {
+        let p = room.players.get_mut(&who.id).unwrap();
+        p.x = -12.1 + (i as f64) * 0.1;
+        p.moving = true;
+        room.physics_step(now + Duration::from_millis((30 + i) * 33));
+    }
+    let p = room.players.get_mut(&who.id).unwrap();
+    p.moving = false;
+
+    // 車輛經過一段時間再度入睡
+    for i in 1..=250 {
+        room.physics_step(now + Duration::from_millis((50 + i) * 33));
+    }
+    assert!(!room.vehicles.any_awake());
+    assert!(!room.should_physics_step());
 }

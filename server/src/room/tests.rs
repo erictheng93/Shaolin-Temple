@@ -1,13 +1,15 @@
 use super::*;
-use crate::protocol::MAX_MESSAGE_BYTES;
+use crate::protocol::{CarSnapshot, MAX_MESSAGE_BYTES};
 use std::f64::consts::PI;
 use tokio::time::sleep;
 
 #[test]
 fn full_room_welcome_fits_message_limit() {
-    // 最壞情況：16 個 4-byte 字元的名稱、未四捨五入的 f64、最大的短編號。zone 與動作 id 限於
-    // 已知場景與允許清單（取其中最長者）；若改為任意 32 bytes 字串，50 人快照會超過 16 KB。
-    let n = -1.234_567_890_123_456_7e-300;
+    // 最壞情況：16 個 4-byte 字元的名稱、公分精度的 f64、最大的短編號。zone 與動作 id 限於
+    // 已知場景與允許清單（取其中最長者）；加上滿額 10 台車的快照。
+    let n = -19.99;
+    let heading = -3.141;
+    let ts = 1_700_000_000_000.0;
     let longest = |names: &[&'static str]| {
         names
             .iter()
@@ -23,21 +25,30 @@ fn full_room_welcome_fits_message_limit() {
         name: "😀".repeat(16),
         x: n,
         z: n,
-        heading: n,
+        heading,
         action: Some(PlayerAction {
             id: longest(&world::ACTIONS),
-            started_at: n,
+            started_at: ts,
         }),
         outfit: crate::protocol::OUTFIT_COUNT - 1,
+    };
+    let car = CarSnapshot {
+        c: 15,
+        kind: 3,
+        driver: Some(format!("p-{:032x}", u128::MAX)),
+        x: n,
+        z: n,
+        heading,
+        fade_at: Some(ts),
     };
     let welcome = ServerMessage::Welcome {
         self_id: player.id.clone(),
         room: format!("room-{}", u64::MAX),
         resume_token: format!("{:x}.{:032x}", u64::MAX, u128::MAX),
-        server_time: n,
+        server_time: ts,
         auth: AuthKind::Google,
         players: vec![player; MAX_ROOM_CAPACITY],
-        cars: Vec::new(),
+        cars: vec![car; 10],
     };
     let bytes = serde_json::to_string(&welcome).unwrap().len();
     assert!(bytes <= MAX_MESSAGE_BYTES, "{bytes} > {MAX_MESSAGE_BYTES}");

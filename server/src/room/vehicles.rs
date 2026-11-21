@@ -144,6 +144,10 @@ impl Room {
     /// 成功廣播 car（driver 設為玩家、fadeAt 為 null）。
     /// `ride(None)`：等同 dismount。
     pub(crate) fn ride(&mut self, who: &Who, car: Option<u8>, now: Instant) {
+        if self.live(who).is_none() {
+            return;
+        }
+
         let Some(c) = car else {
             self.dismount(&who.id, now);
             return;
@@ -316,10 +320,11 @@ impl Room {
         p.z = landing.1;
         p.heading = ch;
         p.moving = false;
-        p.dirty = false;
+        p.dirty = true;
         p.budget = BUDGET_START;
         p.last_at = now;
         p.last_pos_msg = now;
+        p.last_drive_seq = 0;
 
         let sync_msg = ServerMessage::Sync { m: vec![tuple(p)] };
         self.send_to(id, sync_msg, now);
@@ -355,9 +360,9 @@ impl Room {
             c,
             kind: car_meta.kind,
             driver: car_meta.driver.clone(),
-            x: st.x as f64,
-            z: st.z as f64,
-            heading: st.heading as f64,
+            x: ((st.x as f64) * 100.0).round() / 100.0,
+            z: ((st.z as f64) * 100.0).round() / 100.0,
+            heading: ((st.heading as f64) * 1000.0).round() / 1000.0,
             fade_at: car_meta.fade_at,
         })
     }
@@ -375,7 +380,24 @@ impl Room {
         }
         let has_rider = self.cars.values().any(|c| c.driver.is_some());
         let has_knocked = self.players.values().any(|p| p.knocked_until.is_some());
-        has_rider || has_knocked || self.vehicles.any_awake()
+        if has_rider || has_knocked || self.vehicles.any_awake() {
+            return true;
+        }
+
+        // 只有「無人騎乘、!vehicles.any_awake()、而且沒有任何移動中的庭院步行者距任何一台車 distance_to_car <= 1.0」三者同時成立才不步進。
+        self.players.values().any(|p| {
+            p.link.is_some()
+                && p.zone.id == world::COURTYARD.id
+                && p.riding.is_none()
+                && p.grace_until.is_none()
+                && p.knocked_until.is_none()
+                && p.moving
+                && self.cars.keys().any(|&c| {
+                    self.vehicles
+                        .distance_to_car(c, p.x as f32, p.z as f32)
+                        .is_some_and(|dist| dist <= 1.0)
+                })
+        })
     }
 
     pub(crate) fn cleanup_expired_cars(&mut self, now: Instant) {
@@ -531,18 +553,20 @@ impl Room {
                     );
                     let knocked_until = now + flight_dur + recover_dur;
                     let immune_until = knocked_until + immune_dur;
+                    let to_x = round2(to.0);
+                    let to_z = round2(to.1);
                     let msg = ServerMessage::Knock {
                         id: pl.id.clone(),
-                        x: pl.x,
-                        z: pl.z,
-                        to_x: to.0,
-                        to_z: to.1,
+                        x: round2(pl.x),
+                        z: round2(pl.z),
+                        to_x,
+                        to_z,
                         at: now_ms(),
                     };
                     pl.knocked_until = Some(knocked_until);
                     pl.immune_until = Some(immune_until);
-                    pl.x = to.0;
-                    pl.z = to.1;
+                    pl.x = to_x;
+                    pl.z = to_z;
                     pl.action = None;
                     pl.moving = false;
                     pl.dirty = false;
@@ -621,5 +645,6 @@ impl Room {
                 }
             }
         }
+        self.vehicles.clear_bumped();
     }
 }

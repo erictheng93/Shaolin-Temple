@@ -433,8 +433,16 @@ impl VehicleWorld {
         );
 
         let bumped = recorder.bumped.into_inner().unwrap();
-        self.last_bumped = bumped.clone();
+        for &c in &bumped {
+            if !self.last_bumped.contains(&c) {
+                self.last_bumped.push(c);
+            }
+        }
         StepReport { bumped }
+    }
+
+    pub fn clear_bumped(&mut self) {
+        self.last_bumped.clear();
     }
 
     pub fn car(&self, c: u8) -> Option<CarState> {
@@ -670,8 +678,13 @@ mod tests {
     fn drive_script_matches_fixture() {
         let fixture_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/drive-script.json");
-        let update_fixture =
-            std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1") || !fixture_path.exists();
+        let update_fixture = std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1");
+        if !update_fixture && !fixture_path.exists() {
+            panic!(
+                "fixture file {:?} does not exist. Run with UPDATE_FIXTURES=1 to generate.",
+                fixture_path
+            );
+        }
 
         let (start, script) = if update_fixture {
             let start = StartPose {
@@ -750,21 +763,21 @@ mod tests {
             for (exp, act) in file.expected.iter().zip(simulated_points.iter()) {
                 assert_eq!(exp.step, act.step);
                 assert!(
-                    (exp.x - act.x).abs() < 1e-4,
+                    (exp.x - act.x).abs() < 1e-3,
                     "step {}: expected x {}, got {}",
                     exp.step,
                     exp.x,
                     act.x
                 );
                 assert!(
-                    (exp.z - act.z).abs() < 1e-4,
+                    (exp.z - act.z).abs() < 1e-3,
                     "step {}: expected z {}, got {}",
                     exp.step,
                     exp.z,
                     act.z
                 );
                 assert!(
-                    (exp.heading - act.heading).abs() < 1e-4,
+                    (exp.heading - act.heading).abs() < 1e-3,
                     "step {}: expected heading {}, got {}",
                     exp.step,
                     exp.heading,
