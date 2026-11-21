@@ -220,6 +220,15 @@ export class Players {
     this.cullTimer = CULL_INTERVAL_S
   }
 
+  /** 遠端玩家被撞飛：設定位移起訖點、時間區間與鎖定。 */
+  applyKnock(r: RemotePlayer, fromX: number, fromZ: number, toX: number, toZ: number, startAt: number, endAt: number): void {
+    r.from = { x: fromX, z: fromZ, heading: r.heading, t: startAt }
+    r.to = { x: toX, z: toZ, heading: r.heading, t: endAt }
+    r.serverMoving = false
+    r.lastMoveAt = startAt
+    sampleBetween(r.from, r.to, startAt, r)
+  }
+
   /** 本機玩家切換場景後立即重新計算可見性。 */
   setLocalZone(zone: string): void {
     this.localZone = zone
@@ -269,7 +278,13 @@ export class Players {
         r.z = car.z
         r.heading = car.heading
         r.anim.moving = false
+        if (r.anim.clip !== 'ride' && r.anim.clip !== 'knocked') {
+          this.anim.play(r.anim, 'ride', now, Infinity)
+        }
       } else {
+        if (r.anim.clip === 'ride') {
+          r.anim.clip = null
+        }
         // 看門狗：移動中卻太久沒收到位置（對方切到背景、封包遺失），視為已停止。
         if (r.serverMoving && now - r.lastMoveAt > REMOTE_MOVE_TIMEOUT_MS) r.serverMoving = false
         this.place(r, now)
