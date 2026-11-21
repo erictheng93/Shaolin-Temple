@@ -124,8 +124,11 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     const clientPose = clientSim.selfPose()!
     const serverPose = serverWorld.state(0)!
 
-    const distDiff = Math.hypot(clientPose.x - serverPose.x, clientPose.z - serverPose.z)
-    expect(distDiff).toBeLessThan(0.05) // 小於 5 公分
+    // 畫面在上一步與這一步之間內插：累加器剛好歸零時畫的是上一步的位置，所以沿行進方向晚一步的距離。
+    // 橫向（x）不受影響，仍要在 5 公分以內。
+    const oneStep = Math.hypot(serverPose.vx, serverPose.vz) / VEHICLES.physics.hz
+    expect(Math.abs(clientPose.x - serverPose.x)).toBeLessThan(0.05)
+    expect(Math.abs(serverPose.z - clientPose.z - oneStep)).toBeLessThan(0.05)
 
     serverWorld.free()
     clientSim.dispose()
