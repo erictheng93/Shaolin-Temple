@@ -72,3 +72,51 @@ async fn loadtest_smoke_against_local_server() {
     let cars_p50 = result["cars_interval_ms"]["p50"].as_f64().unwrap();
     assert!((20.0..100.0).contains(&cars_p50), "cars_p50 = {cars_p50}");
 }
+
+#[tokio::test]
+async fn loadtest_smoke_fifty_players_full_room_with_collision_and_separation() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let options = ServerOptions::new(vec!["http://localhost:5173".into()]);
+        axum::serve(listener, app_with_options(options))
+            .await
+            .unwrap();
+    });
+    let url = format!("ws://{addr}/ws");
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_loadtest"))
+            .args([
+                "--url",
+                &url,
+                "--connections",
+                "50",
+                "--drivers",
+                "4",
+                "--moving-ratio",
+                "0.5",
+                "--seconds",
+                "4",
+                "--ramp-ms",
+                "5",
+                "--settle-ms",
+                "4500",
+            ])
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    task.abort();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let last = stdout.lines().last().unwrap();
+    let result: serde_json::Value = serde_json::from_str(last).unwrap();
+    assert_eq!(result["connected"], 50);
+    assert_eq!(result["drivers"], 4);
+    assert_eq!(result["moving_players"], 25);
+    assert_eq!(result["connect_failed"], 0);
+    assert_eq!(result["closed_by_server"], 0);
+    assert_eq!(result["invalid_frames"], 0);
+    assert!(result["recv_bytes_per_conn_s"].as_f64().unwrap() > 100.0);
+}
