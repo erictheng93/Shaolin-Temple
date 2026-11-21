@@ -273,7 +273,9 @@ export class NetworkClient {
     const { dir: qDir, mag: qMag } = quantizeDrive(dir, mag)
 
     const changed = qDir !== this.lastDriveDir || qMag !== this.lastDriveMag
-    const minInterval = changed ? 1000 / 15 : 500
+    // 沒變化時也要定期重送：伺服器超過 inputTimeoutMs（500）沒收到就把輸入歸零。
+    // 間隔要明顯短於逾時，否則每次重送都剛好晚一點到，車每半秒掉一下油門。
+    const minInterval = changed ? 1000 / 15 : 200
 
     if (this.lastDriveAt > -Infinity && now - this.lastDriveAt < minInterval) {
       return null
