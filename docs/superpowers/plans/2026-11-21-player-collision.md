@@ -92,7 +92,7 @@ PORTAL_REACH     = 1.0     // 殿門觸發範圍往門前多延伸的距離
 | `server/src/room/tests.rs`、`room/vehicle_tests.rs` | 房間測試的輔助函式（`spawn_room`、`connect`、`drain`、`start_paused`） |
 | `web/src/game/world/layout.ts`、`zones.ts` | 殿門與障礙物的數值來源（改殿門範圍時兩邊一起改） |
 
-### 任務 1：碰撞純函式與共用固定資料
+### Task 1: 任務 1：碰撞純函式與共用固定資料
 
 **檔案：** 建立 `server/src/collide.rs`、`server/tests/collide-script.json`；修改 `server/src/lib.rs`。
 
@@ -124,7 +124,7 @@ pub fn separate(bodies: &[Body], valid: impl Fn(f64, f64) -> bool) -> Vec<Moved>
 - [ ] **步驟 2–4：** 失敗 → 照「共用的數值與算法」實作 → 先 `UPDATE_FIXTURES=1 cargo test collide_script` 產生 `expected`，再不帶環境變數 `cargo test collide::` 全過。
 - [ ] **步驟 5：提交** `後端：玩家碰撞的純函式與共用固定資料`。
 
-### 任務 2：位置驗證接上碰撞，加延遲補償
+### Task 2: 任務 2：位置驗證接上碰撞，加延遲補償
 
 **檔案：** 修改 `server/src/room.rs`、`server/src/world.rs`、`server/src/room/tests.rs`。
 
@@ -159,7 +159,7 @@ fn rooted(p: &Player, now: Instant) -> bool;     // 定點動作（prostrate、c
 - [ ] **步驟 2–4：** 失敗 → 實作 → `cargo test` 全過。
 - [ ] **步驟 5：提交** `後端：位置驗證加上玩家碰撞與延遲補償`。
 
-### 任務 3：每 tick 的分離與殿門範圍
+### Task 3: 任務 3：每 tick 的分離與殿門範圍
 
 **檔案：** 修改 `server/src/room.rs`、`server/src/world.rs`、`server/src/room/tests.rs`、`docs/BACKEND_TASKS.md`。
 
@@ -183,18 +183,18 @@ fn rooted(p: &Player, now: Instant) -> bool;     // 定點動作（prostrate、c
 
 # 第 2 段：前端與 mock（Claude）
 
-### 任務 4：`collide.ts` 與共用固定資料
+### Task 4: 任務 4：`collide.ts` 與共用固定資料
 
 `web/src/game/world/collide.ts`（無 import，Node 可直接載入）照同一份算法實作 `resolveMove`、`separate`；`collide.test.ts` 讀 `server/tests/collide-script.json`，相差小於 `1e-9`。
 
-### 任務 5：本機移動、平滑糾正、殿門範圍
+### Task 5: 任務 5：本機移動、平滑糾正、殿門範圍
 
 - 本機玩家在 `stepMover` 之後對同場景、顯示中的遠端玩家呼叫 `resolveMove`（tolerance 0）；被推動的遠端玩家只在畫面上先移，以伺服器的 `moves` 為準。
 - `GameCore.correctLocal()`：位移小於 1 公尺時以 150 毫秒滑過去。
 - 點擊移動的尋路遇到人不重新規劃（人會被推開）；卡住超過 1.5 秒就取消目標。
 - `zones.ts` 的殿門觸發範圍與後端一致。
 
-### 任務 6：mock 伺服器與實測
+### Task 6: 任務 6：mock 伺服器與實測
 
 mock 伺服器接上同一份 `collide.ts`（含延遲補償與每 tick 分離），機器人也參與碰撞。以 Playwright 開兩個分頁實測設計 §7 的三項並記錄數字；更新 `CLAUDE.md` 與 `docs/TECH_STACK.md`。
 
