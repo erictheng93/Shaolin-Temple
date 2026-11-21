@@ -2,7 +2,7 @@ import type { CarFleet, CarInstance } from '../render/CarFleet'
 import type { NetworkClient } from '../net/NetworkClient'
 import type { CarSnapshot, CarState } from '../net/protocol'
 import { REMOTE_SNAP_DISTANCE, sampleBetween, stepDuration, type Sample } from '../world/interp'
-import { VEHICLES } from '../world/vehicles'
+import { nearestEmptyCar, nearBooth, VEHICLES } from '../world/vehicles'
 import type { ZoneId } from '../world/zones'
 
 export interface CarPose {
@@ -53,6 +53,10 @@ export class Vehicles {
 
   setLocalZone(zone: ZoneId): void {
     this.zone = zone
+    this.deps.fleet.visible = zone === 'courtyard'
+    if (zone !== 'courtyard') {
+      this.deps.fleet.sync([], 0)
+    }
   }
 
   onWelcome(cars: CarSnapshot[]): void {
@@ -167,26 +171,18 @@ export class Vehicles {
   }
 
   claim(kind: number): void {
+    if (this.zone !== 'courtyard') return
     this.deps.net.sendClaim(kind)
   }
 
   toggleRide(localX: number, localZ: number): void {
+    if (this.zone !== 'courtyard') return
     if (this._riding !== null) {
       this.deps.net.sendRide(null)
       return
     }
 
-    let nearest: LocalCar | null = null
-    let nearestDist = Infinity
-    for (const car of this.cars.values()) {
-      if (car.driver !== null) continue
-      const d = Math.hypot(car.x - localX, car.z - localZ)
-      if (d <= VEHICLES.ride.mountRadius && d < nearestDist) {
-        nearestDist = d
-        nearest = car
-      }
-    }
-
+    const nearest = nearestEmptyCar(this.cars.values(), localX, localZ)
     if (nearest) {
       this.deps.net.sendRide(nearest.c)
     }
@@ -194,7 +190,6 @@ export class Vehicles {
 
   update(now: number, serverNow: number, _dt: number): boolean {
     if (this.zone !== 'courtyard') {
-      this.deps.fleet.sync([], now)
       return false
     }
 
@@ -248,21 +243,22 @@ export class Vehicles {
   }
 
   ui(localX: number, localZ: number): RideUi {
-    const riding = this._riding !== null
-    let nearCar = false
-    if (!riding) {
-      for (const car of this.cars.values()) {
-        if (car.driver !== null) continue
-        if (Math.hypot(car.x - localX, car.z - localZ) <= VEHICLES.ride.mountRadius) {
-          nearCar = true
-          break
-        }
+    if (this.zone !== 'courtyard') {
+      return {
+        riding: false,
+        nearCar: false,
+        booth: null,
       }
     }
 
+    const riding = this._riding !== null
+    let nearCar = false
+    if (!riding) {
+      nearCar = nearestEmptyCar(this.cars.values(), localX, localZ) !== null
+    }
+
     let booth: { left: number[] } | null = null
-    const counterDist = Math.hypot(localX - VEHICLES.booth.counter.x, localZ - VEHICLES.booth.counter.z)
-    if (counterDist <= VEHICLES.ride.boothRadius) {
+    if (nearBooth(localX, localZ)) {
       const counts = [0, 0, 0, 0]
       for (const car of this.cars.values()) {
         if (car.kind >= 0 && car.kind < 4) {
@@ -283,6 +279,5 @@ export class Vehicles {
   dispose(): void {
     this.cars.clear()
     this._riding = null
-    this.deps.fleet.dispose()
   }
 }

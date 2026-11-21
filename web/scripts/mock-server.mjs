@@ -234,13 +234,35 @@ const claimCar = (p, kind) => {
   return c
 }
 
+function distanceToCar(car, px, pz) {
+  const dx = px - car.x
+  const dz = pz - car.z
+  const cos = Math.cos(car.heading)
+  const sin = Math.sin(car.heading)
+  const lx = dx * cos - dz * sin
+  const lz = dx * sin + dz * cos
+  const hw = VEHICLES.car.halfWidth
+  const hl = VEHICLES.car.halfLength
+  const qx = Math.max(0, Math.abs(lx) - hw)
+  const qz = Math.max(0, Math.abs(lz) - hl)
+  return Math.hypot(qx, qz)
+}
+
+function knockLanding(fromX, fromZ, dirX, dirZ, dist) {
+  let targetX = fromX + dirX * dist
+  let targetZ = fromZ + dirZ * dist
+  targetX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, targetX))
+  targetZ = Math.max(WORLD_BOUNDS.minZ, Math.min(WORLD_BOUNDS.maxZ, targetZ))
+  return { x: targetX, z: targetZ }
+}
+
 const mountCar = (p, c) => {
   if (p.zone !== 'courtyard' || (p.riding !== undefined && p.riding !== null)) return false
   const car = cars.get(c)
   if (!car || car.driver) return false
   const st = sim.state(c)
   if (!st) return false
-  const dist = Math.hypot(st.x - p.x, st.z - p.z)
+  const dist = distanceToCar(st, p.x, p.z)
   if (dist > VEHICLES.ride.mountRadius) return false
 
   sim.setOccupied(c, true)
@@ -334,8 +356,10 @@ const dismountPlayer = (p) => {
   })
 }
 
+let physicsStep = 0
 // 物理世界模擬循環：30Hz
 setInterval(() => {
+  physicsStep++
   const t = now()
   for (const car of cars.values()) {
     if (car.driver && t - car.lastInputAt > VEHICLES.physics.inputTimeoutMs) {
@@ -362,12 +386,73 @@ setInterval(() => {
     }
   }
   sim.step()
+
+  // 撞飛檢測：在庭院且未騎乘的玩家若被高速車輛撞擊
+  for (const car of cars.values()) {
+    const st = sim.state(car.c)
+    if (!st) continue
+    const speed = Math.hypot(st.vx ?? 0, st.vz ?? 0)
+    if (speed < VEHICLES.knock.minSpeed) continue
+    const dirX = (st.vx ?? 0) / speed
+    const dirZ = (st.vz ?? 0) / speed
+
+    for (const pl of players.values()) {
+      if (pl.zone !== 'courtyard' || (pl.riding !== null && pl.riding !== undefined)) continue
+      if (pl.immuneUntil && t < pl.immuneUntil) continue
+      if (distanceToCar(st, pl.x, pl.z) <= VEHICLES.knock.hitRadius) {
+        const dist = Math.min(
+          VEHICLES.knock.maxDistance,
+          Math.max(VEHICLES.knock.minDistance, speed * VEHICLES.knock.distancePerSpeed),
+        )
+        const landing = knockLanding(pl.x, pl.z, dirX, dirZ, dist)
+        const flightDur = VEHICLES.knock.flightMs
+        const recoverDur = VEHICLES.knock.recoverMs
+        const immuneDur = VEHICLES.knock.immuneMs
+
+        pl.knockedUntil = t + flightDur + recoverDur
+        pl.immuneUntil = pl.knockedUntil + immuneDur
+        const toX = Math.round(landing.x * 100) / 100
+        const toZ = Math.round(landing.z * 100) / 100
+
+        const msg = {
+          t: 'knock',
+          id: pl.id,
+          x: Math.round(pl.x * 100) / 100,
+          z: Math.round(pl.z * 100) / 100,
+          toX,
+          toZ,
+          at: t,
+        }
+        pl.x = toX
+        pl.z = toZ
+        pl.moving = false
+        dirty.delete(pl)
+
+        broadcast(msg)
+      }
+    }
+  }
+
   const maxEmpty = VEHICLES.fade.idleMs + VEHICLES.fade.fadeMs
   for (const [c, car] of cars.entries()) {
     if (!car.driver && car.emptySince && t - car.emptySince >= maxEmpty) {
       sim.remove(c)
       cars.delete(c)
       broadcast({ t: 'carGone', c })
+    }
+  }
+
+  // 碰碰車廣播：每 2 步一次 (15Hz)
+  if (physicsStep % 2 === 0) {
+    const allCars = sim.cars()
+    if (allCars.length) {
+      for (const to of players.values()) {
+        if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
+          const ack = to.lastDriveSeq ?? 0
+          const frame = encodeCars(ack, allCars)
+          if (frame) to.ws.send(frame)
+        }
+      }
     }
   }
 }, 1000 / 30)
@@ -525,17 +610,6 @@ setInterval(() => {
     }
     dirty.clear()
   }
-  // 廣播碰碰車狀態（10Hz）：送給所有在庭院的真人玩家
-  const allCars = sim.cars()
-  if (allCars.length) {
-    for (const to of players.values()) {
-      if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
-        const ack = to.lastDriveSeq ?? 0
-        const frame = encodeCars(ack, allCars)
-        if (frame) to.ws.send(frame)
-      }
-    }
-  }
 }, 100)
 
 wss.on('connection', (ws) => {
@@ -688,8 +762,10 @@ wss.on('connection', (ws) => {
       case 'drive': {
         if (me.riding !== null && me.riding !== undefined) {
           me.lastDriveSeq = m.seq ?? 0
-          const dir = typeof m.dir === 'number' ? m.dir : 0
-          const mag = typeof m.mag === 'number' ? m.mag : 0
+          const qDir = typeof m.dir === 'number' ? m.dir : 0
+          const qMag = typeof m.mag === 'number' ? m.mag : 0
+          const dir = (qDir * (Math.PI * 2)) / 256
+          const mag = Math.max(0, Math.min(1, qMag / 255))
           sim.setInput(me.riding, { dir, mag })
           const car = cars.get(me.riding)
           if (car) {

@@ -324,6 +324,7 @@ export class GameCore {
 
     this.net = new NetworkClient({ url: opts.wsUrl, name: '', outfit: this.players.local.outfit })
     this.fleet = new CarFleet(this.renderer.scene, this.tracker)
+    void this.fleet.load().then(() => this.wake())
     this.vehicles = new Vehicles({
       fleet: this.fleet,
       net: this.net,
@@ -816,11 +817,11 @@ export class GameCore {
           this.toast('ride.dismountFirst')
           this.lastPortalToastAt = now
         }
-      } else if (!this.inPortal && !this.fading) {
+      } else if (!this.inPortal && !this.fading && this.knockFlight === null) {
         this.beginZoneTransition(portal)
       }
     }
-    this.inPortal = portal !== null && !riding
+    this.inPortal = portal !== null && !riding && this.knockFlight === null
 
     const playersActive = this.players.update(now, dt, t, (id) => this.vehicles.riderCar(id))
     this.incense.update(now, t)
@@ -967,6 +968,7 @@ export class GameCore {
     Object.assign(this.players.local.mover, { ...pos, heading: pose.heading, target: null })
     this.path = []
     this.pending = null
+    this.knockFlight = null
     this.players.setLocalZone(zone)
     this.incense.setZone(zone)
     this.striker.visible = zone === 'courtyard'
@@ -1156,7 +1158,9 @@ export class GameCore {
           this.anim.play(anim, clip, n, durationMs, startedAt)
         },
         playAudio: (knockX, knockZ, selfX, selfZ) => {
-          this.vehicleAudio.playKnock(knockX, knockZ, selfX, selfZ)
+          if (this.zone === 'courtyard') {
+            this.vehicleAudio.playKnock(knockX, knockZ, selfX, selfZ)
+          }
         },
         setKnockFlight: (flight) => {
           this.knockFlight = flight

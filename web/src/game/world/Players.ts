@@ -274,9 +274,7 @@ export class Players {
     for (const r of this.remotes.values()) {
       const car = riderLookup?.(r.id)
       if (car) {
-        r.x = car.x
-        r.z = car.z
-        r.heading = car.heading
+        this.snapTo(r, car.x, car.z, car.heading, now)
         r.anim.moving = false
         if (r.anim.clip !== 'ride' && r.anim.clip !== 'knocked') {
           this.anim.play(r.anim, 'ride', now, Infinity)
@@ -284,6 +282,7 @@ export class Players {
       } else {
         if (r.anim.clip === 'ride') {
           r.anim.clip = null
+          this.snapTo(r, r.x, r.z, r.heading, now)
         }
         // 看門狗：移動中卻太久沒收到位置（對方切到背景、封包遺失），視為已停止。
         if (r.serverMoving && now - r.lastMoveAt > REMOTE_MOVE_TIMEOUT_MS) r.serverMoving = false
