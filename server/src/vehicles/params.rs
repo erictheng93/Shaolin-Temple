@@ -1,7 +1,7 @@
 //! 車輛共用參數：讀取 `shared/vehicles.json`。
 
-use std::sync::OnceLock;
 use serde::Deserialize;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -126,6 +126,13 @@ pub fn params() -> &'static Params {
 }
 
 #[cfg(test)]
+impl Bay {
+    fn y_as_z(&self) -> f64 {
+        self.z as f64
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::world::COURTYARD;
@@ -199,12 +206,5 @@ pub(crate) mod tests {
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-impl Bay {
-    fn y_as_z(&self) -> f64 {
-        self.z as f64
     }
 }

@@ -1,7 +1,7 @@
 //! 碰碰車物理世界：封裝 Rapier3D 物理管線、車輛、障礙物與步行者。
 
-use crate::vehicles::drive::{drive, wrap_angle, CarMotion, DriveInput};
-use crate::vehicles::params::{params, Params};
+use crate::vehicles::drive::{CarMotion, DriveInput, drive, wrap_angle};
+use crate::vehicles::params::{Params, params};
 use crate::world::Zone;
 use rapier3d::prelude::*;
 use std::collections::HashMap;
@@ -13,7 +13,11 @@ const GROUP_WALKER: Group = Group::GROUP_3;
 
 fn car_groups(occupied: bool) -> InteractionGroups {
     if occupied {
-        InteractionGroups::new(GROUP_CAR, GROUP_STATIC | GROUP_CAR, InteractionTestMode::And)
+        InteractionGroups::new(
+            GROUP_CAR,
+            GROUP_STATIC | GROUP_CAR,
+            InteractionTestMode::And,
+        )
     } else {
         InteractionGroups::new(
             GROUP_CAR,
@@ -145,13 +149,29 @@ impl VehicleWorld {
 
         let walls = [
             // 西牆 (x = min_x)
-            (Vector::new(min_x - thick * 0.5, 0.0, mid_z), thick * 0.5, hz + thick),
+            (
+                Vector::new(min_x - thick * 0.5, 0.0, mid_z),
+                thick * 0.5,
+                hz + thick,
+            ),
             // 東牆 (x = max_x)
-            (Vector::new(max_x + thick * 0.5, 0.0, mid_z), thick * 0.5, hz + thick),
+            (
+                Vector::new(max_x + thick * 0.5, 0.0, mid_z),
+                thick * 0.5,
+                hz + thick,
+            ),
             // 北牆 (z = min_z)
-            (Vector::new(mid_x, 0.0, min_z - thick * 0.5), hw + thick, thick * 0.5),
+            (
+                Vector::new(mid_x, 0.0, min_z - thick * 0.5),
+                hw + thick,
+                thick * 0.5,
+            ),
             // 南牆 (z = max_z)
-            (Vector::new(mid_x, 0.0, max_z + thick * 0.5), hw + thick, thick * 0.5),
+            (
+                Vector::new(mid_x, 0.0, max_z + thick * 0.5),
+                hw + thick,
+                thick * 0.5,
+            ),
         ];
 
         for (center, wall_hx, wall_hz) in walls {
@@ -215,7 +235,9 @@ impl VehicleWorld {
             .active_events(ActiveEvents::CONTACT_FORCE_EVENTS)
             .contact_force_event_threshold(p.car.mass * 3.0)
             .build();
-        let collider_handle = self.colliders.insert_with_parent(col, body_handle, &mut self.bodies);
+        let collider_handle = self
+            .colliders
+            .insert_with_parent(col, body_handle, &mut self.bodies);
 
         self.collider_to_car.insert(collider_handle, c as u8);
         self.cars[c] = Some(CarSlot {
@@ -276,7 +298,8 @@ impl VehicleWorld {
                     let col = ColliderBuilder::ball(0.35)
                         .collision_groups(walker_groups())
                         .build();
-                    self.colliders.insert_with_parent(col, body_handle, &mut self.bodies);
+                    self.colliders
+                        .insert_with_parent(col, body_handle, &mut self.bodies);
                     self.walkers.insert(n, body_handle);
                 }
             }
@@ -301,43 +324,40 @@ impl VehicleWorld {
 
         // 1. 對每台有輸入的車呼叫 drive()
         for c in 0..16 {
-            if let Some(slot) = &self.cars[c] {
-                if let Some(input) = slot.input {
-                    let body = &mut self.bodies[slot.body_handle];
-                    let fwd = body.rotation() * Vector::new(0.0, 0.0, 1.0);
-                    let heading = wrap_angle(fwd.x.atan2(fwd.z));
-                    let linvel = body.linvel();
-                    let angvel = body.angvel();
-                    let motion = CarMotion {
-                        heading,
-                        vx: linvel.x,
-                        vz: linvel.z,
-                        w: angvel.y,
-                    };
-                    let out = drive(&motion, &input, &self.params.car);
+            if let Some(slot) = &self.cars[c]
+                && let Some(input) = slot.input
+            {
+                let body = &mut self.bodies[slot.body_handle];
+                let fwd = body.rotation() * Vector::new(0.0, 0.0, 1.0);
+                let heading = wrap_angle(fwd.x.atan2(fwd.z));
+                let linvel = body.linvel();
+                let angvel = body.angvel();
+                let motion = CarMotion {
+                    heading,
+                    vx: linvel.x,
+                    vz: linvel.z,
+                    w: angvel.y,
+                };
+                let out = drive(&motion, &input, &self.params.car);
 
-                    // 沿前方施加衝量 force * dt
-                    let forward_x = heading.sin();
-                    let forward_z = heading.cos();
-                    let impulse = Vector::new(
-                        out.force * dt * forward_x,
-                        0.0,
-                        out.force * dt * forward_z,
-                    );
-                    body.apply_impulse(impulse, true);
+                // 沿前方施加衝量 force * dt
+                let forward_x = heading.sin();
+                let forward_z = heading.cos();
+                let impulse =
+                    Vector::new(out.force * dt * forward_x, 0.0, out.force * dt * forward_z);
+                body.apply_impulse(impulse, true);
 
-                    // 把側向速度乘上 lateral_keep
-                    let curr_linvel = body.linvel();
-                    let v_forward = curr_linvel.x * forward_x + curr_linvel.z * forward_z;
-                    let v_lateral = curr_linvel.x * forward_z - curr_linvel.z * forward_x;
-                    let new_v_lateral = v_lateral * out.lateral_keep;
-                    let new_vx = v_forward * forward_x + new_v_lateral * forward_z;
-                    let new_vz = v_forward * forward_z - new_v_lateral * forward_x;
-                    body.set_linvel(Vector::new(new_vx, 0.0, new_vz), true);
+                // 把側向速度乘上 lateral_keep
+                let curr_linvel = body.linvel();
+                let v_forward = curr_linvel.x * forward_x + curr_linvel.z * forward_z;
+                let v_lateral = curr_linvel.x * forward_z - curr_linvel.z * forward_x;
+                let new_v_lateral = v_lateral * out.lateral_keep;
+                let new_vx = v_forward * forward_x + new_v_lateral * forward_z;
+                let new_vz = v_forward * forward_z - new_v_lateral * forward_x;
+                body.set_linvel(Vector::new(new_vx, 0.0, new_vz), true);
 
-                    // 設定 Y 軸角速度為 w
-                    body.set_angvel(Vector::new(0.0, out.w, 0.0), true);
-                }
+                // 設定 Y 軸角速度為 w
+                body.set_angvel(Vector::new(0.0, out.w, 0.0), true);
             }
         }
 
@@ -355,7 +375,8 @@ impl VehicleWorld {
                 _colliders: &ColliderSet,
                 _event: CollisionEvent,
                 _contact_pair: Option<&ContactPair>,
-            ) {}
+            ) {
+            }
 
             fn handle_contact_force_event(
                 &self,
@@ -367,15 +388,15 @@ impl VehicleWorld {
             ) {
                 if total_force_magnitude >= self.threshold {
                     let mut b = self.bumped.lock().unwrap();
-                    if let Some(&c) = self.collider_to_car.get(&contact_pair.collider1) {
-                        if !b.contains(&c) {
-                            b.push(c);
-                        }
+                    if let Some(&c) = self.collider_to_car.get(&contact_pair.collider1)
+                        && !b.contains(&c)
+                    {
+                        b.push(c);
                     }
-                    if let Some(&c) = self.collider_to_car.get(&contact_pair.collider2) {
-                        if !b.contains(&c) {
-                            b.push(c);
-                        }
+                    if let Some(&c) = self.collider_to_car.get(&contact_pair.collider2)
+                        && !b.contains(&c)
+                    {
+                        b.push(c);
                     }
                 }
             }
@@ -384,7 +405,8 @@ impl VehicleWorld {
                 &self,
                 _soft_bodies: &SoftBodySet,
                 _event: &SoftBodyTearEvent,
-            ) {}
+            ) {
+            }
         }
 
         let recorder = ContactRecorder {
@@ -443,7 +465,9 @@ impl VehicleWorld {
 
     pub fn any_awake(&self) -> bool {
         self.cars.iter().flatten().any(|slot| {
-            self.bodies.get(slot.body_handle).map_or(false, |b| !b.is_sleeping())
+            self.bodies
+                .get(slot.body_handle)
+                .is_some_and(|b| !b.is_sleeping())
         })
     }
 
@@ -451,7 +475,9 @@ impl VehicleWorld {
         let Some(slot) = self.cars.get(c as usize).and_then(|s| s.as_ref()) else {
             return false;
         };
-        self.bodies.get(slot.body_handle).map_or(false, |b| !b.is_sleeping())
+        self.bodies
+            .get(slot.body_handle)
+            .is_some_and(|b| !b.is_sleeping())
     }
 
     /// 點 (x, z) 到車身長方體（平面 2D 邊界）的歐幾里得距離。在長方體內部為 0。
@@ -482,10 +508,10 @@ impl VehicleWorld {
         let hl = self.params.car.half_length;
         let r = hw.hypot(hl);
         for c in 0..16 {
-            if let Some(dist) = self.distance_to_car(c as u8, x, z) {
-                if dist < r {
-                    return false;
-                }
+            if let Some(dist) = self.distance_to_car(c as u8, x, z)
+                && dist < r
+            {
+                return false;
             }
         }
         true
@@ -642,11 +668,17 @@ mod tests {
 
     #[test]
     fn drive_script_matches_fixture() {
-        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/drive-script.json");
-        let update_fixture = std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1") || !fixture_path.exists();
+        let fixture_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/drive-script.json");
+        let update_fixture =
+            std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1") || !fixture_path.exists();
 
         let (start, script) = if update_fixture {
-            let start = StartPose { x: 0.0, z: 8.0, heading: 0.0 };
+            let start = StartPose {
+                x: 0.0,
+                z: 8.0,
+                heading: 0.0,
+            };
             let mut script = Vec::with_capacity(90);
             // 直行 30 步
             for _ in 0..30 {
@@ -654,16 +686,24 @@ mod tests {
             }
             // 右轉 30 步
             for _ in 0..30 {
-                script.push(DriveInputData { dir: FRAC_PI_2, mag: 1.0 });
+                script.push(DriveInputData {
+                    dir: FRAC_PI_2,
+                    mag: 1.0,
+                });
             }
             // 對著東側邊界牆全速 30 步
             for _ in 0..30 {
-                script.push(DriveInputData { dir: FRAC_PI_2, mag: 1.0 });
+                script.push(DriveInputData {
+                    dir: FRAC_PI_2,
+                    mag: 1.0,
+                });
             }
             (start, script)
         } else {
-            let content = std::fs::read_to_string(&fixture_path).expect("failed to read drive-script.json");
-            let file: DriveScriptFile = serde_json::from_str(&content).expect("invalid drive-script.json");
+            let content =
+                std::fs::read_to_string(&fixture_path).expect("failed to read drive-script.json");
+            let file: DriveScriptFile =
+                serde_json::from_str(&content).expect("invalid drive-script.json");
             (file.start, file.script)
         };
 
@@ -672,7 +712,13 @@ mod tests {
 
         let mut simulated_points = Vec::new();
         for (i, input) in script.iter().enumerate() {
-            world.set_input(c, DriveInput { dir: input.dir, mag: input.mag });
+            world.set_input(
+                c,
+                DriveInput {
+                    dir: input.dir,
+                    mag: input.mag,
+                },
+            );
             world.step();
             let step_num = i + 1;
             if step_num % 10 == 0 {
@@ -696,8 +742,10 @@ mod tests {
             std::fs::create_dir_all(fixture_path.parent().unwrap()).unwrap();
             std::fs::write(&fixture_path, json).expect("write drive-script.json");
         } else {
-            let content = std::fs::read_to_string(&fixture_path).expect("failed to read drive-script.json");
-            let file: DriveScriptFile = serde_json::from_str(&content).expect("invalid drive-script.json");
+            let content =
+                std::fs::read_to_string(&fixture_path).expect("failed to read drive-script.json");
+            let file: DriveScriptFile =
+                serde_json::from_str(&content).expect("invalid drive-script.json");
             assert_eq!(file.expected.len(), simulated_points.len());
             for (exp, act) in file.expected.iter().zip(simulated_points.iter()) {
                 assert_eq!(exp.step, act.step);

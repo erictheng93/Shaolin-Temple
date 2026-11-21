@@ -320,10 +320,7 @@ fn action_encoding_refuses_what_the_frame_cannot_carry() {
 #[test]
 fn car_kind_count_matches_shared_fixture() {
     let fixtures = fixtures();
-    assert_eq!(
-        fixtures["kindCount"].as_u64(),
-        Some(u64::from(KIND_COUNT))
-    );
+    assert_eq!(fixtures["kindCount"].as_u64(), Some(u64::from(KIND_COUNT)));
 }
 
 #[test]
@@ -353,7 +350,11 @@ fn shared_cars_vectors_encode_and_decode() {
                 w: c["w"].as_f64().unwrap(),
             })
             .collect();
-        assert_eq!(encode_cars(ack, &cars).as_deref(), Some(&bytes[..]), "{name}");
+        assert_eq!(
+            encode_cars(ack, &cars).as_deref(),
+            Some(&bytes[..]),
+            "{name}"
+        );
         let message = ServerMessage::Cars {
             ack,
             cars: cars.clone(),
@@ -389,7 +390,11 @@ fn shared_cars_vectors_encode_and_decode() {
             assert!((actual.x - expected.x).abs() < 1e-12, "{name}");
             assert!((actual.z - expected.z).abs() < 1e-12, "{name}");
             let d = (actual.heading - expected.heading).rem_euclid(2.0 * std::f64::consts::PI);
-            let heading_diff = if d > std::f64::consts::PI { 2.0 * std::f64::consts::PI - d } else { d };
+            let heading_diff = if d > std::f64::consts::PI {
+                2.0 * std::f64::consts::PI - d
+            } else {
+                d
+            };
             assert!(heading_diff < 1e-12, "{name}");
             assert!((actual.vx - expected.vx).abs() < 1e-12, "{name}");
             assert!((actual.vz - expected.vz).abs() < 1e-12, "{name}");

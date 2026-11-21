@@ -94,7 +94,10 @@ fn parse_args() -> Result<Args, String> {
         || !(0.0..=1.0).contains(&args.moving_ratio)
         || args.drivers > args.connections
     {
-        return Err("connections、seconds 須大於 0，moving-ratio 須在 0～1，drivers 須 ≤ connections".into());
+        return Err(
+            "connections、seconds 須大於 0，moving-ratio 須在 0～1，drivers 須 ≤ connections"
+                .into(),
+        );
     }
     Ok(args)
 }
@@ -386,18 +389,18 @@ async fn player(
                         if matches!(message, Message::Binary(_)) && kind == OTHER {
                             stats.invalid_frames.fetch_add(1, Relaxed);
                         }
-                        if let Message::Text(raw) = &message {
-                            if let Some(DriverPhase::Claiming { kind, retry_at }) = &mut driver_phase {
-                                if let Ok(val) = serde_json::from_str::<Value>(raw) {
-                                    if val["t"] == "car" && val["driver"].as_str() == Some(&my_id) {
-                                        driver_phase = Some(DriverPhase::Driving { seq: 0 });
-                                    } else if val["t"] == "error" && val["code"] == "car_unavailable" {
-                                        *kind = (*kind + 1) % 4;
-                                        *retry_at = Instant::now();
-                                    } else if val["t"] == "error" && val["code"] == "booth_crowded" {
-                                        *retry_at = Instant::now() + Duration::from_millis(150);
-                                    }
-                                }
+                        if let Message::Text(raw) = &message
+                            && let Some(DriverPhase::Claiming { kind, retry_at }) =
+                                &mut driver_phase
+                            && let Ok(val) = serde_json::from_str::<Value>(raw)
+                        {
+                            if val["t"] == "car" && val["driver"].as_str() == Some(&my_id) {
+                                driver_phase = Some(DriverPhase::Driving { seq: 0 });
+                            } else if val["t"] == "error" && val["code"] == "car_unavailable" {
+                                *kind = (*kind + 1) % 4;
+                                *retry_at = Instant::now();
+                            } else if val["t"] == "error" && val["code"] == "booth_crowded" {
+                                *retry_at = Instant::now() + Duration::from_millis(150);
                             }
                         }
                         if stats.measuring.load(Relaxed) {

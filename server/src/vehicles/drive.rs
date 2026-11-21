@@ -1,7 +1,7 @@
 //! 碰碰車駕駛動力學純函式（與前端完全一致）。
 
-use std::f32::consts::PI;
 use super::params::CarParams;
+use std::f32::consts::PI;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DriveInput {
@@ -26,11 +26,7 @@ pub struct DriveOutput {
 
 pub fn wrap_angle(a: f32) -> f32 {
     let wrapped = (a + PI).rem_euclid(2.0 * PI) - PI;
-    if wrapped <= -PI {
-        PI
-    } else {
-        wrapped
-    }
+    if wrapped <= -PI { PI } else { wrapped }
 }
 
 pub fn drive(m: &CarMotion, input: &DriveInput, p: &CarParams) -> DriveOutput {
@@ -133,7 +129,10 @@ mod tests {
             vz: 0.0,
             w: 0.0,
         };
-        let input = DriveInput { dir: -3.0, mag: 1.0 };
+        let input = DriveInput {
+            dir: -3.0,
+            mag: 1.0,
+        };
         let out = drive(&m, &input, p);
         assert!(out.w > 0.0);
     }

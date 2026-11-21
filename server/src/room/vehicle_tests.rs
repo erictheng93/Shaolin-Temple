@@ -155,7 +155,9 @@ impl Client {
 
 async fn connect(room: &RoomTx) -> Client {
     let (out, rx) = mpsc::channel(2048);
-    let who = super::join(room, "測試", AuthKind::Guest, 0, out).await.unwrap();
+    let who = super::join(room, "測試", AuthKind::Guest, 0, out)
+        .await
+        .unwrap();
     Client::from_welcome(room, who, rx)
 }
 
@@ -213,7 +215,9 @@ fn find_car_msg(msgs: &[ServerMessage]) -> Option<CarMsg> {
 
 async fn connect_with_welcome(room: &RoomTx) -> (Client, Vec<PlayerSnapshot>) {
     let (out, mut rx) = mpsc::channel(2048);
-    let who = super::join(room, "測試", AuthKind::Guest, 0, out).await.unwrap();
+    let who = super::join(room, "測試", AuthKind::Guest, 0, out)
+        .await
+        .unwrap();
     let ServerMessage::Welcome {
         players,
         resume_token,
@@ -258,10 +262,9 @@ fn find_ack_msg(msgs: &[ServerMessage], req_id: &str) -> Option<(bool, Option<St
             ok,
             reason,
         } = msg
+            && r == req_id
         {
-            if r == req_id {
-                return Some((*ok, reason.clone()));
-            }
+            return Some((*ok, reason.clone()));
         }
     }
     None
@@ -554,8 +557,13 @@ async fn ride_none_dismounts() {
     sleep(Duration::from_millis(50)).await;
 
     let msgs = a.drain();
-    let sync_msg = msgs.iter().find(|m| matches!(m, ServerMessage::Sync { .. }));
-    assert!(sync_msg.is_some(), "should receive sync with dismount position");
+    let sync_msg = msgs
+        .iter()
+        .find(|m| matches!(m, ServerMessage::Sync { .. }));
+    assert!(
+        sync_msg.is_some(),
+        "should receive sync with dismount position"
+    );
 
     let car_msg = find_car_msg(&msgs).expect("should receive Car message");
     assert_eq!(car_msg.c, 0);
@@ -655,7 +663,7 @@ async fn drive_timeout_zeroes_stick() {
             ServerMessage::Cars { cars, .. } => Some(cars),
             _ => None,
         })
-        .last()
+        .next_back()
         .and_then(|cars| cars.iter().find(|c| c.c == 0))
         .map(|c| c.vx.hypot(c.vz))
         .expect("should have cars frames while driving");
@@ -671,12 +679,15 @@ async fn drive_timeout_zeroes_stick() {
             ServerMessage::Cars { cars, .. } => Some(cars),
             _ => None,
         })
-        .last()
+        .next_back()
         .and_then(|cars| cars.iter().find(|c| c.c == 0))
         .map(|c| c.vx.hypot(c.vz))
         .expect("should have cars frames after timeout");
 
-    assert!(v2 < v1, "car should decelerate after input timeout (v1={v1}, v2={v2})");
+    assert!(
+        v2 < v1,
+        "car should decelerate after input timeout (v1={v1}, v2={v2})"
+    );
 }
 
 // 14. idle_dismount_after_sixty_seconds: 60 秒只有零 stick 則強制下車
@@ -717,7 +728,11 @@ async fn empty_car_fades_and_despawns_after_sixty_seconds() {
     // 59 秒後未過期
     sleep(Duration::from_secs(59)).await;
     let msgs = a.drain();
-    assert!(!msgs.iter().any(|m| matches!(m, ServerMessage::CarGone { .. })));
+    assert!(
+        !msgs
+            .iter()
+            .any(|m| matches!(m, ServerMessage::CarGone { .. }))
+    );
 
     // 滿 60 秒過期被移除（idle 45s + fade 15s = 60s）
     sleep(Duration::from_secs(2)).await;
@@ -758,7 +773,11 @@ async fn remount_clears_fade() {
     // 再過 40 秒（總計 70 秒），車輛依然存在
     sleep(Duration::from_secs(40)).await;
     let msgs = a.drain();
-    assert!(!msgs.iter().any(|m| matches!(m, ServerMessage::CarGone { .. })));
+    assert!(
+        !msgs
+            .iter()
+            .any(|m| matches!(m, ServerMessage::CarGone { .. }))
+    );
 }
 
 // 17. dormant_room_does_not_tick_physics: 全部車休眠且無騎士時，should_physics_step 回 false
@@ -783,7 +802,10 @@ async fn dormant_room_does_not_tick_physics() {
     for _ in 0..100 {
         room.physics_step(now);
     }
-    assert!(!room.should_physics_step(), "empty and sleeping -> should not step");
+    assert!(
+        !room.should_physics_step(),
+        "empty and sleeping -> should not step"
+    );
 }
 
 // 18. hall_players_receive_no_cars_frames: 殿內玩家只收 moves/sync，收不到 cars
@@ -803,11 +825,17 @@ async fn hall_players_receive_no_cars_frames() {
     sleep(Duration::from_millis(200)).await;
 
     let msgs_b = b.drain();
-    assert!(msgs_b.iter().any(|m| matches!(m, ServerMessage::Cars { .. })));
+    assert!(
+        msgs_b
+            .iter()
+            .any(|m| matches!(m, ServerMessage::Cars { .. }))
+    );
 
     let msgs_a = a.drain();
     assert!(
-        !msgs_a.iter().any(|m| matches!(m, ServerMessage::Cars { .. })),
+        !msgs_a
+            .iter()
+            .any(|m| matches!(m, ServerMessage::Cars { .. })),
         "hall player should not receive Cars frames"
     );
 }
@@ -1005,7 +1033,10 @@ async fn knocked_player_cannot_move_or_act_until_recovered_then_gets_a_sync() {
             break;
         }
     }
-    assert!(sync_received, "knocked_until 到期的那個物理步應對本人送一筆 sync");
+    assert!(
+        sync_received,
+        "knocked_until 到期的那個物理步應對本人送一筆 sync"
+    );
 
     // 恢復後可正常 action
     b.action("req-2", "bow", true).await;
@@ -1125,10 +1156,7 @@ async fn knocking_clears_the_stored_action() {
     // 檢查撞飛前 action 存在
     let (_, players_before) = connect_with_welcome(&room).await;
     let b_before = players_before.iter().find(|p| p.id == b.who.id).unwrap();
-    assert_eq!(
-        b_before.action.as_ref().map(|a| a.id.as_str()),
-        Some("bow")
-    );
+    assert_eq!(b_before.action.as_ref().map(|a| a.id.as_str()), Some("bow"));
 
     // a 高速撞飛 b
     let mut knock_received = false;

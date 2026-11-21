@@ -327,10 +327,7 @@ impl Metrics {
             "temple_physics_step_seconds_sum {}",
             get(&self.physics_sum_us) as f64 / 1e6
         );
-        let _ = writeln!(
-            o,
-            "temple_physics_step_seconds_count {cumulative_physics}"
-        );
+        let _ = writeln!(o, "temple_physics_step_seconds_count {cumulative_physics}");
         header_lines(
             &mut o,
             "temple_physics_step_seconds_max",

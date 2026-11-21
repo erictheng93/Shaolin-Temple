@@ -59,7 +59,12 @@ mod tests {
     fn landing_stops_before_an_obstacle() {
         // 由 (0, 0) 朝 -z（大香爐在 (0, -1.5)）飛 5 公尺 → 落點不在任何加邊障礙物內且 z > -1.5
         let (lx, lz) = knock_landing(&world::COURTYARD, 0.0, 0.0, 0.0, -1.0, 5.0);
-        assert!(!world::COURTYARD.obstacles.iter().any(|o| o.contains(lx, lz)));
+        assert!(
+            !world::COURTYARD
+                .obstacles
+                .iter()
+                .any(|o| o.contains(lx, lz))
+        );
         assert!(lz > -1.5, "lz was {lz}");
     }
 
