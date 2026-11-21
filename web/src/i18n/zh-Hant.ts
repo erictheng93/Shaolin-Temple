@@ -152,6 +152,7 @@ const zhHant = {
   'ride.modal.go': '出發！',
   'ride.modal.hint': '車種隨機分配，不能自己挑',
   'ride.modal.close': '關閉',
+  'ride.rotateHint': '橫向拿手機，開車更順手',
 
   'perf.label': '效能資訊',
   'perf.position': '座標',

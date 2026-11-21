@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { GameCore, type UiState } from './game/GameCore'
 import { clearAuth, consumeAuthRedirect, httpBaseFromWs, loadAuth, loginUrl, markLoginPending, type AuthProvider } from './game/core/auth'
 import { assetPresetFor, loadSettings, saveSettings } from './game/core/settings'
@@ -32,6 +32,23 @@ const ui = shallowRef<UiState | null>(null)
 const entered = ref(false)
 const entering = ref(false)
 const settingsOpen = ref(false)
+
+// 觸控裝置與螢幕方向：開車時直向會提示轉橫向；橫向開車時移動輪盤放右下角、右側按鈕換到左邊。
+const coarseMq = window.matchMedia('(any-pointer: coarse)')
+const landscapeMq = window.matchMedia('(orientation: landscape)')
+const touch = ref(coarseMq.matches)
+const landscape = ref(landscapeMq.matches)
+const onMq = () => {
+  touch.value = coarseMq.matches
+  landscape.value = landscapeMq.matches
+}
+coarseMq.addEventListener('change', onMq)
+landscapeMq.addEventListener('change', onMq)
+onBeforeUnmount(() => {
+  coarseMq.removeEventListener('change', onMq)
+  landscapeMq.removeEventListener('change', onMq)
+})
+const driveRight = computed(() => touch.value && landscape.value && ui.value?.ride?.riding === true)
 const fatal = ref(false)
 const toasts = ref<Array<{ id: number; text: string }>>([])
 let toastId = 0
@@ -135,7 +152,7 @@ function toggleMute() {
 </script>
 
 <template>
-  <main class="stage">
+  <main class="stage" :class="{ 'drive-right': driveRight }">
     <canvas ref="canvas" class="scene" :aria-label="t('app.sceneLabel')" tabindex="0" />
     <!-- 場景切換黑幕；淡出時間需與 GameCore 的 FADE_MS 一致 -->
     <div class="fade" :class="{ on: ui?.fading }" aria-hidden="true" />
@@ -147,11 +164,13 @@ function toggleMute() {
         @toggle-mute="toggleMute"
         @open-settings="settingsOpen = true"
       />
-      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" :suspended="ui.fading" />
+      <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" :suspended="ui.fading" :side="driveRight ? 'right' : 'left'" />
       <ActionBar :actions="ui.actions" @perform="(id) => core?.performAction(id)" />
       <RidePanel
         v-if="ui.ride"
         :ride="ui.ride"
+        :touch="touch"
+        :landscape="landscape"
         @toggle="() => core?.toggleRide()"
         @claim="() => core?.claimCar()"
         @close="() => core?.setClaimOpen(false)"
