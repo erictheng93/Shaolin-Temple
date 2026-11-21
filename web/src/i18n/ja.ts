@@ -75,9 +75,9 @@ const ja: Record<MessageKey, string> = {
   'action.failedUnknown': '操作を完了できませんでした',
   'server.unsupportedVersion': 'ゲームが更新されました。ページを再読み込みしてください',
   'server.invalidZone': 'ここからは行き来できません。入口まで行ってからお試しください',
-  'server.carUnavailable': 'ゴーカートは現在利用できません',
-  'server.boothCrowded': '乗り場が混雑しています。しばらくしてからもう一度お試しください',
-  'server.claimCooldown': 'クールダウン中です。しばらくお待ちください',
+  'server.carUnavailable': 'この車は既に乗られています',
+  'server.boothCrowded': '受取場所が混雑しています。しばらくしてからもう一度お試しください',
+  'server.claimCooldown': '受取直後です。しばらくしてからもう一度お試しください',
   'server.dismountFirst': '降りてから本堂に入ってください',
   'server.error': 'サーバーで問題が起きました。しばらくしてからお試しください',
 

@@ -75,9 +75,9 @@ const vi: Record<MessageKey, string> = {
   'action.failedUnknown': 'Chưa hoàn tất được.',
   'server.unsupportedVersion': 'Trò chơi đã được cập nhật. Xin tải lại trang.',
   'server.invalidZone': 'Không thể chuyển khu vực từ đây. Xin đến cửa rồi thử lại.',
-  'server.carUnavailable': 'Xe đụng hiện không khả dụng',
-  'server.boothCrowded': 'Khu vực nhận xe đang đông, vui lòng thử lại sau',
-  'server.claimCooldown': 'Đang hồi chiêu nhận xe, xin chờ giây lát',
+  'server.carUnavailable': 'Xe này đã có người lái',
+  'server.boothCrowded': 'Khu vực quầy đang quá đông, vui lòng chờ chút',
+  'server.claimCooldown': 'Vừa mới nhận xe, vui lòng chờ giây lát',
   'server.dismountFirst': 'Vui lòng xuống xe trước khi vào điện',
   'server.error': 'Máy chủ gặp sự cố. Xin thử lại sau.',
 

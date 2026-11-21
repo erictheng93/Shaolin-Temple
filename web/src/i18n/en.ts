@@ -75,9 +75,9 @@ const en: Record<MessageKey, string> = {
   'action.failedUnknown': 'The action couldn’t be completed.',
   'server.unsupportedVersion': 'The game has been updated. Please reload the page.',
   'server.invalidZone': 'You can’t change areas from here. Please go to the doorway and try again.',
-  'server.carUnavailable': 'Bumper car is currently unavailable',
-  'server.boothCrowded': 'Pickup area is crowded, please try again later',
-  'server.claimCooldown': 'Car claim cooldown, please wait',
+  'server.carUnavailable': 'This car is already taken',
+  'server.boothCrowded': 'Booth is crowded, please wait a moment',
+  'server.claimCooldown': 'Car claimed recently, please wait a moment',
   'server.dismountFirst': 'Please dismount before entering the hall',
   'server.error': 'Something went wrong on the server. Please try again later.',
 
