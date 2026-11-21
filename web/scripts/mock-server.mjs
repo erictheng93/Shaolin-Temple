@@ -19,6 +19,8 @@ import { WebSocketServer } from 'ws'
 import RAPIER from '@dimforge/rapier3d-compat'
 import { createSimWorld } from '../src/game/vehicles/simCore.ts'
 import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
+import { TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
+import { OBSTACLES } from '../src/game/world/layout.ts'
 import { VEHICLES } from '../src/game/world/vehicles.ts'
 import { SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
@@ -134,6 +136,47 @@ const r2 = (v) => Math.round(v * 100) / 100
 const queueMove = (p, moving) => {
   p.moving = moving
   dirty.add(p)
+}
+
+// ---- 玩家之間的硬碰撞（與正式伺服器同一套規則，world/collide.ts）----
+/** 驗證時取對方幾個 tick 之前的位置（補償插值與延遲）。 */
+const VIEW_DELAY_TICKS = 2
+/** 定點動作的大約長度（毫秒）：期間推不動。mock 用的近似值，正式伺服器以動作表為準。 */
+const ROOT_MS = { prostrate: 6000, chant: 24000, incense: 6000, bell: 4000 }
+const collides = (p) => !p.riding && p.riding !== 0 && players.get(p.id) === p
+const rooted = (p) => (p.rootedUntil ?? 0) > Date.now()
+/** 庭院檢查邊界與障礙物；殿內只有 mock 不知道的擺設，這裡一律放行。 */
+const validAt = (zone) => (x, z) =>
+  zone !== 'courtyard' ||
+  (x >= WORLD_BOUNDS.minX && x <= WORLD_BOUNDS.maxX && z >= WORLD_BOUNDS.minZ && z <= WORLD_BOUNDS.maxZ &&
+    !OBSTACLES.some((o) => x > o.minX && x < o.maxX && z > o.minZ && z < o.maxZ))
+const syncSelf = (p) => {
+  if (p.ws) sendTuples(p.ws, 'sync', [tuple(p)])
+}
+/** 把 p 放到想去的位置並處理碰撞。past 為 true 時對方的位置取幾個 tick 之前的（驗證真人送來的位置）。 */
+const moveWithCollision = (p, x, z, tolerance, past) => {
+  const others = [...players.values()]
+    .filter((o) => o !== p && o.zone === p.zone && collides(o))
+    .map((o) => {
+      const at = past && o.trail?.length ? o.trail[Math.min(VIEW_DELAY_TICKS, o.trail.length) - 1] : o
+      return { n: o.n, x: at.x, z: at.z, rooted: rooted(o), ref: o, fromX: at.x, fromZ: at.z }
+    })
+  const r = resolveMove({ x, z }, { x: p.x, z: p.z }, others, tolerance, validAt(p.zone))
+  const corrected = Math.hypot(r.x - x, r.z - z) > 0.05
+  p.x = corrected ? r.x : x
+  p.z = corrected ? r.z : z
+  if (corrected) syncSelf(p)
+  for (const m of r.moved) {
+    const o = others.find((b) => b.n === m.n)
+    // 推的是對方「現在」的位置：把位移量加上去，不合法就不動
+    const nx = o.ref.x + (m.x - o.fromX)
+    const nz = o.ref.z + (m.z - o.fromZ)
+    if (!validAt(p.zone)(nx, nz)) continue
+    o.ref.x = nx
+    o.ref.z = nz
+    dirty.add(o.ref)
+    syncSelf(o.ref)
+  }
 }
 const tuple = (p) => [p.n, r2(p.x), r2(p.z), r2(p.heading), p.moving ? 1 : 0]
 let nextId = 1
@@ -540,15 +583,33 @@ setInterval(() => {
         if (id === 'bell' && now() - lastBellAt < BOT_BELL_GAP_MS) continue
         if (id === 'bell') lastBellAt = now()
         b.wait = Math.max(b.wait, BOT_HOLD_S[id] ?? 0)
+        if (ROOT_MS[id]) p.rootedUntil = now() + (BOT_HOLD_S[id] ?? 0) * 1000
         broadcastAction(p, id)
       }
       continue
     }
     const step = Math.min(d, 2.2 * dt)
-    p.x += (dx / d) * step
-    p.z += (dz / d) * step
     p.heading = Math.atan2(dx, dz)
+    const fromX = p.x
+    const fromZ = p.z
+    moveWithCollision(p, p.x + (dx / d) * step, p.z + (dz / d) * step, 0, false)
+    // 被擋住幾乎走不動：換一個目的地，免得機器人一直頂著人
+    if (Math.hypot(p.x - fromX, p.z - fromZ) < step * 0.2 && Math.random() < 0.1) b.wait = 0.5
     queueMove(p, true)
+  }
+  // 每個 tick 的全體分離（剛進場、剛換場景時重疊的人慢慢分開），並記下這個 tick 的位置
+  for (const zone of ZONES) {
+    const here = [...players.values()].filter((p) => p.zone === zone && collides(p))
+    for (const m of separate(here.map((p) => ({ n: p.n, x: p.x, z: p.z, rooted: rooted(p) })), validAt(zone))) {
+      const p = here.find((q) => q.n === m.n)
+      p.x = m.x
+      p.z = m.z
+      dirty.add(p)
+      syncSelf(p)
+    }
+  }
+  for (const p of players.values()) {
+    p.trail = [{ x: p.x, z: p.z }, ...(p.trail ?? [])].slice(0, 4)
   }
   // 停止看門狗：真人最後一則位置是 move 且超過 1 秒沒有新位置，視為停止。
   const t = now()
@@ -641,7 +702,8 @@ wss.on('connection', (ws) => {
       case 'move':
       case 'stop':
         if (me.riding !== null && me.riding !== undefined) break
-        Object.assign(me, { x: m.x, z: m.z, heading: m.heading, lastPosAt: now() })
+        Object.assign(me, { heading: m.heading, lastPosAt: now() })
+        moveWithCollision(me, m.x, m.z, TOLERANCE, true)
         queueMove(me, m.t === 'move')
         break
       case 'zone':
@@ -665,6 +727,8 @@ wss.on('connection', (ws) => {
         seenReq.set(m.reqId, ack)
         send(ws, ack)
         if (ack.ok && m.id === 'bell') lastBellAt = now()
+        if (ack.ok && ROOT_MS[m.id]) me.rootedUntil = now() + ROOT_MS[m.id]
+        if (ack.ok && m.id === 'chant_end') me.rootedUntil = 0
         if (ack.ok) broadcastAction(me, m.id)
         break
       }
