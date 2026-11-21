@@ -11,6 +11,7 @@ import Joystick from './ui/Joystick.vue'
 import SettingsPanel from './ui/SettingsPanel.vue'
 import PerfOverlay from './ui/PerfOverlay.vue'
 import ChatPanel from './ui/ChatPanel.vue'
+import RidePanel from './ui/RidePanel.vue'
 import ToastHost from './ui/ToastHost.vue'
 
 const WS_URL: string | undefined = import.meta.env.VITE_WS_URL || undefined
@@ -148,6 +149,12 @@ function toggleMute() {
       />
       <Joystick :set-stick="(x, y) => core?.setMoveStick(x, y)" :suspended="ui.fading" />
       <ActionBar :actions="ui.actions" @perform="(id) => core?.performAction(id)" />
+      <RidePanel
+        v-if="ui.ride"
+        :ride="ui.ride"
+        @toggle="() => core?.toggleRide()"
+        @claim="(k) => core?.claimCar(k)"
+      />
       <ChatPanel :chat="ui.chat" :send="(t) => core?.sendChat(t) ?? 'offline'" />
       <PerfOverlay v-if="settings.showStats" :ui="ui" />
     </template>
