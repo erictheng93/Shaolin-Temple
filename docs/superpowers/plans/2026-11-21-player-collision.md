@@ -35,7 +35,7 @@ TOLERANCE        = 0.15    // 重疊量不超過這個值時不處理（只用�
 SEPARATE_PER_TICK= 0.1     // 每個 tick 每人最多被分開的距離
 VIEW_DELAY_TICKS = 2       // 驗證時取對方幾個 tick 之前的位置
 HISTORY_TICKS    = 4
-PORTAL_REACH     = 1.0     // 殿門觸發範圍往門前多延伸的距離
+PORTAL_REACH     = 0.6     // 庭院這一側的殿門觸發範圍往門前多延伸的距離（原訂 1.0，見任務 3 的說明）
 ```
 
 **`resolve_move`：處理一個人的移動（前後端逐行相同）**
@@ -177,7 +177,7 @@ fn rooted(p: &Player, now: Instant) -> bool;     // 定點動作（prostrate、c
 **規則：**
 
 - 每個 tick、在組 `moves` 之前，對每個場景呼叫 `separate`（位置用目前的，不用紀錄）；位置有變的人 `dirty = true`，並對本人送 `sync`（節流）。
-- 殿門：把進出殿的允許範圍往門前延伸 `PORTAL_REACH = 1.0` 公尺（調整 `PORTAL_TOLERANCE` 或 portal 的矩形，擇一；數值與前端 `zones.ts` 一致，Claude 會在同一個分支改前端）。
+- 殿門（2026-11-21 改訂）：只改庭院這一側，把 `world.rs` 庭院 portal 矩形的 `max_z` 由 `-5.0` 改成 `-4.4`（延伸 0.6 公尺），`PORTAL_TOLERANCE` 不動；殿內那一側不改。原訂 1.0 公尺行不通：出殿的落點在 `z = -3.6`，矩形延伸到 `-4.0` 再加上 0.5 的容許就會把落點包進去（剛出殿又被送回殿內，`spawns_are_inside_bounds_and_do_not_retrigger_portals` 會失敗）；殿內落點 `z = 7.4` 離殿門矩形 `8.15` 只有 0.75，同理不能延伸。這一項要前後端同時改：你改完推上去後，Claude 在同一個分支把 `web/src/game/world/zones.ts` 的 `COURTYARD_DOOR.maxZ` 改成 `-4.4`（前端單獨先改的話，提早觸發會被現在的伺服器拒絕）。實測（mock、兩個分頁）顯示即使不加寬，站在殿門前的人也會被推進殿、後面的人 1 秒內進得去，所以這一項是加分，不是必要。
 - `docs/BACKEND_TASKS.md` 新增條目：規則、數值、驗收標準（上列測試名稱）。
 
 - [ ] **步驟 1：寫測試**
