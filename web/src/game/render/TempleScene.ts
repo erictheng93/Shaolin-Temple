@@ -19,6 +19,7 @@ import {
 } from './hallDoorway'
 import { mergeStatic } from './mergeStatic'
 import type { ResourceTracker } from './ResourceTracker'
+import { setAttributeUpdateRange } from './bufferRange'
 
 /** 晨霧色：霧與清除色共用，遠山融入其中；需與程序化天空的地平線顏色接近。 */
 export const SKY_COLOR = '#dfe2e4'
@@ -779,8 +780,7 @@ export function buildTempleScene(
         tmp.updateMatrix()
         canopyMesh.setMatrixAt(i, tmp.matrix)
       }
-      canopyMesh.instanceMatrix.updateRanges = [{ start: 0, count: canopyItems.length * 16 }]
-      canopyMesh.instanceMatrix.needsUpdate = true
+      setAttributeUpdateRange(canopyMesh.instanceMatrix, 0, canopyItems.length * 16)
 
       for (let i = 0; i < LEAF_COUNT; i++) {
         const tree = TREES[i % TREES.length]!
@@ -795,8 +795,7 @@ export function buildTempleScene(
         tmp.updateMatrix()
         leaves.setMatrixAt(i, tmp.matrix)
       }
-      leaves.instanceMatrix.updateRanges = [{ start: 0, count: LEAF_COUNT * 16 }]
-      leaves.instanceMatrix.needsUpdate = true
+      setAttributeUpdateRange(leaves.instanceMatrix, 0, LEAF_COUNT * 16)
 
       for (let i = 0; i < robeItems.length; i++) {
         const it = robeItems[i]!
@@ -806,8 +805,7 @@ export function buildTempleScene(
         tmp.updateMatrix()
         robeMesh.setMatrixAt(i, tmp.matrix)
       }
-      robeMesh.instanceMatrix.updateRanges = [{ start: 0, count: robeItems.length * 16 }]
-      robeMesh.instanceMatrix.needsUpdate = true
+      setAttributeUpdateRange(robeMesh.instanceMatrix, 0, robeItems.length * 16)
       if (bellAngle !== 0 || bellVel !== 0) {
         const k = 18
         const damping = 1.6

@@ -3,6 +3,7 @@ import { MALLET_HEAD_Z, WOODFISH_FORWARD, WOODFISH_STRIKE_Y, createChantPropsGeo
 import { createIncenseStickGeometry } from './IncenseSystem'
 import { Nameplate } from './Nameplate'
 import { ResourceTracker } from './ResourceTracker'
+import { setAttributeUpdateRange } from './bufferRange'
 import { OUTFITS, normalizeOutfit } from '../world/outfits'
 
 /** 角色節點結構，動畫片段只操作這些節點。節點本身不含網格，只提供變換。 */
@@ -720,19 +721,15 @@ export class AvatarFactory {
         const matCount = tier.count * 16
         for (const m of [tier.body, tier.skin]) {
           m.count = tier.count
-          m.instanceMatrix.updateRanges = [{ start: 0, count: matCount }]
-          m.instanceMatrix.needsUpdate = true
+          setAttributeUpdateRange(m.instanceMatrix, 0, matCount)
         }
-        tier.outfit.updateRanges = [{ start: 0, count: tier.count }]
-        tier.outfit.needsUpdate = true
+        setAttributeUpdateRange(tier.outfit, 0, tier.count)
 
         const hasFace = Boolean(tier.face.geometry.getAttribute('position'))
         tier.face.count = hasFace ? tier.count : 0
         if (hasFace) {
-          tier.face.instanceMatrix.updateRanges = [{ start: 0, count: matCount }]
-          tier.face.instanceMatrix.needsUpdate = true
-          tier.faceIndex.updateRanges = [{ start: 0, count: tier.count }]
-          tier.faceIndex.needsUpdate = true
+          setAttributeUpdateRange(tier.face.instanceMatrix, 0, matCount)
+          setAttributeUpdateRange(tier.faceIndex, 0, tier.count)
         }
       } else {
         tier.body.count = 0
@@ -742,22 +739,18 @@ export class AvatarFactory {
     }
     this.shadows.count = i
     if (i > 0) {
-      this.shadows.instanceMatrix.updateRanges = [{ start: 0, count: i * 16 }]
-      this.shadows.instanceMatrix.needsUpdate = true
+      setAttributeUpdateRange(this.shadows.instanceMatrix, 0, i * 16)
     }
     this.props.count = props
     this.props.visible = props > 0
     if (props > 0) {
-      this.props.instanceMatrix.updateRanges = [{ start: 0, count: props * 16 }]
-      this.props.instanceMatrix.needsUpdate = true
+      setAttributeUpdateRange(this.props.instanceMatrix, 0, props * 16)
     }
     this.chantProps.count = chant
     this.chantProps.visible = chant > 0
     if (chant > 0) {
-      this.chantProps.instanceMatrix.updateRanges = [{ start: 0, count: chant * 16 }]
-      this.chantProps.instanceMatrix.needsUpdate = true
-      this.chantPart.updateRanges = [{ start: 0, count: chant }]
-      this.chantPart.needsUpdate = true
+      setAttributeUpdateRange(this.chantProps.instanceMatrix, 0, chant * 16)
+      setAttributeUpdateRange(this.chantPart, 0, chant)
     }
   }
 
