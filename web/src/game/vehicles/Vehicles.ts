@@ -4,6 +4,7 @@ import type { CarSnapshot, CarState } from '../net/protocol'
 import { REMOTE_SNAP_DISTANCE, sampleBetween, stepDuration, type Sample } from '../world/interp'
 import { VEHICLES } from '../world/vehicles'
 import type { ZoneId } from '../world/zones'
+import { VehicleSim } from './VehicleSim'
 
 export interface CarPose {
   x: number
@@ -34,30 +35,114 @@ export interface VehiclesDeps {
   fleet: CarFleet
   net: Pick<NetworkClient, 'sendClaim' | 'sendRide' | 'sendDrive'>
   selfId: () => string | null
+  sim?: VehicleSim | null
+}
+
+function getNetworkConnection(): { saveData?: boolean; effectiveType?: string } | undefined {
+  if (typeof navigator === 'undefined') return undefined
+  const nav = navigator as any
+  const conn = nav.connection || nav.mozConnection || nav.webkitConnection
+  if (!conn) return undefined
+  return {
+    saveData: Boolean(conn.saveData),
+    effectiveType: conn.effectiveType,
+  }
 }
 
 /**
- * 碰碰車客戶端子系統：管理場景車輛狀態、插值、駕駛輸入與騎乘 UI 狀態。
+ * 碰碰車客戶端子系統：管理場景車輛狀態、插值、駕駛輸入、客戶端預測與騎乘 UI 狀態。
  */
 export class Vehicles {
   private readonly cars = new Map<number, LocalCar>()
   private _riding: number | null = null
   private zone: ZoneId = 'courtyard'
   private stickMag = 0
+  private sim: VehicleSim | null = null
+  private loadingSim = false
+  private simLoadAttempted = false
 
-  constructor(private readonly deps: VehiclesDeps) {}
+  constructor(private readonly deps: VehiclesDeps) {
+    if (deps.sim !== undefined) {
+      this.sim = deps.sim
+      this.simLoadAttempted = true
+    }
+  }
 
   get riding(): number | null {
     return this._riding
   }
 
+  /**
+   * 取得預測校正的 p95 誤差（公尺），若尚未啟用預測或無樣本則為 null。
+   */
+  get correctionP95(): number | null {
+    if (!this.sim) return null
+    const samples = this.sim.correction.samples
+    if (samples.length === 0) return null
+    const sorted = [...samples].sort((a, b) => a - b)
+    const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))
+    return sorted[idx] ?? null
+  }
+
+  private maybeLoadSim(): void {
+    if (this.simLoadAttempted || this.loadingSim || this.sim) return
+    const netInfo = getNetworkConnection()
+    if (!VehicleSim.shouldLoad(netInfo)) return
+    this.simLoadAttempted = true
+    this.loadingSim = true
+    VehicleSim.load().then(
+      (sim) => {
+        this.loadingSim = false
+        this.sim = sim
+        if (sim && this._riding !== null) {
+          sim.setCars(this.getCarStates(), this._riding)
+        }
+      },
+      (err) => {
+        console.warn('VehicleSim load failed, continuing with interpolation:', err)
+        this.loadingSim = false
+      },
+    )
+  }
+
+  private getCarStates(): CarState[] {
+    const res: CarState[] = []
+    for (const car of this.cars.values()) {
+      res.push({
+        c: car.c,
+        occupied: car.driver !== null,
+        bumped: false,
+        x: car.x,
+        z: car.z,
+        heading: car.heading,
+        vx: 0,
+        vz: 0,
+        w: 0,
+      })
+    }
+    return res
+  }
+
   setLocalZone(zone: ZoneId): void {
     this.zone = zone
+    if (zone !== 'courtyard') {
+      this.sim?.clearHistory()
+      this.sim?.setCars([], null)
+    }
+  }
+
+  onVisibilityChange(hidden: boolean): void {
+    if (!hidden) {
+      // 從背景切回前景時清空歷史輸入與平滑偏移，等待下一則權威廣播
+      this.sim?.clearHistory()
+    }
   }
 
   onWelcome(cars: CarSnapshot[]): void {
     this.cars.clear()
     this._riding = null
+    this.sim?.clearHistory()
+    this.sim?.setCars([], null)
     const now = performance.now()
     const self = this.deps.selfId()
 
@@ -78,6 +163,10 @@ export class Vehicles {
       if (self && c.driver === self) {
         this._riding = c.c
       }
+    }
+
+    if (this._riding !== null) {
+      this.sim?.setCars(this.getCarStates(), this._riding)
     }
   }
 
@@ -106,9 +195,14 @@ export class Vehicles {
 
     const self = this.deps.selfId()
     if (self && m.driver === self) {
-      this._riding = m.c
+      if (this._riding !== m.c) {
+        this._riding = m.c
+        this.sim?.setCars(this.getCarStates(), this._riding)
+      }
     } else if (this._riding === m.c && m.driver !== self) {
       this._riding = null
+      this.sim?.clearHistory()
+      this.sim?.setCars(this.getCarStates(), null)
     }
   }
 
@@ -116,10 +210,12 @@ export class Vehicles {
     this.cars.delete(c)
     if (this._riding === c) {
       this._riding = null
+      this.sim?.clearHistory()
+      this.sim?.setCars(this.getCarStates(), null)
     }
   }
 
-  onCars(_ack: number, cars: CarState[], now: number): void {
+  onCars(ack: number, cars: CarState[], now: number): void {
     for (const s of cars) {
       const car = this.cars.get(s.c)
       if (!car) continue
@@ -139,12 +235,24 @@ export class Vehicles {
       car.to = { x: s.x, z: s.z, heading: s.heading, t: now + stepDuration(now - car.lastMoveAt) }
       car.lastMoveAt = now
     }
+
+    if (this.sim !== null && this._riding !== null) {
+      const selfCar = cars.find((c) => c.c === this._riding)
+      if (selfCar) {
+        const others = cars.filter((c) => c.c !== this._riding)
+        this.sim.reconcile(ack, selfCar, others)
+      }
+    }
   }
 
   riderCar(playerId: string): CarPose | null {
     if (this._riding !== null) {
       const self = this.deps.selfId()
       if (playerId === (self ?? '') || playerId === 'local') {
+        if (this.sim !== null) {
+          const pose = this.sim.selfPose()
+          if (pose) return pose
+        }
         const car = this.cars.get(this._riding)
         if (car) return { x: car.x, z: car.z, heading: car.heading }
       }
@@ -162,7 +270,14 @@ export class Vehicles {
     this.stickMag = mag
     if (this._riding !== null) {
       const dir = mag > 0.01 ? Math.atan2(dirX, dirZ) : 0
-      this.deps.net.sendDrive(dir, mag)
+      const seq = this.deps.net.sendDrive(dir, mag)
+      if (this.sim !== null) {
+        if (seq !== null) {
+          this.sim.pushInput(seq, { dir, mag })
+        } else {
+          this.sim.setInput({ dir, mag })
+        }
+      }
     }
   }
 
@@ -171,6 +286,7 @@ export class Vehicles {
   }
 
   toggleRide(localX: number, localZ: number): void {
+    this.maybeLoadSim()
     if (this._riding !== null) {
       this.deps.net.sendRide(null)
       return
@@ -192,17 +308,42 @@ export class Vehicles {
     }
   }
 
-  update(now: number, serverNow: number, _dt: number): boolean {
+  update(now: number, serverNow: number, dt: number): boolean {
     if (this.zone !== 'courtyard') {
       this.deps.fleet.sync([], now)
       return false
     }
 
     let active = false
+    if (this.sim !== null && this._riding !== null) {
+      this.sim.advance(dt)
+      active = true
+    }
+
     const instances: CarInstance[] = []
 
     for (const car of this.cars.values()) {
-      sampleBetween(car.from, car.to, now, car)
+      let x = car.x
+      let z = car.z
+      let heading = car.heading
+
+      if (this.sim !== null && this._riding === car.c) {
+        const pose = this.sim.selfPose()
+        if (pose) {
+          x = pose.x
+          z = pose.z
+          heading = pose.heading
+          car.x = x
+          car.z = z
+          car.heading = heading
+        }
+      } else {
+        sampleBetween(car.from, car.to, now, car)
+        x = car.x
+        z = car.z
+        heading = car.heading
+      }
+
       if (
         now < car.to.t &&
         (car.from.x !== car.to.x || car.from.z !== car.to.z || car.from.heading !== car.to.heading)
@@ -219,9 +360,9 @@ export class Vehicles {
       instances.push({
         c: car.c,
         kind: car.kind,
-        x: car.x,
-        z: car.z,
-        heading: car.heading,
+        x,
+        z,
+        heading,
         opacity,
       })
     }
@@ -263,6 +404,7 @@ export class Vehicles {
     let booth: { left: number[] } | null = null
     const counterDist = Math.hypot(localX - VEHICLES.booth.counter.x, localZ - VEHICLES.booth.counter.z)
     if (counterDist <= VEHICLES.ride.boothRadius) {
+      this.maybeLoadSim()
       const counts = [0, 0, 0, 0]
       for (const car of this.cars.values()) {
         if (car.kind >= 0 && car.kind < 4) {
@@ -281,6 +423,8 @@ export class Vehicles {
   }
 
   dispose(): void {
+    this.sim?.dispose()
+    this.sim = null
     this.cars.clear()
     this._riding = null
     this.deps.fleet.dispose()

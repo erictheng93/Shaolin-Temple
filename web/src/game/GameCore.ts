@@ -108,7 +108,15 @@ export interface UiState {
    * pos：本機玩家的場景與座標（取整到 0.1 公尺），只在開啟「顯示效能資訊」時帶出；
    * 沒開時為 null，走路不會讓 UiState 的內容改變而多推送。
    */
-  perf: { fps: number; frameMs: number; calls: number; triangles: number; rttMs: number | null; pos: DebugPosition | null }
+  perf: {
+    fps: number
+    frameMs: number
+    calls: number
+    triangles: number
+    rttMs: number | null
+    pos: DebugPosition | null
+    carCorrectionP95?: number | null
+  }
 }
 
 export interface GameCoreOptions {
@@ -240,6 +248,7 @@ export class GameCore {
   private lastUiPerfTriangles = -1
   private lastUiPerfRtt: number | null = null
   private lastUiPerfPosKey = ''
+  private lastUiPerfCorrectionP95: number | null | undefined = undefined
   private lastUiRideKey = ''
   private frames = 0
   private frameMsSum = 0
@@ -992,6 +1001,7 @@ export class GameCore {
   // ---------- 生命週期 ----------
 
   private onVisibility = (): void => {
+    this.vehicles.onVisibilityChange(document.hidden)
     if (document.hidden) {
       if (this.vehicles.riding !== null) {
         this.net.sendRide(null)
@@ -1308,6 +1318,8 @@ export class GameCore {
     const curPos = this.debugPos()
     const curPosKey = curPos ? `${curPos.zone}:${curPos.x}:${curPos.z}:${curPos.heading}` : ''
 
+    const curCorrectionP95 = this.vehicles.correctionP95
+
     if (!dirty && showStats) {
       if (
         curFps !== this.lastUiPerfFps ||
@@ -1315,7 +1327,8 @@ export class GameCore {
         curCalls !== this.lastUiPerfCalls ||
         curTriangles !== this.lastUiPerfTriangles ||
         curRtt !== this.lastUiPerfRtt ||
-        curPosKey !== this.lastUiPerfPosKey
+        curPosKey !== this.lastUiPerfPosKey ||
+        curCorrectionP95 !== this.lastUiPerfCorrectionP95
       ) {
         dirty = true
       }
@@ -1344,6 +1357,7 @@ export class GameCore {
     this.lastUiPerfTriangles = curTriangles
     this.lastUiPerfRtt = curRtt
     this.lastUiPerfPosKey = curPosKey
+    this.lastUiPerfCorrectionP95 = curCorrectionP95
 
     const state: UiState = {
       status: curStatus,
@@ -1378,6 +1392,7 @@ export class GameCore {
         triangles: curTriangles,
         rttMs: curRtt,
         pos: curPos,
+        carCorrectionP95: curCorrectionP95,
       },
     }
 
