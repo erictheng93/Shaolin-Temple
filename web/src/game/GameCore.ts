@@ -23,6 +23,7 @@ import { IncenseSystem } from './render/IncenseSystem'
 import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
 import { CarFleet } from './render/CarFleet'
+import { resolveMove, type Body } from './world/collide'
 import { BOOTH_NPC } from './world/vehicles'
 import { Vehicles, type RideUi } from './vehicles/Vehicles'
 import { VehicleAudio } from './vehicles/sfx'
@@ -139,6 +140,8 @@ interface BatteryManagerLike extends EventTarget {
 const MOVE_SPEED = 3.2
 const SFX_HEARING_RANGE = 28
 const UI_PUSH_MS = 250
+/** 伺服器糾正本機位置時，差距小於這個距離（公尺）就滑過去，否則瞬移。 */
+const SMOOTH_CORRECTION_M = 1
 /** 走向參拜點：離站位這麼近就算抵達（抵達後直接站到站位上並轉向）。 */
 const APPROACH_ARRIVE = 0.3
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
@@ -160,6 +163,11 @@ export class GameCore {
   private hall: HallScene | null = null
   private zone: ZoneId = 'courtyard'
   private inPortal = false
+  /** 小幅糾正還沒滑完的位移。 */
+  private slideX = 0
+  private slideZ = 0
+  /** 被人擋住、完全走不動的起始時間。 */
+  private blockedSince: number | null = null
   /** 離開各場景前的鏡頭，回來時還原（只用於 restoreCamera 的場景）。 */
   private savedCamera: Partial<Record<ZoneId, CameraPose>> = {}
   /** 尋路尚未走到的轉折點（目前目標在 mover.target）。 */
@@ -814,7 +822,10 @@ export class GameCore {
         const dirX = Math.cos(yaw) * k.x + Math.sin(yaw) * k.y
         const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
         const target = local.mover.target
+        const beforeX = local.mover.x
+        const beforeZ = local.mover.z
         moving = stepMover(local.mover, { dirX, dirZ }, dt, this.moveCfg)
+        if (moving) moving = this.collideLocal(beforeX, beforeZ, now)
         if (target && !local.mover.target) {
           // 抵達轉折點就接著走下一段；被擋住（離轉折點仍遠）則放棄整條路徑。
           const arrived = Math.hypot(target.x - local.mover.x, target.z - local.mover.z) < 0.2
@@ -844,6 +855,17 @@ export class GameCore {
     }
 
     // 走進出入口（從外面踏入，避免出生點剛好在出入口時來回觸發）
+    // 小幅糾正：約 150 毫秒內滑到伺服器給的位置（每幀補掉剩餘位移的一部分）
+    if (this.slideX !== 0 || this.slideZ !== 0) {
+      const a = 1 - Math.exp(-dt / 0.05)
+      const p = resolveCollisions(local.mover.x + this.slideX * a, local.mover.z + this.slideZ * a, this.moveCfg)
+      local.mover.x = p.x
+      local.mover.z = p.z
+      this.slideX *= 1 - a
+      this.slideZ *= 1 - a
+      if (Math.hypot(this.slideX, this.slideZ) < 0.005) this.slideX = this.slideZ = 0
+      moving = true
+    }
     const portal = portalAt(this.zone, local.mover.x, local.mover.z)
     if (portal) {
       if (riding) {
@@ -1016,7 +1038,51 @@ export class GameCore {
   }
 
   /** 伺服器拒絕了自己送出的位置（跳太遠或穿過障礙物）：回到伺服器上的位置，取消進行中的移動。 */
+  /**
+   * 本機先行的玩家碰撞：走進別人的範圍時自己少走一半、對方在畫面上被推開一半（world/collide.ts，與伺服器同一套規則）。
+   * 回傳這一幀實際上有沒有移動。
+   */
+  private collideLocal(prevX: number, prevZ: number, now: number): boolean {
+    const m = this.players.local.mover
+    const others: Body[] = []
+    for (const r of this.players.remotes.values()) {
+      if (r.zone !== this.zone || this.vehicles.riderCar(r.id)) continue
+      // 定點動作中的人推不動；合十之類不鎖定移動的動作不算
+      others.push({ n: r.n, x: r.x, z: r.z, rooted: now < r.lockedUntil })
+    }
+    if (others.length === 0) return true
+    const valid = (x: number, z: number) => {
+      const p = resolveCollisions(x, z, this.moveCfg)
+      return Math.abs(p.x - x) < 1e-6 && Math.abs(p.z - z) < 1e-6
+    }
+    const r = resolveMove({ x: m.x, z: m.z }, { x: prevX, z: prevZ }, others, 0, valid)
+    m.x = r.x
+    m.z = r.z
+    for (const o of r.moved) this.players.nudgeRemoteByN(o.n, o.x, o.z)
+    // 被人擋住走不動超過 1.5 秒：放棄點擊移動的目標（人會被推開，所以不重新尋路）
+    const advanced = Math.hypot(m.x - prevX, m.z - prevZ) > 1e-4
+    if (advanced) this.blockedSince = null
+    else if (this.blockedSince === null) this.blockedSince = now
+    else if (now - this.blockedSince > 1500 && m.target) {
+      m.target = null
+      this.path = []
+      this.pending = null
+      this.marker.visible = false
+      this.blockedSince = null
+    }
+    return advanced
+  }
+
+  /** 伺服器把本機玩家放到 (x, z)：差距小（被人推了一下、碰撞結果略有出入）就滑過去，差距大才瞬移。 */
   private correctLocal(x: number, z: number): void {
+    const cur = this.players.local.mover
+    if (Math.hypot(x - cur.x, z - cur.z) < SMOOTH_CORRECTION_M) {
+      this.slideX += x - cur.x - this.slideX
+      this.slideZ += z - cur.z - this.slideZ
+      this.wake()
+      return
+    }
+    this.slideX = this.slideZ = 0
     const pos = resolveCollisions(x, z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, target: null })
     this.path = []
