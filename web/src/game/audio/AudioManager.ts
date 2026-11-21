@@ -10,7 +10,7 @@
  * - AudioContext 只能在使用者操作後建立／恢復，因此 unlock() 必須在點擊事件中呼叫。
  */
 
-type SynthName = 'bell' | 'wood' | 'bowl'
+type SynthName = 'bell' | 'wood' | 'bowl' | 'bump' | 'knock'
 
 const MAX_VOICES = 12
 
@@ -48,6 +48,10 @@ function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
     wood: { seconds: 0.35, f0: 620, partials: [[1, 1, 0.07], [2.31, 0.4, 0.04]], click: 0.004 },
     // 頌缽：拍頻造成的嗡嗡聲
     bowl: { seconds: 6, f0: 294, partials: [[1, 1, 3.5], [1.006, 0.8, 3.5], [2.71, 0.35, 2], [5.15, 0.12, 1]] },
+    // 碰碰車碰撞：低沉短促橡膠撞擊
+    bump: { seconds: 0.25, f0: 95, partials: [[1, 1, 0.05], [1.8, 0.4, 0.03]], click: 0.015 },
+    // 撞飛：較重的擊中感與滑落衰減
+    knock: { seconds: 0.45, f0: 140, partials: [[1, 1, 0.08], [0.65, 0.7, 0.12], [2.1, 0.3, 0.04]], click: 0.02 },
   }
   const s = spec[name]
   const len = Math.floor(sr * s.seconds)
@@ -302,7 +306,7 @@ export class AudioManager {
       this.musicBus.connect(this.master)
       this.sfxBus.connect(this.master)
       this.master.connect(ctx.destination)
-      for (const n of ['bell', 'wood', 'bowl'] as const) this.buffers.set(n, synthesize(ctx, n))
+      for (const n of ['bell', 'wood', 'bowl', 'bump', 'knock'] as const) this.buffers.set(n, synthesize(ctx, n))
       this.birdBuffers = Array.from({ length: BIRD_VARIANTS }, () => synthesizeBirdCall(ctx))
       this.windBuffer = synthesizeWindNoise(ctx)
       for (const [name, url] of this.pendingUrls) void this.loadSfx(name, url)
