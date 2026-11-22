@@ -79,7 +79,7 @@ export const worshipModule: GameplayModule = {
     const off = [
       api.animations.registerClip('prostrate', prostrateClip),
       api.animations.registerClip('incense', incenseClip),
-      api.audio.defineSfx('qing', (ctx) => synthesizeQing(ctx)),
+      api.audio.defineSfx('daqing', (ctx) => synthesizeIncenseOffering(ctx, 0)),
       api.audio.defineSfx('qing1', (ctx) => synthesizeQing(ctx, [BOW_STRIKE])),
       api.audio.defineSfx('qing3',(ctx) => synthesizeQing(ctx, PROSTRATE_BOWS.map((b) => b.down), PROSTRATE_BOWS.map((b) => b.up))),
       api.audio.defineSfx('incense', (ctx) => synthesizeIncenseOffering(ctx, (INCENSE_MS * PLANT_AT) / 1000)),
