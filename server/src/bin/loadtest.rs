@@ -10,6 +10,9 @@
 //!            [--connections 50] [--moving-ratio 0.5] [--seconds 60]
 //!            [--ramp-ms 5] [--settle-ms 2000]
 //!
+//! 有司機（`--drivers`）時，被測的伺服器須以 `VEHICLE_SESSION=always` 啟動（廟會時段永遠開放），
+//! 否則每小時的後半小時領不到車，結果的 `drivers_driving_at_start` 會少於司機數。
+//!
 //! 全部連線建立後先等 `settle-ms`（讓加入時的 welcome／join 突波過去），再量測 `seconds` 秒。
 //! 最後一行輸出是機器可讀的 JSON；其餘是給人看的摘要（stdout）。
 
@@ -154,6 +157,8 @@ struct Stats {
     sent_msgs: AtomicU64,
     /// 在我們主動結束之前就被伺服器關閉（或中斷）的連線數（含暖機期間）。
     closed_by_server: AtomicU64,
+    /// 已領到車、開始送 drive 的司機數。
+    driving: AtomicU64,
     /// 是否在量測視窗內（暖機期間的流量不計）。
     measuring: AtomicBool,
 }
@@ -277,8 +282,8 @@ async fn player(
         != ((index + 1) * args.drivers / args.connections);
     enum DriverPhase {
         Walking,
-        Claiming { kind: u8, retry_at: Instant },
-        Driving { seq: u16 },
+        Claiming { retry_at: Instant },
+        Driving { seq: u16, dir: u8 },
     }
     let mut driver_phase = if is_driver {
         Some(DriverPhase::Walking)
@@ -295,6 +300,8 @@ async fn player(
         heading: me.and_then(|p| p["heading"].as_f64()).unwrap_or(0.0),
         seq: 0,
     };
+    // 被撞飛後到起身前伺服器不收移動：這段時間不送 move。
+    let mut paused_until = Instant::now();
     let count_sent = |bytes: usize| {
         if stats.measuring.load(Relaxed) {
             stats.sent_bytes.fetch_add(bytes as u64, Relaxed);
@@ -325,6 +332,7 @@ async fn player(
             _ = driver_timer.tick(), if is_driver => {
                 if let Some(phase) = &mut driver_phase {
                     match phase {
+                        DriverPhase::Walking if Instant::now() < paused_until => None,
                         DriverPhase::Walking => {
                             let dx = -11.5 - walker.x;
                             let dz = 9.25 - walker.z;
@@ -337,26 +345,28 @@ async fn player(
                                 walker.seq += 1;
                                 Some(json!({"t": "move", "x": round2(walker.x), "z": round2(walker.z), "heading": round2(walker.heading), "seq": walker.seq}).to_string())
                             } else {
-                                let kind = (index % 4) as u8;
                                 *phase = DriverPhase::Claiming {
-                                    kind,
                                     retry_at: Instant::now() + Duration::from_millis(1000),
                                 };
-                                Some(json!({"t": "claim", "kind": kind}).to_string())
+                                Some(json!({"t": "claim"}).to_string())
                             }
                         }
-                        DriverPhase::Claiming { kind, retry_at } => {
+                        DriverPhase::Claiming { retry_at } => {
                             if Instant::now() >= *retry_at {
-                                *retry_at = Instant::now() + Duration::from_millis(500);
-                                Some(json!({"t": "claim", "kind": *kind}).to_string())
+                                // 動作限速每秒 2 次：重試更密會連續超量，5 秒後被伺服器以 1008 關閉。
+                                *retry_at = Instant::now() + Duration::from_millis(600);
+                                Some(json!({"t": "claim"}).to_string())
                             } else {
                                 None
                             }
                         }
-                        DriverPhase::Driving { seq } => {
+                        DriverPhase::Driving { seq, dir } => {
                             *seq = seq.wrapping_add(1);
-                            let dir = rand::random::<u8>();
-                            Some(json!({"t": "drive", "seq": *seq, "dir": dir, "mag": 255}).to_string())
+                            // 平均約 2 秒換一次方向：每次都換的話車只會原地抖動，不離開檔口。
+                            if rand::random::<f64>() < 0.03 {
+                                *dir = rand::random();
+                            }
+                            Some(json!({"t": "drive", "seq": *seq, "dir": *dir, "mag": 255}).to_string())
                         }
                     }
                 } else {
@@ -364,8 +374,12 @@ async fn player(
                 }
             }
             _ = move_timer.tick(), if !is_driver && moving => {
-                let (x, z, heading) = walker.step();
-                Some(json!({"t": "move", "x": x, "z": z, "heading": heading, "seq": walker.seq}).to_string())
+                if Instant::now() < paused_until {
+                    None
+                } else {
+                    let (x, z, heading) = walker.step();
+                    Some(json!({"t": "move", "x": x, "z": z, "heading": heading, "seq": walker.seq}).to_string())
+                }
             }
             _ = ping_timer.tick() => {
                 Some(json!({"t": "ping", "ts": start.elapsed().as_secs_f64() * 1000.0}).to_string())
@@ -391,17 +405,27 @@ async fn player(
                             stats.invalid_frames.fetch_add(1, Relaxed);
                         }
                         if let Message::Text(raw) = &message
-                            && let Some(DriverPhase::Claiming { kind, retry_at }) =
-                                &mut driver_phase
                             && let Ok(val) = serde_json::from_str::<Value>(raw)
                         {
-                            if val["t"] == "car" && val["driver"].as_str() == Some(&my_id) {
-                                driver_phase = Some(DriverPhase::Driving { seq: 0 });
-                            } else if val["t"] == "error" && val["code"] == "car_unavailable" {
-                                *kind = (*kind + 1) % 4;
-                                *retry_at = Instant::now();
-                            } else if val["t"] == "error" && val["code"] == "booth_crowded" {
-                                *retry_at = Instant::now() + Duration::from_millis(150);
+                            let claiming =
+                                matches!(driver_phase, Some(DriverPhase::Claiming { .. }));
+                            if val["t"] == "knock" && val["id"].as_str() == Some(&my_id) {
+                                // 被撞飛：落點以伺服器為準，起身後從那裡繼續走（司機走回檔口重新領車）。
+                                walker.x = val["toX"].as_f64().unwrap_or(walker.x);
+                                walker.z = val["toZ"].as_f64().unwrap_or(walker.z);
+                                paused_until = Instant::now() + Duration::from_millis(2000);
+                                if claiming {
+                                    driver_phase = Some(DriverPhase::Walking);
+                                }
+                            } else if claiming
+                                && val["t"] == "car"
+                                && val["driver"].as_str() == Some(&my_id)
+                            {
+                                driver_phase = Some(DriverPhase::Driving {
+                                    seq: 0,
+                                    dir: rand::random(),
+                                });
+                                stats.driving.fetch_add(1, Relaxed);
                             }
                         }
                         if stats.measuring.load(Relaxed) {
@@ -492,6 +516,7 @@ async fn main() {
     }
     sleep(Duration::from_millis(args.settle_ms)).await;
     let before = stats.snapshot();
+    let driving = stats.driving.load(Relaxed);
     stats.measuring.store(true, Relaxed);
     let started = Instant::now();
     println!("量測開始");
@@ -553,6 +578,7 @@ async fn main() {
         "url": args.url,
         "connections": args.connections,
         "drivers": args.drivers,
+        "drivers_driving_at_start": driving,
         "moving_ratio": args.moving_ratio,
         "moving_players": movers,
         "seconds": round2(elapsed),

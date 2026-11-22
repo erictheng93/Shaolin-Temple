@@ -24,6 +24,7 @@ const DRIVE_BURST: f64 = 5.0;
 const DRIVE_PER_SEC: f64 = 20.0;
 /// 兩次丟棄相隔不超過這段時間，才算「連續」超出。
 const STREAK_GAP: Duration = Duration::from_secs(1);
+/// 連續超出多久就關閉連線。
 pub const DEFAULT_CLOSE_AFTER: Duration = Duration::from_secs(5);
 
 struct Bucket {
@@ -91,9 +92,9 @@ impl RateLimiter {
     pub fn admit(&mut self, message: &ClientMessage, now: Instant) -> Verdict {
         let mut specific = match message {
             ClientMessage::Move { .. } | ClientMessage::Stop { .. } => Some(&mut self.position),
-            ClientMessage::Action { .. }
-            | ClientMessage::Claim { .. }
-            | ClientMessage::Ride { .. } => Some(&mut self.action),
+            ClientMessage::Action { .. } | ClientMessage::Claim | ClientMessage::Ride { .. } => {
+                Some(&mut self.action)
+            }
             ClientMessage::Drive { .. } => Some(&mut self.drive),
             ClientMessage::Chat { .. } => Some(&mut self.chat),
             ClientMessage::Outfit { .. } => Some(&mut self.outfit),
@@ -308,7 +309,7 @@ mod tests {
     async fn claim_and_ride_share_action_bucket() {
         let t0 = Instant::now();
         let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
-        let claim = ClientMessage::Claim { kind: 0 };
+        let claim = ClientMessage::Claim;
         let ride = ClientMessage::Ride { car: Some(1) };
         assert_eq!(limiter.admit(&claim, t0), Verdict::Pass);
         assert_eq!(limiter.admit(&ride, t0), Verdict::Pass);

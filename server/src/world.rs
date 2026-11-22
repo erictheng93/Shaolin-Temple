@@ -13,7 +13,7 @@
 
 use std::f64::consts::PI;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
     pub min_x: f64,
     pub max_x: f64,
@@ -141,17 +141,15 @@ const fn pad_rects<const N: usize>(solids: &[Rect; N]) -> [Rect; N] {
     out
 }
 
-/// 殿門觸發範圍往門前延伸的距離（公尺）。
-pub const PORTAL_REACH: f64 = crate::collide::PORTAL_REACH;
-
 /// 出入口範圍的容許誤差（公尺）。
 pub const PORTAL_TOLERANCE: f64 = 0.5;
 
-pub static COURTYARD_SOLIDS: [Rect; 16] = [
-    raw_solid(-7.5, 7.5, -18.0, -6.2), // 主殿
-    raw_solid(10.0, 14.0, -6.0, -2.0), // 鐘亭
-    raw_square(0.0, -1.5, 0.9),        // 香爐
-    raw_square(-4.0, 3.0, 0.35),       // 石燈籠
+pub static COURTYARD_SOLIDS: [Rect; 17] = [
+    raw_solid(-7.5, 7.5, -18.0, -6.2),  // 主殿
+    raw_solid(10.0, 14.0, -6.0, -2.0),  // 鐘亭
+    raw_solid(-15.5, -12.5, 8.0, 10.5), // 碰碰車檔口
+    raw_square(0.0, -1.5, 0.9),         // 香爐
+    raw_square(-4.0, 3.0, 0.35),        // 石燈籠
     raw_square(4.0, 3.0, 0.35),
     raw_square(-4.0, -4.0, 0.35),
     raw_square(4.0, -4.0, 0.35),
@@ -165,7 +163,7 @@ pub static COURTYARD_SOLIDS: [Rect; 16] = [
     raw_tree(-9.0, 16.0, 0.8),
     raw_tree(9.0, 16.5, 0.9),
 ];
-pub static COURTYARD_OBSTACLES: [Rect; 16] = pad_rects(&COURTYARD_SOLIDS);
+pub static COURTYARD_OBSTACLES: [Rect; 17] = pad_rects(&COURTYARD_SOLIDS);
 
 pub static COURTYARD: Zone = Zone {
     id: "courtyard",
@@ -185,7 +183,9 @@ pub static COURTYARD: Zone = Zone {
             min_x: -1.6,
             max_x: 1.6,
             min_z: -6.2,
-            max_z: -5.0 + PORTAL_REACH,
+
+            // 往門前延伸 0.35 公尺（原本 -5.0），與前端 zones.ts 的 COURTYARD_DOOR 一致
+            max_z: -4.65,
         },
         to: "hall",
         spawn: Pose {
@@ -382,5 +382,16 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn courtyard_solids_contain_booth_rect() {
+        let booth = Rect {
+            min_x: -15.5,
+            max_x: -12.5,
+            min_z: 8.0,
+            max_z: 10.5,
+        };
+        assert!(COURTYARD.solids.contains(&booth));
     }
 }

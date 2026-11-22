@@ -17,7 +17,8 @@
     "bake:lightmaps": "node scripts/bake-lightmaps.mjs",
     "build:statues": "node scripts/process-statues.mjs",
     "capture:doorway": "node scripts/capture-doorway.mjs",
-    "build:avatar": "node scripts/build-avatar.mjs public/models/monk.glb 1 && node scripts/build-avatar.mjs public/models/monk-lod.glb 0"
+    "build:avatar": "node scripts/build-avatar.mjs public/models/monk.glb 1 && node scripts/build-avatar.mjs public/models/monk-lod.glb 0",
+    "build:cars": "node scripts/build-cars.mjs public/models/cars.glb"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.21.0",
