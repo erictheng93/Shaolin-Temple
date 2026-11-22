@@ -90,6 +90,10 @@ pub enum ClientMessage {
         dir: u8,
         mag: u8,
     },
+    /// 手動開關廟會時段（暫時的功能，任何玩家都能送）：之後不再依時鐘，直到房間結束。
+    Fair {
+        open: bool,
+    },
 }
 
 /// 碰碰車種類數量（4 款）。由固定資料 `tests/protocol-v5.json` 的 `kindCount` 鎖住。
@@ -325,6 +329,10 @@ pub enum ServerMessage {
         ack: u16,
         cars: Vec<CarState>,
     },
+    /// 廟會時段被手動開啟或關閉：廣播給同房所有人；有手動狀態時 `welcome` 之後也補送。
+    Fair {
+        open: bool,
+    },
 }
 
 impl From<CarSnapshot> for ServerMessage {
@@ -381,7 +389,7 @@ impl ClientMessage {
             Self::Zone { zone, .. } => id(zone, MAX_ZONE_BYTES),
             Self::Chat { text } => text.len() <= MAX_CHAT_RAW_BYTES,
             Self::Ride { car } => car.is_none_or(|c| (c as usize) < MAX_CARS),
-            Self::Claim | Self::Drive { .. } => true,
+            Self::Claim | Self::Drive { .. } | Self::Fair { .. } => true,
             Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } | Self::Outfit { .. } => true,
         }
     }

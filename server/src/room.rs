@@ -157,6 +157,10 @@ enum RoomCommand {
         who: Who,
         outfit: u8,
     },
+    Fair {
+        who: Who,
+        open: bool,
+    },
     /// kind 為 None 時由房間抽車種（正式路徑）；測試可指定。
     Claim {
         who: Who,
@@ -350,6 +354,16 @@ impl Membership {
             })
             .await;
     }
+    /// 手動開關廟會時段。
+    pub async fn fair(&self, open: bool) {
+        let _ = self
+            .room
+            .send(RoomCommand::Fair {
+                who: self.who.clone(),
+                open,
+            })
+            .await;
+    }
     pub async fn claim(&self) {
         let _ = self
             .room
@@ -532,6 +546,8 @@ pub struct Room {
     pub(crate) created: Instant,
     /// 上一個 tick 的時段是否開放；偵測「開放 → 關閉」用。
     pub(crate) session_was_open: bool,
+    /// 玩家手動開關的廟會狀態（`fair` 訊息，暫時的功能）；`Some` 時不看時鐘。
+    pub(crate) fair_override: Option<bool>,
 }
 
 impl Room {
@@ -548,6 +564,7 @@ impl Room {
             physics_steps: 0,
             created: Instant::now(),
             session_was_open: true,
+            fair_override: None,
         }
     }
     /// 廟會時段與車輛 `fadeAt` 用的伺服器毫秒：`Wall`／`AlwaysOpen` 為 `now_ms()`，
@@ -562,8 +579,10 @@ impl Room {
     }
     /// 目前是否在廟會時段內（可以領車、上車）。
     pub(crate) fn session_is_open(&self, now: Instant) -> bool {
-        self.config.session_clock == SessionClock::AlwaysOpen
-            || session_open(self.session_ms(now), &params().session)
+        self.fair_override.unwrap_or_else(|| {
+            self.config.session_clock == SessionClock::AlwaysOpen
+                || session_open(self.session_ms(now), &params().session)
+        })
     }
     fn new_token(&self) -> String {
         format!("{:x}.{:032x}", self.no, rand::random::<u128>())
@@ -775,7 +794,14 @@ impl Room {
             return false;
         };
         let Some(link) = &p.link else { return false };
-        link.tx.try_send(self.welcome(p)).is_ok()
+        if link.tx.try_send(self.welcome(p)).is_err() {
+            return false;
+        }
+        // 廟會被手動開關過：新進與恢復的連線補上目前狀態（沒有就依時鐘，不送）。
+        match self.fair_override {
+            Some(open) => link.tx.try_send(ServerMessage::Fair { open }).is_ok(),
+            None => true,
+        }
     }
 
     /// 通知同房（連線中、符合 `to`）的玩家。不可丟棄的訊息放不進佇列代表慢速接收者，
@@ -1076,6 +1102,15 @@ impl Room {
         self.broadcast(message, now, |_| true);
     }
 
+    /// 手動開關廟會：記住並廣播給全房；關閉時的下車與淡出由下一個 tick 的 `check_session` 處理。
+    fn set_fair(&mut self, who: &Who, open: bool, now: Instant) {
+        if self.live(who).is_none() {
+            return;
+        }
+        self.fair_override = Some(open);
+        self.broadcast(ServerMessage::Fair { open }, now, |_| true);
+    }
+
     fn switch_zone(&mut self, who: &Who, target: &str, now: Instant) {
         let Some(p) = self.live(who) else { return };
         if p.riding.is_some() {
@@ -1338,6 +1373,7 @@ async fn run_room(
                     RoomCommand::Rename { who, name } => room.rename(&who, name, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                     RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
+                    RoomCommand::Fair { who, open } => room.set_fair(&who, open, now),
                     RoomCommand::Claim { who, kind } => {
                         let kind = kind.unwrap_or_else(|| room.roll_kind());
                         room.claim(&who, kind, now)

@@ -154,6 +154,10 @@ const zhHant = {
   'ride.modal.hint': '車種隨機分配，不能自己挑',
   'ride.session.closed': '廟會 {time} 後開始',
   'ride.session.open': '廟會進行中，剩 {time}',
+  'ride.session.manualOpen': '廟會進行中（手動開啟）',
+  'ride.session.manualClosed': '廟會已關閉（手動關閉）',
+  'ride.session.turnOn': '開啟廟會',
+  'ride.session.turnOff': '關閉廟會',
   'ride.modal.close': '關閉',
   'ride.rotateHint': '橫向拿手機，開車更順手',
 

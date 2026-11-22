@@ -255,6 +255,7 @@ fn kind(m: &ServerMessage) -> &'static str {
         ServerMessage::CarGone { .. } => "carGone",
         ServerMessage::Knock { .. } => "knock",
         ServerMessage::Cars { .. } => "cars",
+        ServerMessage::Fair { .. } => "fair",
     }
 }
 fn kinds(messages: &[ServerMessage]) -> Vec<&'static str> {

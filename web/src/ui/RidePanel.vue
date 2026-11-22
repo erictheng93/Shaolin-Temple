@@ -5,7 +5,7 @@ import { CAR_KINDS, formatCountdown, sessionBlocks } from '../game/world/vehicle
 import { t, type MessageKey } from '../i18n'
 
 const props = defineProps<{ ride: RideUi; touch?: boolean; landscape?: boolean }>()
-const emit = defineEmits<{ toggle: []; claim: []; close: [] }>()
+const emit = defineEmits<{ toggle: []; claim: []; close: []; fair: [] }>()
 
 const RARITY_KEYS: Record<'common' | 'rare' | 'mythic', MessageKey> = {
   common: 'ride.rarity.common',
@@ -22,6 +22,7 @@ const blocked = computed(() => sessionBlocks(mode.value, props.ride.session))
 const sessionText = computed(() => {
   const s = props.ride.session
   if (!s) return null
+  if (s.manual) return t(s.open ? 'ride.session.manualOpen' : 'ride.session.manualClosed')
   return t(s.open ? 'ride.session.open' : 'ride.session.closed', { time: formatCountdown(s.secs) })
 })
 const LABEL = { dismount: 'ride.dismount', mount: 'ride.mount', talk: 'ride.talk' } as const
@@ -49,7 +50,11 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
 
 <template>
   <!-- 右側欄、說話按鈕上方：上車／下車／領車，鍵盤是 E -->
-  <p v-if="sessionText" class="session-pill" :class="{ closed: !ride.session?.open }" role="status">{{ sessionText }}</p>
+  <div v-if="sessionText" class="session-box">
+    <!-- 暫時的功能：任何玩家都能手動開關廟會 -->
+    <button type="button" class="fair-btn" @click="emit('fair')">{{ t(ride.session?.open ? 'ride.session.turnOff' : 'ride.session.turnOn') }}</button>
+    <p class="session-pill" :class="{ closed: !ride.session?.open }" role="status">{{ sessionText }}</p>
+  </div>
   <button v-if="mode" type="button" class="ride-btn" :class="[`mode-${mode}`, { blocked }]" :aria-disabled="blocked" :aria-label="t(LABEL[mode])" @click="emit('toggle')">
     <span class="ride-icon" aria-hidden="true">{{ ICON[mode] }}</span>
     <span class="ride-label">{{ t(LABEL[mode]) }}</span>
@@ -174,11 +179,31 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
 }
 .ride-btn.blocked, .go.blocked { opacity: 0.5; filter: grayscale(0.6); }
 /* 廟會倒數：右側欄、上車按鈕正上方的紙卡小標籤（不碰頂部列、左上聊天紀錄與左下搖桿） */
-.session-pill {
+.session-box {
   position: absolute;
   right: max(12px, env(safe-area-inset-right));
   bottom: calc(max(16px, env(safe-area-inset-bottom)) + 192px);
   max-width: min(260px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+  z-index: 10;
+}
+.fair-btn {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 2px solid #5a3b25;
+  background: #f2a03d;
+  color: #3a2313;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.session-pill {
   margin: 0;
   padding: 5px 12px;
   border-radius: 999px;
@@ -188,8 +213,6 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
   font-size: 0.8rem;
   font-weight: 700;
   text-align: center;
-  pointer-events: none;
-  z-index: 10;
 }
 .session-pill.closed { background: #ffe9df; }
 .session-note { margin: 0 0 6px; font-size: 0.85rem; font-weight: 700; }

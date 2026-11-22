@@ -151,6 +151,10 @@ const en: Record<MessageKey, string> = {
   'ride.modal.hint': 'Cars are assigned at random; you cannot choose',
   'ride.session.closed': 'Temple fair starts in {time}',
   'ride.session.open': 'Temple fair open, {time} left',
+  'ride.session.manualOpen': 'Temple fair open (manual)',
+  'ride.session.manualClosed': 'Temple fair closed (manual)',
+  'ride.session.turnOn': 'Open fair',
+  'ride.session.turnOff': 'Close fair',
   'ride.modal.close': 'Close',
   'ride.rotateHint': 'Turn your phone sideways for easier driving',
 

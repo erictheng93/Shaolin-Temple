@@ -260,6 +260,12 @@ export class NetworkClient {
     this.sendNow({ t: 'claim' })
   }
 
+  /** 手動開關廟會時段（以伺服器廣播的 fair 為準，不先套用）。 */
+  sendFair(open: boolean): void {
+    if (!this.enabled || this.status !== 'online') return
+    this.sendNow({ t: 'fair', open })
+  }
+
   /** 上下車（car 為車編號，null 為下車）。 */
   sendRide(car: number | null): void {
     if (!this.enabled || this.status !== 'online') return
