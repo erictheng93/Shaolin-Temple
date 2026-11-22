@@ -713,6 +713,8 @@ export const BOOTH_NPC: { x: number; z: number; heading: number }
 
 ### 任務 18：廟會時段、遊戲區免撞與第 1 段稽核修正（後端，使用者）
 
+**狀態（2026-11-22）：** B2 在 PR #48、C3（初版）與 C5 在 PR #47；其餘（A、B、C3 重寫、C6、測試）與任務 19 由 Claude 調度子代理完成，在 PR #51（`feat/bumper-cars-session`）。任務 19 的「NPC 名牌下方的倒數」不做。
+
 **分支：** `feat/bumper-cars-server`（PR #37）。**檔案：** `shared/vehicles.json`、`server/src/vehicles/params.rs`、`server/src/vehicles/world.rs`、`server/src/room.rs`、`server/src/room/vehicles.rs`、`server/src/room/vehicle_tests.rs`、`server/src/main.rs`（或讀環境變數處）、`server/src/bin/loadtest.rs`、`server/tests/protocol-v5.json`、`docs/LOAD_TEST_2026-11-21_VEHICLES.md`、`docs/BACKEND_TASKS.md`；新增專案根目錄的 `.dockerignore`。
 
 **`shared/vehicles.json` 新增：**
@@ -738,7 +740,7 @@ impl Room { fn session_ms(&self, now: Instant) -> f64; }    // Wall: now_ms()；
 **A. 廟會時段規則**
 
 - `claim`、`ride(Some)` 在 `!session_open` 時回 `error session_closed`（檢查放在其他條件之前；`ride(None)` 下車不受影響）。
-- 每個 tick（10 Hz 的那個，不是物理步；沒有車在跑時物理不步進）偵測「上一個 tick 開放、這一個 tick 關閉」：對所有騎士呼叫 `dismount`；之後把每台車的 `empty_since` 設成讓它在 `fadeMs` 後到期（即 `now − idleMs`）、`fade_at = 結束時刻 + fadeMs`，各廣播一則 `car`。
+- 每個 tick（10 Hz 的那個，不是物理步；沒有車在跑時物理不步進）偵測「上一個 tick 開放、這一個 tick 關閉」：對所有騎士呼叫 `dismount`；之後每台車立刻開始淡出：`fade_at = 結束時刻`、`fadeMs` 後移除，各廣播一則 `car`（線路上的 `fadeAt` 是「開始淡出的時刻」，車在 `fadeAt + fadeMs` 移除；原稿寫成 `結束時刻 + fadeMs` 是錯的，2026-11-22 更正）。已經在淡出、會更早移除的車維持原狀。實作以 `remove_at`（移除時刻）取代 `empty_since`。
 - `SessionClock::AlwaysOpen` 給負載工具與既有測試：環境變數 `VEHICLE_SESSION=always` 時使用；既有的車輛測試一律改用 `Fixed { base_ms: 0.0 }`（開場時刻），否則在真實時間的關閉半小時內會失敗。
 - 固定資料 `server` 區加一筆 `{"t":"error","code":"session_closed","message":"..."}`。
 
@@ -760,7 +762,7 @@ impl Room { fn session_ms(&self, now: Instant) -> f64; }    // Wall: now_ms()；
   - `params::tests::session_open_follows_period_and_open_window`：毫秒 0、1_799_999 開放；1_800_000、3_599_999 關閉；3_600_000 開放。
   - `params::tests::zone_contains_booth_counter_bays_and_npc`（同任務 17）。
   - `claim_and_ride_are_refused_with_session_closed_outside_the_window`
-  - `closing_the_session_dismounts_riders_and_fades_every_car`：`Fixed { base_ms: 0.0 }` 下推進到 30 分鐘 → 騎士收到 `driver: null` 的 `car` 且 `fadeAt == 1_800_000 + 15_000`（±一個 tick）；再 15 秒後收到 `carGone`；之後 `claim` 回 `session_closed`。
+  - `closing_the_session_dismounts_riders_and_fades_every_car`：`Fixed { base_ms: 0.0 }` 下推進到 30 分鐘 → 騎士收到 `driver: null` 的 `car` 且 `fadeAt == 1_800_000`（±一個 tick）；再 15 秒後收到 `carGone`；之後 `claim` 回 `session_closed`。
   - `players_inside_the_game_zone_are_not_knocked`：同一台快車，區內的人不被撞、區外的人被撞。
   - `walker_can_push_a_sleeping_empty_car`（任務 6 已列）。
   - `a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame`
