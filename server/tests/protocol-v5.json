@@ -169,6 +169,11 @@
       "t": "error",
       "code": "dismount_first",
       "message": "Dismount first"
+    },
+    {
+      "t": "error",
+      "code": "session_closed",
+      "message": "Temple fair is closed"
     }
   ],
   "client": [

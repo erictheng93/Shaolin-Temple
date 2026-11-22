@@ -12,7 +12,9 @@ use tokio::time::Instant;
 pub struct Car {
     pub kind: u8,
     pub driver: Option<String>,
-    pub empty_since: Option<Instant>,
+    /// 空車被移除（廣播 carGone）的時刻；有人騎乘時為 `None`。
+    /// 下車時為下車時刻 + idleMs + fadeMs；廟會時段結束時為結束時刻 + fadeMs。
+    pub remove_at: Option<Instant>,
     pub last_input_at: Instant,
     pub fade_at: Option<f64>,
 }
@@ -55,6 +57,12 @@ impl Room {
     /// 依序找第一個 bay_is_free 的停車位，都沒有回 booth_crowded；
     /// 成功則生車、玩家上車、廣播 car。
     pub(crate) fn claim(&mut self, who: &Who, kind: u8, now: Instant) {
+        if self.live(who).is_none() {
+            return;
+        }
+        if self.refuse_outside_session(&who.id, now) {
+            return;
+        }
         let Some(p) = self.live(who) else { return };
         let p_params = params();
 
@@ -140,7 +148,7 @@ impl Room {
             Car {
                 kind,
                 driver: Some(who.id.clone()),
-                empty_since: None,
+                remove_at: None,
                 last_input_at: now,
                 fade_at: None,
             },
@@ -171,6 +179,63 @@ impl Room {
         self.broadcast(msg, now, |_| true);
     }
 
+    /// 廟會時段外回 `error session_closed` 並回 true。
+    fn refuse_outside_session(&mut self, id: &str, now: Instant) -> bool {
+        if self.session_is_open(now) {
+            return false;
+        }
+        let error = ServerMessage::Error {
+            code: "session_closed".into(),
+            message: "廟會時段外不能領車或上車".into(),
+        };
+        self.send_to(id, error, now);
+        true
+    }
+
+    /// 每個 10 Hz tick 呼叫：偵測廟會時段由開放變成關閉的那一刻。
+    /// 所有騎士下車；之後每台車立即開始淡出（`fadeAt` = 結束時刻，`fadeMs` 後移除），各廣播一則 `car`。
+    pub(crate) fn check_session(&mut self, now: Instant) {
+        let open = self.session_is_open(now);
+        let closing = self.session_was_open && !open;
+        self.session_was_open = open;
+        if !closing {
+            return;
+        }
+        let riders: Vec<String> = self
+            .players
+            .values()
+            .filter(|p| p.riding.is_some())
+            .map(|p| p.id.clone())
+            .collect();
+        for id in riders {
+            self.dismount(&id, now);
+        }
+        let fade_at = self.session_ms(now);
+        let remove_at = now + Duration::from_millis(params().fade.fade_ms);
+        let cars: Vec<u8> = self.cars.keys().copied().collect();
+        for c in cars {
+            // 已經在淡出、會更早移除的車維持原狀（否則會從半透明跳回不透明再淡一次）。
+            if let Some(car) = self.cars.get_mut(&c)
+                && car.remove_at.is_none_or(|t| t > remove_at)
+            {
+                car.remove_at = Some(remove_at);
+                car.fade_at = Some(fade_at);
+            }
+            if let Some(snapshot) = self.car_snapshot(c) {
+                let msg = ServerMessage::Car {
+                    c,
+                    kind: snapshot.kind,
+                    driver: None,
+                    x: snapshot.x,
+                    z: snapshot.z,
+                    heading: snapshot.heading,
+                    fade_at: snapshot.fade_at,
+                };
+                self.broadcast(msg, now, |_| true);
+            }
+        }
+    }
+
     /// 上下車：
     /// `ride(Some(c))`：須在庭院、未騎乘、未撞飛、車存在且無人、距車 ≤ mountRadius，否則回 car_unavailable。
     /// 成功廣播 car（driver 設為玩家、fadeAt 為 null）。
@@ -184,6 +249,9 @@ impl Room {
             self.dismount(&who.id, now);
             return;
         };
+        if self.refuse_outside_session(&who.id, now) {
+            return;
+        }
 
         let (px, pz) = {
             let Some(p) = self.live(who) else { return };
@@ -252,7 +320,7 @@ impl Room {
         let kind = {
             let car_meta = self.cars.get_mut(&c).unwrap();
             car_meta.driver = Some(who.id.clone());
-            car_meta.empty_since = None;
+            car_meta.remove_at = None;
             car_meta.fade_at = None;
             car_meta.last_input_at = now;
             car_meta.kind
@@ -318,7 +386,8 @@ impl Room {
     /// 下車：落點依序試車的左、右、後方 dismountOffset 公尺，取第一個在邊界內且不在加邊障礙物內的；
     /// 都不行就用車的位置。
     /// 玩家座標設為落點，對本人送一筆 sync；
-    /// 車 set_occupied(false)、清除輸入、empty_since = now，廣播 car（fadeAt = 伺服器毫秒 + idleMs）。
+    /// 車 set_occupied(false)、清除輸入、remove_at = now + idleMs + fadeMs，
+    /// 廣播 car（fadeAt = `session_ms` + idleMs）。
     pub(crate) fn dismount(&mut self, id: &str, now: Instant) {
         let Some(p) = self.players.get_mut(id) else {
             return;
@@ -364,11 +433,12 @@ impl Room {
         self.vehicles.set_occupied(c, false);
         self.vehicles
             .set_input(c, DriveInput { dir: 0.0, mag: 0.0 });
-        let fade_at = now_ms() + p_params.fade.idle_ms as f64;
+        let fade_at = self.session_ms(now) + p_params.fade.idle_ms as f64;
+        let remove_at = now + Duration::from_millis(p_params.fade.idle_ms + p_params.fade.fade_ms);
         let mut kind = 0;
         if let Some(car_meta) = self.cars.get_mut(&c) {
             car_meta.driver = None;
-            car_meta.empty_since = Some(now);
+            car_meta.remove_at = Some(remove_at);
             car_meta.fade_at = Some(fade_at);
             kind = car_meta.kind;
         }
@@ -433,17 +503,11 @@ impl Room {
     }
 
     pub(crate) fn cleanup_expired_cars(&mut self, now: Instant) {
-        let p_params = params();
-        let max_empty = Duration::from_millis(p_params.fade.idle_ms + p_params.fade.fade_ms);
         let expired: Vec<u8> = self
             .cars
             .iter()
             .filter_map(|(&c, car)| {
-                if car.driver.is_none()
-                    && car
-                        .empty_since
-                        .is_some_and(|t| now.duration_since(t) >= max_empty)
-                {
+                if car.driver.is_none() && car.remove_at.is_some_and(|t| now >= t) {
                     Some(c)
                 } else {
                     None
@@ -543,6 +607,7 @@ impl Room {
         let immune_dur = Duration::from_millis(p_params.knock.immune_ms);
 
         let mut knocks = Vec::new();
+        let game_zone = &p_params.booth.zone;
 
         for (&c, car) in &self.cars {
             if car.driver.is_none() {
@@ -565,6 +630,7 @@ impl Room {
                     || pl.riding.is_some()
                     || pl.knocked_until.is_some_and(|t| now < t)
                     || pl.immune_until.is_some_and(|t| now < t)
+                    || game_zone.contains(pl.x, pl.z)
                 {
                     continue;
                 }
