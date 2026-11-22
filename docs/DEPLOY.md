@@ -111,7 +111,7 @@
 ```
 瀏覽器 ──https──▶ Cloudflare Pages          temple.wishly.tw（靜態檔）
 瀏覽器 ──wss────▶ Cloudflare ──Tunnel──▶ 開發機 localhost:8080（temple-server）
-                                         temple-ws.wishly.tw，只開放 /ws
+                                         temple-ws.wishly.tw，只開放 /ws 與 /auth/*
 ```
 
 - 前後端是兩個主機名（Pages 與 Tunnel 不能共用同一個主機名的不同路徑）：`VITE_WS_URL=wss://temple-ws.wishly.tw/ws`、`ALLOWED_ORIGINS=https://temple.wishly.tw`。
@@ -139,7 +139,7 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
    cloudflared tunnel create temple                          # 記下輸出的 Tunnel ID
    cloudflared tunnel route dns temple temple-ws.wishly.tw   # 建立 CNAME
    ```
-2. 設定檔 `~/.cloudflared/temple.yml`（Windows 是 `%USERPROFILE%\.cloudflared	emple.yml`）。只放行 `/ws`，`/metrics` 與 `/healthz` 不對外：
+2. 設定檔 `~/.cloudflared/temple.yml`（Windows 是 `%USERPROFILE%\.cloudflared\temple.yml`）。只放行 `/ws` 與 `/auth/*`（前端進場前會查 `/auth/providers`，沒放行時瀏覽器會報 CORS 錯誤），`/metrics` 與 `/healthz` 不對外：
    ```yaml
    tunnel: <Tunnel ID>
    credentials-file: <家目錄>/.cloudflared/<Tunnel ID>.json
@@ -147,9 +147,12 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
      - hostname: temple-ws.wishly.tw
        path: ^/ws$
        service: http://localhost:8080
+     - hostname: temple-ws.wishly.tw
+       path: ^/auth/
+       service: http://localhost:8080
      - service: http_status:404
    ```
-3. 每次開服：Windows 一個指令 `powershell -File deploy\serve-poc.ps1`（伺服器在 8081 加 Tunnel，Ctrl+C 一起結束；`temple.yml` 的 `service` 要是 `http://localhost:8081`）。其他系統或想分開跑時用兩個終端機：
+3. 每次開服：Windows 一個指令 `powershell -File deploy\serve-poc.ps1`（伺服器在 8081 加 Tunnel，Ctrl+C 一起結束；`temple.yml` 兩條規則的 `service` 都要是 `http://localhost:8081`；改了 `temple.yml` 要重啟 `cloudflared` 才生效）。其他系統或想分開跑時用兩個終端機：
    ```
    cd server && ALLOWED_ORIGINS=https://temple.wishly.tw cargo run --release --bin temple-server
    cloudflared tunnel --config ~/.cloudflared/temple.yml run
@@ -158,7 +161,7 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
 
 驗證沿用「上線後驗證清單」，把網址換成上面兩個主機名；`curl https://temple-ws.wishly.tw/metrics` 應為 404。
 
-這個 POC 的 Tunnel 只放行 `/ws`：要在這裡啟用登入（下一節），`temple.yml` 的 ingress 要另外放行 `^/auth/`，並把 `AUTH_PUBLIC_URL` 設為 `https://temple-ws.wishly.tw`。**未實測。**
+2026-11-18 已驗證 `/auth/` 的放行：`https://temple-ws.wishly.tw/auth/providers` 回 200 並帶 `access-control-allow-origin`，`/metrics`、`/healthz` 仍為 404，正式網址的 console 沒有錯誤。要在這個 POC 啟用登入（下一節），還要把 `AUTH_PUBLIC_URL` 設為 `https://temple-ws.wishly.tw` 並設定各家的憑證；**這部分未實測**（目前沒有設定任何登入方式，`providers` 是空的）。
 
 ## 登入（Google／LINE）
 
@@ -223,7 +226,7 @@ redirect URI 固定是 `<AUTH_PUBLIC_URL>/auth/<provider>/callback`，必須與�
 
 ## 回滾
 
-映像以 commit SHA 為標籤保存在 GHCR。回滾做法：在 Dokploy 的 Environment 把 `IMAGE_TAG` 改成先前的好 SHA，重新 Deploy（只需拉取映像，約數十秒）。前端與伺服器共用同一個 `IMAGE_TAG`，協定版本（目前 5）不會不一致；不要讓兩者用不同 SHA，否則版本不符會看到 `unsupported_version` 的「重新整理」提示。特別是協定 v4 → v5 新增了碰碰車二進位幀（0x04）與車輛控制訊息，前後端不相容，部署與回滾時必須前後端容器一併更新。注意前端映像的 `VITE_WS_URL` 是建置當時的變數值。Dokploy 另有 Rollbacks 功能，**未查證**是否適用於 compose 服務。
+映像以 commit SHA 為標籤保存在 GHCR。回滾做法：在 Dokploy 的 Environment 把 `IMAGE_TAG` 改成先前的好 SHA，重新 Deploy（只需拉取映像，約數十秒）。前端與伺服器共用同一個 `IMAGE_TAG`，協定版本（目前 5）不會不一致；不要讓兩者用不同 SHA，否則版本不符會看到 `unsupported_version` 的「重新整理」提示（新前端配舊伺服器時重新整理沒有用，要把伺服器更新到同一個 SHA）。特別是協定 v4 → v5 新增了碰碰車二進位幀（0x04）與車輛控制訊息，前後端不相容，部署與回滾時必須前後端容器一併更新。注意前端映像的 `VITE_WS_URL` 是建置當時的變數值。Dokploy 另有 Rollbacks 功能，**未查證**是否適用於 compose 服務。
 
 ## 已知未決事項
 

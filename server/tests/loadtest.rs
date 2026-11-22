@@ -48,7 +48,8 @@ async fn loadtest_smoke_against_local_server() {
     assert_eq!(result["moving_players"], 3);
     assert_eq!(result["connect_failed"], 0);
     assert_eq!(result["closed_by_server"], 0);
-    assert_eq!(result["session_closed"], 0);
+    // 兩位司機都領到車（伺服器以 AlwaysOpen 啟動，不受廟會時段影響）
+    assert_eq!(result["drivers_driving_at_start"], 2);
     assert!(result["recv_bytes_per_conn_s"].as_f64().unwrap() > 100.0);
     // moves 與 cars 是二進位幀，負載工具能逐則解碼，且歸類在 moves 與 cars 而不是 other。
     assert_eq!(result["invalid_frames"], 0);
