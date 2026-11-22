@@ -21,7 +21,7 @@ import { createSimWorld } from '../src/game/vehicles/simCore.ts'
 import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
 import { TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
 import { OBSTACLES } from '../src/game/world/layout.ts'
-import { VEHICLES } from '../src/game/world/vehicles.ts'
+import { VEHICLES, sessionState } from '../src/game/world/vehicles.ts'
 import { SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
 import { ACTION_CODES, MAX_CARS, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch, encodeCars } from '../src/game/net/binaryFrame.ts'
@@ -220,7 +220,12 @@ const bayIsFree = (bx, bz) => {
   return true
 }
 
+// 廟會時段（與正式伺服器同規則）：關閉時拒絕領車與上車；MOCK_SESSION=always 強制一律開放。
+const sessionOpen = () => process.env.MOCK_SESSION === 'always' || sessionState(Date.now()).open
+const SESSION_CLOSED = { t: 'error', code: 'session_closed', message: 'The temple fair is closed' }
+
 const claimCar = (p, kind) => {
+  if (!sessionOpen()) return null
   if (p.zone !== 'courtyard' || (p.riding !== undefined && p.riding !== null)) return null
   const dx = p.x - VEHICLES.booth.counter.x
   const dz = p.z - VEHICLES.booth.counter.z
@@ -311,6 +316,7 @@ function knockLanding(fromX, fromZ, dirX, dirZ, dist) {
 }
 
 const mountCar = (p, c) => {
+  if (!sessionOpen()) return false
   if (p.zone !== 'courtyard' || (p.riding !== undefined && p.riding !== null)) return false
   const car = cars.get(c)
   if (!car || car.driver) return false
@@ -410,6 +416,25 @@ const dismountPlayer = (p) => {
   })
 }
 
+// 時段結束：所有騎士下車，所有車立刻開始淡出（fadeMs 後移除；emptySince 往前推，讓既有的移除邏輯剛好在那時生效）。
+const closeSession = () => {
+  for (const p of players.values()) dismountPlayer(p)
+  const t = now()
+  for (const car of cars.values()) {
+    if (car.fadeAt === null || car.fadeAt > t) {
+      car.fadeAt = t
+      car.emptySince = t - VEHICLES.fade.idleMs
+    }
+    const st = sim.state(car.c)
+    if (st) broadcast({ t: 'car', c: car.c, kind: car.kind, driver: null, x: st.x, z: st.z, heading: st.heading, fadeAt: car.fadeAt })
+  }
+}
+let sessionWasOpen = sessionOpen()
+const inBoothZone = (p) => {
+  const z = VEHICLES.booth.zone
+  return p.x >= z.minX && p.x <= z.maxX && p.z >= z.minZ && p.z <= z.maxZ
+}
+
 // 物理世界模擬循環：30Hz。計時器的實際間隔不準（Windows 上常是 40 多毫秒），所以依經過的時間補步，
 // 否則模擬會比真實時間慢，前端預測就一直被拉回來。每 2 步廣播一次 cars（15 Hz）。
 const STEP_MS = 1000 / VEHICLES.physics.hz
@@ -417,6 +442,9 @@ let physicsAt = Date.now()
 let physicsSteps = 0
 const physicsStep = () => {
   const t = now()
+  const open = sessionOpen()
+  if (sessionWasOpen && !open) closeSession()
+  sessionWasOpen = open
   for (const car of cars.values()) {
     if (car.driver && t - car.lastInputAt > VEHICLES.physics.inputTimeoutMs) {
       sim.setInput(car.c, { dir: 0, mag: 0 })
@@ -455,6 +483,7 @@ const physicsStep = () => {
     for (const pl of players.values()) {
       if (pl.zone !== 'courtyard' || (pl.riding !== null && pl.riding !== undefined)) continue
       if (pl.immuneUntil && t < pl.immuneUntil) continue
+      if (inBoothZone(pl)) continue
       if (distanceToCar(st, pl.x, pl.z) <= VEHICLES.knock.hitRadius) {
         const dist = Math.min(
           VEHICLES.knock.maxDistance,
@@ -824,6 +853,10 @@ wss.on('connection', (ws) => {
         break
       case 'claim':
       case 'ride_claim': {
+        if (!sessionOpen()) {
+          send(ws, SESSION_CLOSED)
+          break
+        }
         const c = claimCar(me, null)
         if (c === null) {
           send(ws, { t: 'error', code: 'car_unavailable', message: '目前無法領車' })
@@ -835,6 +868,8 @@ wss.on('connection', (ws) => {
       case 'ride_dismount': {
         if (m.car === null || m.car === undefined || m.t === 'ride_dismount') {
           dismountPlayer(me)
+        } else if (!sessionOpen()) {
+          send(ws, SESSION_CLOSED)
         } else {
           const ok = mountCar(me, m.car)
           if (!ok) {

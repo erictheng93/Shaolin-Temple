@@ -79,6 +79,7 @@ const ja: Record<MessageKey, string> = {
   'server.boothCrowded': '受取場所が混雑しています。しばらくしてからもう一度お試しください',
   'server.claimCooldown': '受取直後です。しばらくしてからもう一度お試しください',
   'server.dismountFirst': '降りてから本堂に入ってください',
+  'server.sessionClosed': '縁日の時間外です。車は使えません',
   'server.error': 'サーバーで問題が起きました。しばらくしてからお試しください',
 
   'chat.label': 'チャット',
@@ -148,6 +149,8 @@ const ja: Record<MessageKey, string> = {
   'ride.modal.result': 'おめでとうございます：',
   'ride.modal.go': 'しゅっぱつ！',
   'ride.modal.hint': 'くるまはランダムです。選べません',
+  'ride.session.closed': '縁日まであと {time}',
+  'ride.session.open': '縁日開催中、残り {time}',
   'ride.modal.close': '閉じる',
   'ride.rotateHint': 'スマホを横向きにすると運転しやすくなります',
 

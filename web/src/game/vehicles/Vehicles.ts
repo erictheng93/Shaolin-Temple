@@ -19,6 +19,8 @@ export interface RideUi {
   booth: { left: number[] } | null
   /** 領車視窗（GameCore 填入）：是否開啟、等待伺服器中、剛抽到的車種、被拒絕的原因（字典 key）。 */
   claim?: { open: boolean; pending: boolean; result: number | null; error: string | null }
+  /** 廟會時段（GameCore 填入，只在連線的庭院）：是否開放、距離下次開／關的剩餘秒數（進位到整秒，只在顯示的秒數改變時才推送）。 */
+  session?: { open: boolean; secs: number }
 }
 
 interface LocalCar {

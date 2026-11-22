@@ -10,6 +10,9 @@
 //!            [--connections 50] [--moving-ratio 0.5] [--seconds 60]
 //!            [--ramp-ms 5] [--settle-ms 2000]
 //!
+//! 有司機（`--drivers`）時，被測的伺服器須以 `VEHICLE_SESSION=always` 啟動（廟會時段永遠開放），
+//! 否則每小時的後半小時領不到車，結果的 `drivers_driving_at_start` 會少於司機數。
+//!
 //! 全部連線建立後先等 `settle-ms`（讓加入時的 welcome／join 突波過去），再量測 `seconds` 秒。
 //! 最後一行輸出是機器可讀的 JSON；其餘是給人看的摘要（stdout）。
 
