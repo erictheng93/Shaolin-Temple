@@ -953,6 +953,29 @@ async fn resumed_player_is_on_foot() {
     assert!(find_car_msg(&msgs).is_some());
 }
 
+// 新連線先到（舊連線還沒斷，例如重新整理）的恢復：同樣回到步行狀態，可以再上車
+#[tokio::test(start_paused = true)]
+async fn resume_before_disconnect_leaves_player_on_foot() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    a.drain();
+
+    let mut a2 = resume(&room, &a.token).await.unwrap();
+    sleep(Duration::from_millis(50)).await;
+    let released = find_car_msg(&a.drain()).expect("resume must broadcast the emptied car");
+    assert_eq!(released.driver, None);
+
+    a2.walk_to_bay0().await;
+    a2.drain();
+    a2.ride(Some(0)).await;
+    sleep(Duration::from_millis(50)).await;
+    let car = find_car_msg(&a2.drain()).expect("resumed player can mount again");
+    assert_eq!(car.driver.as_deref(), Some(a2.who.id.as_str()));
+}
+
 // ==========================================
 // 任務 7：碰碰車撞飛測試
 // ==========================================

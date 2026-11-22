@@ -433,7 +433,7 @@ impl ServerMessage {
 // | 3 | i16 | z，公分，同上 |
 // | 5 | u8 | heading，q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128，範圍 (−π, π] |
 //
-// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v4.json 的 binary 測試向量驗證一致。
+// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v5.json 的 binary 測試向量驗證一致。
 
 /// 幀型：`moves`（增量）。
 pub const FRAME_MOVES: u8 = 0x01;
