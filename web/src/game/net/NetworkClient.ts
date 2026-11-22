@@ -228,7 +228,11 @@ export class NetworkClient {
         resolve({ ok: false, reason: 'timeout' })
       }, this.opts.ackTimeoutMs)
       this.pending.set(reqId, { msg, timer, resolve: (ok, reason) => resolve({ ok, reason }) })
-      if (this.status === 'online') this.sendNow(msg)
+      if (this.status === 'online') {
+        // 先送出佇列裡的位置：伺服器以收到動作當下的位置當定點動作的起點，站位要比動作早到。
+        this.flush()
+        this.sendNow(msg)
+      }
     })
   }
 
