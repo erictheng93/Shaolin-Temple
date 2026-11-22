@@ -653,18 +653,16 @@ impl Room {
         self.next_conn += 1;
         let conn = self.next_conn;
         let spawn = world::COURTYARD.spawn;
-        let mut sx = spawn.x + rand::random_range(-2.0..=2.0);
         let sz = spawn.z;
-        for _ in 0..10 {
-            let occupied = self.players.values().any(|p| {
-                p.zone.id == world::COURTYARD.id
-                    && (p.x - sx).hypot(p.z - sz) < crate::collide::MIN_DIST
-            });
-            if !occupied {
-                break;
-            }
-            sx = spawn.x + rand::random_range(-2.0..=2.0);
-        }
+        let candidates =
+            std::iter::repeat_with(|| spawn.x + rand::random_range(-2.0..=2.0)).take(SPAWN_TRIES);
+        let sx = least_crowded(candidates, |x| {
+            self.players
+                .values()
+                .filter(|p| p.zone.id == world::COURTYARD.id)
+                .map(|p| (p.x - x).hypot(p.z - sz))
+                .fold(f64::INFINITY, f64::min)
+        });
         let player = Player {
             id: id.clone(),
             n,
@@ -1416,6 +1414,26 @@ async fn run_room(
         }
     }
     room.metrics.room_occupancy(counted, None);
+}
+
+/// 出生點最多抽幾個候選位置。
+const SPAWN_TRIES: usize = 11;
+
+/// 從候選的出生 x 裡挑一個：第一個離最近的人至少 `MIN_DIST` 的直接採用；
+/// 全都擠（那一排站滿了）就取離最近的人最遠的那個，剩下的重疊由每 tick 的分離推開。
+/// `nearest(x)` 回傳該位置到最近玩家的距離（沒有人時為無限大）。
+fn least_crowded(candidates: impl Iterator<Item = f64>, nearest: impl Fn(f64) -> f64) -> f64 {
+    let mut best = (0.0, f64::NEG_INFINITY);
+    for x in candidates {
+        let d = nearest(x);
+        if d >= crate::collide::MIN_DIST {
+            return x;
+        }
+        if d > best.1 {
+            best = (x, d);
+        }
+    }
+    best.0
 }
 
 #[cfg(test)]

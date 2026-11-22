@@ -2100,3 +2100,15 @@ async fn player_pushed_against_incense_burner_stops_and_pusher_is_blocked() {
         a_last.2
     );
 }
+
+// 出生避讓：有空位取第一個空位（含最後一個候選）；全都擠時取離最近的人最遠的，不是最後抽到的。
+#[test]
+fn spawn_picks_the_first_free_candidate_or_the_least_crowded_one() {
+    // 只有一個人站在 x = 0：到最近的人的距離就是 |x|
+    let nearest = |x: f64| x.abs();
+    let pick = |xs: &[f64]| least_crowded(xs.iter().copied(), nearest);
+    assert_eq!(pick(&[0.1, 0.7, 1.5]), 0.7);
+    assert_eq!(pick(&[0.1, 0.2, 0.6]), 0.6);
+    assert_eq!(pick(&[0.1, 0.5, 0.3]), 0.5);
+    assert_eq!(pick(&[0.4]), 0.4);
+}
