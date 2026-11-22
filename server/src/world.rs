@@ -145,7 +145,7 @@ const fn pad_rects<const N: usize>(solids: &[Rect; N]) -> [Rect; N] {
 pub const PORTAL_REACH: f64 = crate::collide::PORTAL_REACH;
 
 /// 出入口範圍的容許誤差（公尺）。
-pub const PORTAL_TOLERANCE: f64 = 0.3;
+pub const PORTAL_TOLERANCE: f64 = 0.5;
 
 pub static COURTYARD_SOLIDS: [Rect; 16] = [
     raw_solid(-7.5, 7.5, -18.0, -6.2), // 主殿
@@ -283,6 +283,17 @@ pub fn action_duration_ms(id: &str) -> Option<u64> {
         "incense" => Some(6000),
         "bell" => Some(3400),
         _ => None,
+    }
+}
+
+/// 定點動作（進行中不可被推動）是否屬於該場景：跪拜與誦經在殿內、敲鐘在庭院、上香兩邊都有。
+/// 其他動作或場景不符時為 false（動作本身仍照常接受與廣播，只是不授予免推）。
+pub fn action_rooted_in(id: &str, zone_id: &str) -> bool {
+    match id {
+        "prostrate" | "chant" => zone_id == "hall",
+        "bell" => zone_id == "courtyard",
+        "incense" => zone_id == "hall" || zone_id == "courtyard",
+        _ => false,
     }
 }
 

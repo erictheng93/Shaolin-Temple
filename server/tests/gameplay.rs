@@ -732,18 +732,18 @@ async fn websocket_station_action_rooted_player_unmovable_over_wire() {
     collect(&mut b, Duration::from_millis(300)).await;
     collect(&mut a, Duration::from_millis(300)).await;
 
-    // B 站在出生點 (me_b.x, 11.0) 並開始定點動作跪拜 (prostrate)
+    // B 站在出生點 (me_b.x, 11.0) 並開始定點動作上香 (incense，庭院也可授予免推)
     send(&mut b, position("stop", me_b.x, 11.0)).await;
     sleep(Duration::from_millis(150)).await;
     send(
         &mut b,
-        json!({ "t": "action", "reqId": "r_prostrate", "id": "prostrate" }),
+        json!({ "t": "action", "reqId": "r_incense", "id": "incense" }),
     )
     .await;
 
     // A 確認收到 action 廣播
     let action_msg = recv_kind(&mut a, "action").await;
-    assert_eq!(action_msg["id"], "prostrate");
+    assert_eq!(action_msg["id"], "incense");
 
     // A 移至 B 後方 0.8 公尺處 (me_b.x, 11.8)
     send(&mut a, position("stop", me_b.x, 11.8)).await;
@@ -797,11 +797,11 @@ async fn websocket_doorway_crowd_allows_incoming_player_to_enter_hall_over_wire(
     send(&mut b2, position("stop", 2.0, -4.0)).await;
     send(&mut p3, position("stop", 2.0, -4.0)).await;
 
-    // 第 3 段：b1 與 b2 站在殿門口線 (z = -5.0)，p3 站在門前 0.8 公尺處 (0.0, -4.2)
+    // 第 3 段：b1 與 b2 站在殿門口線，p3 走到前端殿門觸發線
     sleep(Duration::from_millis(1000)).await;
     send(&mut b1, position("stop", -0.3, -5.0)).await;
     send(&mut b2, position("stop", 0.3, -5.0)).await;
-    send(&mut p3, position("stop", 0.0, -4.2)).await;
+    send(&mut p3, position("stop", 0.0, -4.65)).await;
 
     sleep(Duration::from_millis(300)).await;
     collect(&mut p3, Duration::from_millis(200)).await;
@@ -809,7 +809,7 @@ async fn websocket_doorway_crowd_allows_incoming_player_to_enter_hall_over_wire(
     // P3 發送切換場景進殿請求
     send(
         &mut p3,
-        json!({ "t": "zone", "zone": "hall", "x": 0, "z": -4.2, "heading": 0 }),
+        json!({ "t": "zone", "zone": "hall", "x": 0, "z": -4.65, "heading": 0 }),
     )
     .await;
 
@@ -818,7 +818,7 @@ async fn websocket_doorway_crowd_allows_incoming_player_to_enter_hall_over_wire(
     assert_eq!(
         (zone_msg["id"].as_str(), zone_msg["zone"].as_str()),
         (Some(me3.id.as_str()), Some("hall")),
-        "P3 在門前 1.2m 內應成功切換至大殿 (hall)，收到: {zone_msg:?}"
+        "P3 抵達觸發線後應成功進殿，收到: {zone_msg:?}"
     );
 }
 

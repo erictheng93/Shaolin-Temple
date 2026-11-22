@@ -122,6 +122,8 @@ impl Room {
         p.drive_seq_init = false;
         p.moving = false;
         p.action = None;
+        p.rooted_action = None;
+        p.correction_pending = false;
         p.dirty = false;
         p.x = bay.x as f64;
         p.z = bay.z as f64;
@@ -232,6 +234,8 @@ impl Room {
         p.drive_seq_init = false;
         p.moving = false;
         p.action = None;
+        p.rooted_action = None;
+        p.correction_pending = false;
         p.dirty = false;
         p.x = st.x as f64;
         p.z = st.z as f64;
@@ -568,7 +572,8 @@ impl Room {
                     pl.x = to_x;
                     pl.z = to_z;
                     pl.action = None;
-                    pl.action_rooted_until = None;
+                    pl.rooted_action = None;
+                    pl.correction_pending = false;
                     pl.trail = [(to_x, to_z); 4];
                     pl.trail_len = 1;
                     pl.moving = false;
