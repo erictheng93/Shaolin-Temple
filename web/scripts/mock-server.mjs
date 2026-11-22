@@ -1,6 +1,6 @@
 // 開發用 mock 遊戲伺服器：實作 src/game/net/protocol.ts 的協定草案，供 Rust 後端完成前測試前端。
 // 不是正式伺服器，不做權限、持久化或容量設計。
-// 與正式伺服器相同的行為：房內短編號 n、moves／sync／action 只送同場景、zone／join／leave 送全房、
+// 與正式伺服器相同的行為：房內短編號 n、moves／sync／action 只送同場景（例外：庭院的 bell 送全房）、zone／join／leave 送全房、
 // 衣裝 outfit（hello 可帶、執行中以 outfit 訊息更換、斷線保留期內以 resumeToken 恢復並保留）、
 // 切換場景後先廣播 zone 再對切換者送 sync、移動中超過 1 秒沒有位置就視為停止、
 // 協定版本 4：moves／sync／action 以二進位幀送出（與前端共用 src/game/net/binaryFrame.ts 的編碼器），hello.v 不符時回 unsupported_version；
@@ -565,11 +565,14 @@ const send = (ws, msg) => ws.readyState === 1 && ws.send(JSON.stringify(msg))
 const broadcast = (msg, exceptId) => {
   for (const p of players.values()) if (p.ws && p.id !== exceptId) send(p.ws, msg)
 }
-/** 動作廣播（二進位幀）：只送給同場景的其他玩家。 */
+/** 動作廣播（二進位幀）：只送給同場景的其他玩家；例外是庭院的敲鐘（bell），全寺都聽得見，送給同房所有其他玩家。 */
 const broadcastAction = (from, id) => {
   const frame = encodeAction({ n: from.n, id, startedAt: now() })
   if (!frame) return
-  for (const p of players.values()) if (p.ws && p.zone === from.zone && p !== from && p.ws.readyState === 1) p.ws.send(frame)
+  const wholeRoom = id === 'bell' && from.zone === 'courtyard'
+  for (const p of players.values()) {
+    if (p.ws && (wholeRoom || p.zone === from.zone) && p !== from && p.ws.readyState === 1) p.ws.send(frame)
+  }
 }
 /** 把 tuple 陣列依上限拆成多則二進位幀送出（sync 即使是空的也要送）。 */
 const sendTuples = (ws, t, list) => {

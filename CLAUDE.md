@@ -70,7 +70,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - 玩家衣裝 `outfit`（同為向下相容擴充，不升版）：衣裝是整數 `0..OUTFIT_COUNT-1`（`OUTFIT_COUNT = 8`，`protocol.ts` 與 Rust 各一份，由固定資料 `outfitCount` 鎖住；新增衣裝只能加在尾端，三邊與 mock 一起改），外觀由客戶端決定、伺服器只驗證範圍、保存、轉送。`hello` 可帶 `outfit`（缺少或無效當作 0，不拒絕）；`PlayerSnapshot.outfit`（前端型別可省略，缺少視為合法；下行只要是 0～255 的整數就接受（`isOutfitWire`），不認得的編號顯示時經 `normalizeOutfit` 落回預設衣裝，舊分頁才不會因新衣裝收不到 `welcome`；不是整數或為負則整則忽略）讓 `welcome`／`join` 帶衣裝；執行中以上行 `{t:'outfit', outfit}` 更換（不需 ack；無效丟棄、限速同聊天、與目前相同不廣播），下行 JSON `{t:'outfit', id, outfit}` 廣播給同房所有在線玩家（含本人；前端驗證同樣寬鬆）。上行（`hello`、`outfit`）伺服器維持嚴格的範圍驗證。`resumeToken` 恢復時保留衣裝，`hello` 帶不同的有效值則以它為準並補廣播。`NetworkClient.setOutfit(n)` 記住衣裝（每次 `hello` 都帶）、已連線時送出；被限速擋下時只保留最新值、額度恢復後補送（不排隊），斷線時不送；送出後約 3 秒內沒收到自己 id、相同值的回音就重送（每個值最多 2 次，較舊值的回音不算確認；確認後又收到不同值的自己回音（A→B→A 時先到第一個 A）則重新等待）。
 - 語意分兩類：`move`／`stop` 可取代（`OutboundQueue` 合併未送出的舊位置）；`action` 需確認（帶 `reqId`，伺服器去重並回 `ack`，重送不重複執行）。
 - 名字與身份（v4）：進場後改名送 `rename`（可取代，`OutboundQueue` 只留最新一筆；進入背景清佇列時保留尚未送出的 rename）；伺服器清理（去控制字元、trim、1～16 字、空白變「訪客」，約每 2 秒 1 次）後以 `name` 廣播給同房所有人（含本人、不分場景），本人以它為準寫回設定。斷線恢復時伺服器採用 `hello.name`，所以 `NetworkClient.setName()` 也更新之後的 `hello`。`hello.session` 是登入權杖（選填），`welcome.auth` 是 `guest`／`google`／`line`；帶了 session 卻收到 `guest` 是權杖失效：清掉本機權杖、提示後以訪客身份繼續。
-- 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家；車輛二進位幀 `cars` 僅廣播給庭院（courtyard）場景的在線玩家。
+- 玩家有所在場景（`zone`）；切換時送 `zone` 訊息，只顯示同場景的遠端玩家。伺服器只把 `moves`／`sync`／`action` 送給同場景的玩家（例外：庭院的 `bell` 動作送給同房所有場景的玩家，全寺都聽得見）；車輛二進位幀 `cars` 僅廣播給庭院（courtyard）場景的在線玩家。
 - 伺服器每個 tick 送批次位置 `moves`（解碼後為 `MoveTuple[]`，只含有變動的玩家，上限 `MAX_MOVES_PER_MESSAGE`；二進位每筆 6 bytes：座標量化到公分、heading 一格 2π/256）。tuple 以房內短編號 `n`（`PlayerSnapshot.n`，0～127）指稱玩家，`Players` 維護 `n → 玩家` 的對照。`sync` 格式相同但語意是整批校正：直接套用不插值（切換場景後、或 `moves` 曾被丟棄後由伺服器送出）。單則訊息上限 `MAX_MESSAGE_BYTES`（16 KB）。
 - 遠端玩家的移動（`world/interp.ts`、`Players`）：收到新位置時從目前顯示的位置等速走過去，花的時間等於位置更新的間隔；差距超過 5 公尺直接套用。移動中超過 1 秒沒有更新視為停止。
 - 重新整理也走斷線恢復：`resumeToken` 存在 `sessionStorage`（`temple.resumeToken`），新頁面的 `hello` 帶上它就接回原本的玩家（同 id、位置、場景），不會在保留期內留下分身。恢復時 `hello` 的名字與保存的不同就改名（扣改名額度，用完則保留舊名），伺服器在 `welcome` 之後對全房廣播 `name`，不重送 `join`。
@@ -96,7 +96,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - 遠端玩家做鎖定移動的動作期間（`RemotePlayer.lockedUntil`）不播走路、不取消動作片段，晚到的最後一筆位置只滑過去。收到不鎖定的新動作時解除鎖定；過期才到的動作仍會取代原本的片段（`hidden` 的動作此時仍通知玩法）。
 - 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間推方向鍵、搖桿、點擊地面或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
 - 動畫片段的第三個參數是目前時間（`ClipFn(rig, p, now)`），`api.clockOffset()`（伺服器時間 − performance.now）讓片段與聲音對齊共同的節拍；`audio.play(name, { at })` 在 AudioContext 時間軸上預排聲音。
-- 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。
+- 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。鐘聲全寺都聽得見：殿內的玩家以固定的較小音量（`BELL_HALL_GAIN`，`bellHallGain()`，不看距離、同樣有 2 秒合併規則）聽到，鐘只在庭院才擺（殿內不更新庭院場景）。
 - 動作允許清單有兩份，同時是 `action` 幀的動作編號對照表（索引即編號）：`server/src/world.rs` 的 `ACTIONS`（負載工具直接用它）與 `web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（mock 伺服器直接用它）。兩邊測試都比對固定資料的 `binary.action.codes`，不一致就失敗。新增動作只能加在尾端（同時改兩份與產生腳本）；改順序或刪除要升協定版本。
 - 香爐裡的香與煙是動態物件 `render/IncenseSystem.ts`（GameCore 擁有，2 個 draw call，沒香時 0），不併入靜態幾何、不與庭院烘焙材質共用。
 

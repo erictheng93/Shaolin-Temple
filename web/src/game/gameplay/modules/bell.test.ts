@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BELL_HIT_MS, BELL_MS, BELL_PULL_MS, BELL_QUIET_MS, BELL_STATIONS } from '../../world/bell'
+import { BELL_HALL_GAIN, BELL_HIT_MS, BELL_MS, BELL_PULL_MS, BELL_QUIET_MS, BELL_STATIONS } from '../../world/bell'
 import type { SpotContext } from '../../world/worship'
 import { pose, setup } from './testHarness'
 
@@ -73,17 +73,36 @@ describe('敲鐘', () => {
     expect(played[0]!.gain!).toBeGreaterThan(0.3)
   })
 
-  it('聽者不在庭院時鐘照擺但不發聲；太晚收到（背景回來）不補響', () => {
+  it('聽者在殿內：以殿內固定音量播放（不依座標），鐘不擺（庭院場景沒在更新）；太晚收到（背景回來）不補響', () => {
     const { events, played, swings, positions } = setup()
     positions.set('local', { x: 0, z: 5, zone: 'hall' })
     events.emit('actionPerformed', bellEvent('p-a', performance.now()))
     vi.advanceTimersByTime(BELL_MS)
-    expect(swings).toHaveLength(1)
-    expect(played).toHaveLength(0)
+    expect(swings).toHaveLength(0)
+    expect(played.map((p) => [p.name, p.gain])).toEqual([['bell', BELL_HALL_GAIN]])
     positions.set('local', { x: 0, z: 5, zone: 'courtyard' })
     events.emit('actionPerformed', bellEvent('p-a', performance.now() - BELL_HIT_MS - 2000))
     vi.advanceTimersByTime(BELL_MS)
-    expect(swings).toHaveLength(1)
+    expect(swings).toHaveLength(0)
+    expect(played).toHaveLength(1)
+  })
+
+  it('聽者在殿內：2 秒內的第二聲仍套合併倍率', () => {
+    const { events, played, positions } = setup()
+    positions.set('local', { x: 0, z: 5, zone: 'hall' })
+    const t0 = performance.now()
+    events.emit('actionPerformed', bellEvent('p-a', t0))
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 500))
+    vi.advanceTimersByTime(BELL_MS)
+    expect(played.map((p) => p.gain)).toEqual([BELL_HALL_GAIN, BELL_HALL_GAIN * 0.35])
+  })
+
+  it('聽者在殿內也記錄鐘聲未歇：走出去馬上敲要等', () => {
+    const { actions, events, positions } = setup()
+    positions.set('local', { x: 0, z: 5, zone: 'hall' })
+    events.emit('actionPerformed', bellEvent('p-a', performance.now()))
+    vi.advanceTimersByTime(BELL_HIT_MS + 1000)
+    expect(actions.get('bell')!.approach!(yard())).toMatch(/鐘聲未歇/)
   })
 
   it('撞鐘動畫：拉繩後仰、撞到時前傾最大、最後回正', () => {

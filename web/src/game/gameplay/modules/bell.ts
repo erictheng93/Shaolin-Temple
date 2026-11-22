@@ -7,6 +7,7 @@ import {
   BELL_MS,
   BELL_PULL_MS,
   bellGain,
+  bellHallGain,
   bellQuietLeft,
   pickBellStation,
 } from '../../world/bell'
@@ -45,7 +46,7 @@ export const bellStrikeClip: ClipFn = (rig, p) => {
 }
 
 /**
- * 敲鐘（只在庭院）：自動走到鐘亭前的空站位，拉撞木撞鐘。鐘聲與鐘的擺動發生在撞到的那一刻（startedAt + BELL_HIT_MS），
+ * 敲鐘（只在庭院敲，全寺都聽得見，殿內較小聲）：自動走到鐘亭前的空站位，拉撞木撞鐘。鐘聲與鐘的擺動發生在撞到的那一刻（startedAt + BELL_HIT_MS），
  * 每個客戶端各自以動作的 startedAt 推算，所以執行者與其他玩家看到、聽到的時刻一致（只差伺服器轉送的單程延遲）。
  *
  * 多人輪流敲：個人冷卻 10 秒；任何人撞到鐘之後 5 秒內（或有人正在敲、還沒撞到）按敲鐘會提示「鐘聲未歇」不出發；
@@ -85,10 +86,17 @@ export function installBell(api: GameplayApi): () => void {
         () => {
           timers.delete(timer)
           if (performance.now() - hitAt > LATE_MS) return
-          api.scene.swingBell()
-          if (api.playerPosition('local')?.zone !== 'courtyard') return
-          const me = api.localPosition()
-          api.audio.play('bell', { gain: bellGain(Math.hypot(me.x - BELL_CENTER.x, me.z - BELL_CENTER.z), lastPlayedAt, hitAt) })
+          // 全寺都聽得見：殿內的人以固定的較小音量聽到。鐘只在庭院才擺（殿內不更新庭院場景，擺動會留著等回庭院才播）。
+          const zone = api.playerPosition('local')?.zone
+          if (zone === 'courtyard') api.scene.swingBell()
+          let gain: number
+          if (zone === 'courtyard') {
+            const me = api.localPosition()
+            gain = bellGain(Math.hypot(me.x - BELL_CENTER.x, me.z - BELL_CENTER.z), lastPlayedAt, hitAt)
+          } else if (zone === 'hall') {
+            gain = bellHallGain(lastPlayedAt, hitAt)
+          } else return
+          api.audio.play('bell', { gain })
           lastPlayedAt = hitAt
         },
         Math.max(0, hitAt - performance.now()),
