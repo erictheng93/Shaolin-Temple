@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(Auth::new)
         .transpose()?
         .map(std::sync::Arc::new);
-    tracing::info!(port = config.port, room_capacity = config.room_capacity, tick_hz = config.tick_hz, resume_grace_seconds = config.resume_grace_seconds, origins = ?config.allowed_origins, sessions = auth.is_some(), login_providers = ?providers, "server started");
+    tracing::info!(port = config.port, room_capacity = config.room_capacity, tick_hz = config.tick_hz, resume_grace_seconds = config.resume_grace_seconds, vehicle_session = ?config.session_clock, origins = ?config.allowed_origins, sessions = auth.is_some(), login_providers = ?providers, "server started");
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let options = ServerOptions {
         room,

@@ -24,6 +24,7 @@ const DRIVE_BURST: f64 = 5.0;
 const DRIVE_PER_SEC: f64 = 20.0;
 /// 兩次丟棄相隔不超過這段時間，才算「連續」超出。
 const STREAK_GAP: Duration = Duration::from_secs(1);
+/// 連續超出多久就關閉連線。
 pub const DEFAULT_CLOSE_AFTER: Duration = Duration::from_secs(5);
 
 struct Bucket {

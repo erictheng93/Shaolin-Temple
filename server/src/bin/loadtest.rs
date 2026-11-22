@@ -10,6 +10,9 @@
 //!            [--connections 50] [--moving-ratio 0.5] [--seconds 60]
 //!            [--ramp-ms 5] [--settle-ms 2000]
 //!
+//! 有司機（`--drivers`）時，被測的伺服器須以 `VEHICLE_SESSION=always` 啟動（廟會時段永遠開放），
+//! 否則在每小時的後半小時領車會一直收到 `session_closed`；收到的次數記在結果的 `session_closed`。
+//!
 //! 全部連線建立後先等 `settle-ms`（讓加入時的 welcome／join 突波過去），再量測 `seconds` 秒。
 //! 最後一行輸出是機器可讀的 JSON；其餘是給人看的摘要（stdout）。
 
@@ -154,6 +157,8 @@ struct Stats {
     sent_msgs: AtomicU64,
     /// 在我們主動結束之前就被伺服器關閉（或中斷）的連線數（含暖機期間）。
     closed_by_server: AtomicU64,
+    /// 司機領車收到 `session_closed` 的次數（伺服器沒有以 `VEHICLE_SESSION=always` 啟動）。
+    session_closed: AtomicU64,
     /// 是否在量測視窗內（暖機期間的流量不計）。
     measuring: AtomicBool,
 }
@@ -399,6 +404,8 @@ async fn player(
                                 *retry_at = Instant::now();
                             } else if val["t"] == "error" && val["code"] == "booth_crowded" {
                                 *retry_at = Instant::now() + Duration::from_millis(150);
+                            } else if val["t"] == "error" && val["code"] == "session_closed" {
+                                stats.session_closed.fetch_add(1, Relaxed);
                             }
                         }
                         if stats.measuring.load(Relaxed) {
@@ -556,6 +563,7 @@ async fn main() {
         "connected": connected,
         "connect_failed": failures.len(),
         "closed_by_server": stats.closed_by_server.load(Relaxed),
+        "session_closed": stats.session_closed.load(Relaxed),
         "recv_bytes_per_conn_s": round2(recv_bytes / elapsed / per_conn),
         "recv_msgs_per_conn_s": round2(recv_msgs / elapsed / per_conn),
         "recv_ws_bytes_per_conn_s": round2(recv_ws_bytes / elapsed / per_conn),
@@ -610,6 +618,12 @@ async fn main() {
             percentile(&cars_intervals, 0.99),
             percentile(&cars_intervals, 1.0),
             cars_intervals.len()
+        );
+    }
+    let session_closed = stats.session_closed.load(Relaxed);
+    if session_closed > 0 {
+        println!(
+            "警告：領車收到 session_closed {session_closed} 次，伺服器須以 VEHICLE_SESSION=always 啟動"
         );
     }
     println!(
