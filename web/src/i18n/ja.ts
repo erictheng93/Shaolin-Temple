@@ -149,6 +149,7 @@ const ja: Record<MessageKey, string> = {
   'ride.modal.go': 'しゅっぱつ！',
   'ride.modal.hint': 'くるまはランダムです。選べません',
   'ride.modal.close': '閉じる',
+  'ride.rotateHint': 'スマホを横向きにすると運転しやすくなります',
 
   'perf.label': 'パフォーマンス情報',
   'perf.position': '座標',

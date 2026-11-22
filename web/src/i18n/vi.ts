@@ -149,6 +149,7 @@ const vi: Record<MessageKey, string> = {
   'ride.modal.go': 'Xuất phát!',
   'ride.modal.hint': 'Xe được phát ngẫu nhiên, không thể tự chọn',
   'ride.modal.close': 'Đóng',
+  'ride.rotateHint': 'Xoay ngang điện thoại để lái dễ hơn',
 
   'perf.label': 'Thông tin hiệu năng',
   'perf.position': 'Tọa độ',

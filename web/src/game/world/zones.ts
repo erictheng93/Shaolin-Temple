@@ -149,7 +149,9 @@ export const COURTYARD_CENSER: CenserDef = {
 export const CENSERS: ReadonlyArray<CenserDef> = [COURTYARD_CENSER, ...HALL_CENSERS]
 
 /** 庭院：殿門前的階梯即入口（主殿障礙物邊緣 z≈-5.85），往前延伸到階梯前方約 0.85 公尺。 */
-const COURTYARD_DOOR: Rect = { minX: -1.6, maxX: 1.6, minZ: -6.2, maxZ: -5.0 }
+// maxZ 原本是 -5.0；往門前延伸 0.35 公尺，門口有人時不必擠到門檻才進得去。出殿落點在 z = -3.6，要與它保持 1 公尺
+// 的緩衝（zones.test.ts），所以取 -4.65。數值與 server/src/world.rs 一致。
+const COURTYARD_DOOR: Rect = { minX: -1.6, maxX: 1.6, minZ: -6.2, maxZ: -4.65 }
 /**
  * 點擊導向殿門的範圍：主殿本體加上其後方。點在屋頂或牆上時，射線會穿過建築打到後方地面，
  * 從庭院看不到主殿後方，點到那裡一定是點在建築上。

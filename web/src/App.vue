@@ -32,6 +32,22 @@ const ui = shallowRef<UiState | null>(null)
 const entered = ref(false)
 const entering = ref(false)
 const settingsOpen = ref(false)
+
+// 觸控裝置與螢幕方向：直向開車時提示轉成橫向。移動輪盤一律在左下角（左手移動、右手按鈕）。
+const coarseMq = window.matchMedia('(any-pointer: coarse)')
+const landscapeMq = window.matchMedia('(orientation: landscape)')
+const touch = ref(coarseMq.matches)
+const landscape = ref(landscapeMq.matches)
+const onMq = () => {
+  touch.value = coarseMq.matches
+  landscape.value = landscapeMq.matches
+}
+coarseMq.addEventListener('change', onMq)
+landscapeMq.addEventListener('change', onMq)
+onBeforeUnmount(() => {
+  coarseMq.removeEventListener('change', onMq)
+  landscapeMq.removeEventListener('change', onMq)
+})
 const fatal = ref(false)
 const toasts = ref<Array<{ id: number; text: string }>>([])
 let toastId = 0
@@ -152,6 +168,8 @@ function toggleMute() {
       <RidePanel
         v-if="ui.ride"
         :ride="ui.ride"
+        :touch="touch"
+        :landscape="landscape"
         @toggle="() => core?.toggleRide()"
         @claim="() => core?.claimCar()"
         @close="() => core?.setClaimOpen(false)"
