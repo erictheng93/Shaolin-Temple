@@ -6,7 +6,7 @@ pub const TOLERANCE: f64 = 0.15;
 pub const SEPARATE_PER_TICK: f64 = 0.1;
 pub const VIEW_DELAY_TICKS: usize = 2;
 pub const HISTORY_TICKS: usize = 4;
-pub const PORTAL_REACH: f64 = 1.0;
+pub const PORTAL_REACH: f64 = 0.35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Body {

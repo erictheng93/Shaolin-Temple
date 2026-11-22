@@ -545,14 +545,14 @@ async fn only_portal_positions_may_change_zone() {
             "{zone}: {got:?}"
         );
     }
-    // 出入口外（門前延伸 1.0 公尺後的新邊界外）仍是 invalid_zone
+    // 超出殿門邊界 0.60 公尺，超過伺服器容許範圍
     p.walk_to_door().await;
-    p.position(0.0, -3.4, PI, false).await;
+    p.position(0.0, -4.05, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
     assert_eq!(count(&p.drain(), "error"), 1);
     // 容許誤差內成功，且位置是伺服器的落點
-    p.position(0.0, -4.2, PI, false).await;
+    p.position(0.0, -4.25, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
     let got = p.drain();
@@ -1464,7 +1464,7 @@ async fn player_in_a_station_action_cannot_be_pushed() {
     b.drain();
     watcher.drain();
 
-    b.action("req-1", "prostrate", true).await;
+    b.action("req-1", "incense", true).await;
     sleep(TICK).await;
     b.drain();
     a.drain();
@@ -1490,6 +1490,226 @@ async fn player_in_a_station_action_cannot_be_pushed() {
         corrections(&mut b).is_empty(),
         "跪拜中的 B 不能收到位置變更 sync"
     );
+}
+
+#[test]
+fn collision_corrections_coalesce_and_flush_after_the_last_push() {
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (a_tx, mut a_rx) = mpsc::channel(16);
+    let (b_tx, mut b_rx) = mpsc::channel(16);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    for (who, x) in [(&a, -1.0), (&b, 0.0)] {
+        let p = room.live(who).unwrap();
+        (p.x, p.z) = (x, 8.0);
+        p.trail = [(x, 8.0); 4];
+    }
+    a_rx.try_recv().unwrap();
+    b_rx.try_recv().unwrap();
+
+    room.position(&a, -0.2, 8.0, 0.0, true, now);
+    for (who, rx) in [(&a, &mut a_rx), (&b, &mut b_rx)] {
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Sync { m } if m == [tuple(room.live(who).unwrap())]
+        ));
+    }
+    let first_push_x = room.live(&b).unwrap().x;
+    let second = now + Duration::from_millis(100);
+    room.position(&a, 0.0, 8.0, 0.0, false, second);
+    let last_push_x = room.live(&b).unwrap().x;
+    assert!(last_push_x > first_push_x);
+
+    room.tick(second);
+    room.tick(now + CORRECTION_GAP - Duration::from_millis(1));
+    for rx in [&mut a_rx, &mut b_rx] {
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
+    }
+
+    room.tick(now + CORRECTION_GAP);
+    assert_eq!(room.live(&b).unwrap().x, last_push_x);
+    for (who, rx) in [(&a, &mut a_rx), (&b, &mut b_rx)] {
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Sync { m } if m == [tuple(room.live(who).unwrap())]
+        ));
+    }
+    room.tick(now + CORRECTION_GAP * 2);
+    for rx in [&mut a_rx, &mut b_rx] {
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
+    }
+}
+
+#[test]
+fn moving_away_from_a_station_action_or_changing_zones_clears_rooting() {
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (b_tx, _b_rx) = mpsc::channel(16);
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    let p = room.live(&b).unwrap();
+    (p.x, p.z) = (0.0, 8.0);
+    p.trail = [(0.0, 8.0); 4];
+    room.action(&b, "incense".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+
+    room.position(&b, 0.03, 8.0, 0.0, false, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+    // 移動中的位置不吃到位寬限，離開站位超過 0.05 就解除
+    room.position(&b, 0.06, 8.0, 0.0, true, now);
+    assert!(!Room::rooted(room.live(&b).unwrap(), now));
+    room.position(&b, 1.0, 8.0, 0.0, false, now);
+    assert_eq!(room.live(&b).unwrap().x, 1.0);
+
+    let (a_tx, _a_rx) = mpsc::channel(16);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let p = room.live(&a).unwrap();
+    (p.x, p.z) = (0.8, 8.0);
+    room.tick(now);
+    assert!(room.live(&b).unwrap().x > 1.0);
+
+    let p = room.live(&b).unwrap();
+    (p.x, p.z) = (0.0, -4.65);
+    // 距離上次授予超過冷卻時間，才會再授予
+    let later = now + ROOTED_GRANT_GAP;
+    room.action(&b, "bell".into(), "bell".into(), true, later);
+    assert!(Room::rooted(room.live(&b).unwrap(), later));
+    room.switch_zone(&b, "hall", later);
+    let p = room.live(&b).unwrap();
+    assert_eq!(p.zone.id, "hall");
+    assert!(!Room::rooted(p, later));
+}
+
+/// 單人房：玩家站在庭院 (0, 8)。
+fn rooted_fixture(now: Instant) -> (Room, Who, mpsc::Receiver<ServerMessage>) {
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (tx, rx) = mpsc::channel(64);
+    let who = room.join("B".into(), AuthKind::Guest, 0, tx, now).unwrap();
+    let p = room.live(&who).unwrap();
+    (p.x, p.z) = (0.0, 8.0);
+    p.trail = [(0.0, 8.0); 4];
+    (room, who, rx)
+}
+
+#[test]
+fn late_stop_after_a_station_action_re_anchors_once() {
+    let now = Instant::now();
+    let (mut room, b, _rx) = rooted_fixture(now);
+    let ms = Duration::from_millis;
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+
+    // 最後的 stop 晚到、離原位 0.2 公尺：寬限內重新錨定，仍然免推
+    room.position(&b, 0.2, 8.0, 0.0, false, now + ms(100));
+    assert!(Room::rooted(room.live(&b).unwrap(), now + ms(100)));
+    // 只能重新錨定一次
+    room.position(&b, 0.4, 8.0, 0.0, false, now + ms(200));
+    assert!(!Room::rooted(room.live(&b).unwrap(), now + ms(200)));
+}
+
+#[test]
+fn settle_grace_expires_and_does_not_apply_to_moving_positions() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, b, _rx) = rooted_fixture(now);
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    room.position(&b, 0.2, 8.0, 0.0, false, now + ms(600));
+    assert!(!Room::rooted(room.live(&b).unwrap(), now + ms(600)));
+
+    let (mut room, b, _rx) = rooted_fixture(now);
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    room.position(&b, 0.2, 8.0, 0.0, true, now + ms(100));
+    assert!(!Room::rooted(room.live(&b).unwrap(), now + ms(100)));
+}
+
+#[test]
+fn station_actions_only_grant_rooting_after_the_grant_gap() {
+    let now = Instant::now();
+    let (mut room, b, _rx) = rooted_fixture(now);
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+    // 1 秒後再送：動作照常接受，但不授予免推
+    let t1 = now + Duration::from_secs(1);
+    room.action(&b, "r2".into(), "incense".into(), true, t1);
+    assert_eq!(
+        room.live(&b).unwrap().action.as_ref().unwrap().id,
+        "incense"
+    );
+    assert!(!Room::rooted(room.live(&b).unwrap(), t1));
+
+    // 距離上次授予滿 2 秒才再授予
+    let t2 = now + ROOTED_GRANT_GAP;
+    room.action(&b, "r3".into(), "incense".into(), true, t2);
+    assert!(Room::rooted(room.live(&b).unwrap(), t2));
+}
+
+#[test]
+fn rooting_is_only_granted_for_actions_of_the_current_zone() {
+    let now = Instant::now();
+    let (mut room, b, _rx) = rooted_fixture(now);
+    // 庭院：誦經不授予、上香授予
+    room.action(&b, "r1".into(), "chant".into(), true, now);
+    assert_eq!(room.live(&b).unwrap().action.as_ref().unwrap().id, "chant");
+    assert!(!Room::rooted(room.live(&b).unwrap(), now));
+    room.action(&b, "r2".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+
+    // 殿內：敲鐘不授予、上香授予
+    let t = now + Duration::from_secs(3);
+    let p = room.live(&b).unwrap();
+    (p.x, p.z) = (0.0, -4.65);
+    room.switch_zone(&b, "hall", t);
+    assert_eq!(room.live(&b).unwrap().zone.id, "hall");
+    room.action(&b, "r3".into(), "bell".into(), true, t);
+    assert_eq!(room.live(&b).unwrap().action.as_ref().unwrap().id, "bell");
+    assert!(!Room::rooted(room.live(&b).unwrap(), t));
+    room.action(&b, "r4".into(), "incense".into(), true, t);
+    assert!(Room::rooted(room.live(&b).unwrap(), t));
+}
+
+#[test]
+fn pushed_player_whose_own_position_is_accepted_gets_no_stale_sync() {
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (a_tx, mut a_rx) = mpsc::channel(32);
+    let (b_tx, mut b_rx) = mpsc::channel(32);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    for (who, x) in [(&a, -1.0), (&b, 0.0)] {
+        let p = room.live(who).unwrap();
+        (p.x, p.z) = (x, 8.0);
+        p.trail = [(x, 8.0); 4];
+    }
+    a_rx.try_recv().unwrap();
+    b_rx.try_recv().unwrap();
+
+    room.position(&a, -0.2, 8.0, 0.0, true, now);
+    let ms = Duration::from_millis;
+    room.position(&a, 0.0, 8.0, 0.0, false, now + ms(100));
+    let pushed_x = room.live(&b).unwrap().x;
+    assert!(room.live(&b).unwrap().correction_pending);
+    while b_rx.try_recv().is_ok() {}
+
+    // B 自己的下一個位置被接受（離開 A 遠一點，不需校正）
+    room.position(&b, pushed_x + 0.8, 8.0, 0.0, true, now + ms(150));
+    assert!(!room.live(&b).unwrap().correction_pending);
+    while a_rx.try_recv().is_ok() {}
+
+    room.tick(now + CORRECTION_GAP);
+    room.tick(now + CORRECTION_GAP * 2);
+    assert!(std::iter::from_fn(|| b_rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
 }
 
 #[tokio::test(start_paused = true)]
@@ -1742,8 +1962,8 @@ async fn a_crowd_standing_in_front_of_the_hall_door_does_not_stop_entry() {
     sleep(Duration::from_secs(3)).await;
     p5.drain();
 
-    // 第 5 人走到門前 1 公尺內 (z = -4.2，且在門寬 [-1.6, 1.6] 內)
-    p5.position(0.0, -4.2, 0.0, false).await;
+    // 第 5 人走到前端殿門觸發線
+    p5.position(0.0, -4.65, 0.0, false).await;
     sleep(Duration::from_secs(1)).await;
     p5.drain();
 
@@ -1804,8 +2024,8 @@ async fn separation_never_moves_a_rooted_player() {
     sleep(Duration::from_secs(2)).await;
 
     b.position(0.0, 8.0, 0.0, false).await;
-    // B 執行定點動作（跪拜，持續 1.6 秒）
-    b.action("r1", "prostrate", true).await;
+    // B 在庭院執行定點動作（上香）
+    b.action("r1", "incense", true).await;
     sleep(TICK).await;
     b.drain();
 
