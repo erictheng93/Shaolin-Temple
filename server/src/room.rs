@@ -132,9 +132,10 @@ enum RoomCommand {
         outfit: u8,
     },
     #[allow(dead_code)]
+    /// kind 為 None 時由房間抽車種（正式路徑）；測試可指定。
     Claim {
         who: Who,
-        kind: u8,
+        kind: Option<u8>,
     },
     #[allow(dead_code)]
     Ride {
@@ -277,12 +278,12 @@ impl Membership {
             })
             .await;
     }
-    pub async fn claim(&self, kind: u8) {
+    pub async fn claim(&self) {
         let _ = self
             .room
             .send(RoomCommand::Claim {
                 who: self.who.clone(),
-                kind,
+                kind: None,
             })
             .await;
     }
@@ -1027,7 +1028,10 @@ async fn run_room(
                     RoomCommand::Rename { who, name } => room.rename(&who, name, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                     RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
-                    RoomCommand::Claim { who, kind } => room.claim(&who, kind, now),
+                    RoomCommand::Claim { who, kind } => {
+                        let kind = kind.unwrap_or_else(|| room.roll_kind());
+                        room.claim(&who, kind, now)
+                    }
                     RoomCommand::Ride { who, car } => room.ride(&who, car, now),
                     RoomCommand::Drive { who, seq, dir, mag } => room.drive(&who, seq, dir, mag, now),
                 }

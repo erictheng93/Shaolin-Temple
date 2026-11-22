@@ -1,0 +1,142 @@
+<!doctype html>
+<!-- 開發用：碰碰車造型預覽（npm run dev 後開 /cars-preview.html）。不在正式建置的進入點裡。 -->
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>碰碰車造型預覽</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #cfc8ba; font-family: system-ui, sans-serif; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; }
+      .tag { position: absolute; transform: translate(-50%, 0); text-align: center; color: #2b2622; pointer-events: none; white-space: nowrap; }
+      .tag b { display: block; font-size: 18px; }
+      .tag span { font-size: 13px; opacity: 0.75; }
+      #bar { position: absolute; left: 12px; top: 12px; display: flex; gap: 8px; align-items: center; color: #2b2622; font-size: 14px; }
+      #bar button { font: inherit; padding: 6px 10px; border: 1px solid #8a7f70; background: #f3eee4; border-radius: 6px; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="bar">
+      <button id="spin">停止旋轉</button>
+      <button id="box">顯示碰撞盒</button>
+      <button id="rider">隱藏騎士</button>
+      <span>拖曳旋轉、滾輪縮放</span>
+    </div>
+    <script type="module">
+      import * as THREE from 'three'
+      import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+      import { CarFleet } from '/src/game/render/CarFleet.ts'
+      import { ResourceTracker } from '/src/game/render/ResourceTracker.ts'
+
+      const KINDS = [
+        ['經典碰碰車', '普通 ×4'],
+        ['木魚車', '普通 ×3'],
+        ['跑車', '稀有 ×2'],
+        ['風火輪', '神話 ×1'],
+      ]
+      const GAP = 2.3
+      const canvas = document.getElementById('c')
+      const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+      renderer.setPixelRatio(Math.min(2, devicePixelRatio))
+      renderer.shadowMap.enabled = true
+      renderer.toneMapping = THREE.ACESFilmicToneMapping
+      const scene = new THREE.Scene()
+      scene.background = new THREE.Color('#cfc8ba')
+      const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100)
+      camera.position.set(0, 3.6, 8.2)
+      const controls = new OrbitControls(camera, canvas)
+      controls.target.set(0, 0.4, 0)
+      controls.maxPolarAngle = Math.PI / 2 - 0.02
+
+      scene.add(new THREE.HemisphereLight('#ffffff', '#8c8371', 1.1))
+      const sun = new THREE.DirectionalLight('#fff4e0', 2.2)
+      sun.position.set(4, 8, 5)
+      sun.castShadow = true
+      sun.shadow.mapSize.set(2048, 2048)
+      Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 5, bottom: -5 })
+      scene.add(sun)
+      const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshStandardMaterial({ color: '#bdb5a5', roughness: 1 }))
+      ground.rotation.x = -Math.PI / 2
+      ground.receiveShadow = true
+      scene.add(ground)
+
+      const tracker = new ResourceTracker()
+      const fleet = new CarFleet(scene, tracker)
+      await fleet.load()
+
+      // 騎士的替身：與 'ride' 片段下沉後的公仔同高（1.15 − 0.18），只用來看比例與有沒有穿模。
+      const pivots = []
+      KINDS.forEach((_, k) => {
+        const pivot = new THREE.Group()
+        pivot.position.x = (k - 1.5) * GAP
+        const skin = new THREE.MeshStandardMaterial({ color: '#e8c9a8', roughness: 0.8 })
+        const robe = new THREE.MeshStandardMaterial({ color: '#c9853a', roughness: 0.9 })
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.27, 0.6, 16), robe)
+        body.position.y = 0.3
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 20, 14), skin)
+        head.position.y = 0.76
+        const r = new THREE.Group()
+        r.add(body, head)
+        r.traverse((o) => (o.castShadow = true))
+        pivot.add(r)
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.1, 0.6, 1.8)), new THREE.LineBasicMaterial({ color: '#1565c0' }))
+        edges.position.y = 0.3
+        pivot.add(edges)
+        scene.add(pivot)
+        pivots.push(pivot)
+      })
+
+      const tags = KINDS.map(([name, sub]) => {
+        const el = document.createElement('div')
+        el.className = 'tag'
+        el.innerHTML = `<b>${name}</b><span>${sub}</span>`
+        document.body.appendChild(el)
+        return el
+      })
+
+      let spinning = true
+      let showRider = true
+      let showBox = false
+      document.getElementById('spin').onclick = (e) => { spinning = !spinning; e.target.textContent = spinning ? '停止旋轉' : '開始旋轉' }
+      document.getElementById('rider').onclick = (e) => { showRider = !showRider; e.target.textContent = showRider ? '隱藏騎士' : '顯示騎士' }
+      document.getElementById('box').onclick = (e) => { showBox = !showBox; e.target.textContent = showBox ? '隱藏碰撞盒' : '顯示碰撞盒' }
+
+      let heading = 0.6
+      let last = performance.now()
+      const v = new THREE.Vector3()
+      function frame(now) {
+        const dt = (now - last) / 1000
+        last = now
+        if (spinning) heading += dt * 0.5
+        const w = canvas.clientWidth
+        const h = canvas.clientHeight
+        if (canvas.width !== Math.floor(w * renderer.getPixelRatio()) || canvas.height !== Math.floor(h * renderer.getPixelRatio())) {
+          renderer.setSize(w, h, false)
+          camera.aspect = w / h
+          camera.updateProjectionMatrix()
+        }
+        // 前排是四種車；後排是經典碰碰車另外三種烤漆色（顏色依車的編號輪流）
+        fleet.sync(
+          [
+            ...KINDS.map((_, k) => ({ c: 0, kind: k, x: (k - 1.5) * GAP, z: 0, heading, opacity: 1 })),
+            ...[1, 2, 3].map((c) => ({ c, kind: 0, x: (-1.5 + (c - 1) * 0.8) * GAP - 0.4, z: -2.6, heading, opacity: 1 })),
+          ],
+          now,
+        )
+        pivots.forEach((p, k) => {
+          p.rotation.y = heading
+          p.children[0].visible = showRider
+          p.children[1].visible = showBox
+          v.set(p.position.x, -0.05, 1.3).project(camera)
+          tags[k].style.left = `${(v.x * 0.5 + 0.5) * w}px`
+          tags[k].style.top = `${(-v.y * 0.5 + 0.5) * h}px`
+        })
+        controls.update()
+        renderer.render(scene, camera)
+        requestAnimationFrame(frame)
+      }
+      requestAnimationFrame(frame)
+    </script>
+  </body>
+</html>

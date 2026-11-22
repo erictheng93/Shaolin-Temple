@@ -277,7 +277,7 @@ async fn player(
         != ((index + 1) * args.drivers / args.connections);
     enum DriverPhase {
         Walking,
-        Claiming { kind: u8, retry_at: Instant },
+        Claiming { retry_at: Instant },
         Driving { seq: u16 },
     }
     let mut driver_phase = if is_driver {
@@ -337,18 +337,16 @@ async fn player(
                                 walker.seq += 1;
                                 Some(json!({"t": "move", "x": round2(walker.x), "z": round2(walker.z), "heading": round2(walker.heading), "seq": walker.seq}).to_string())
                             } else {
-                                let kind = (index % 4) as u8;
                                 *phase = DriverPhase::Claiming {
-                                    kind,
                                     retry_at: Instant::now() + Duration::from_millis(1000),
                                 };
-                                Some(json!({"t": "claim", "kind": kind}).to_string())
+                                Some(json!({"t": "claim"}).to_string())
                             }
                         }
-                        DriverPhase::Claiming { kind, retry_at } => {
+                        DriverPhase::Claiming { retry_at } => {
                             if Instant::now() >= *retry_at {
                                 *retry_at = Instant::now() + Duration::from_millis(500);
-                                Some(json!({"t": "claim", "kind": *kind}).to_string())
+                                Some(json!({"t": "claim"}).to_string())
                             } else {
                                 None
                             }
@@ -391,14 +389,13 @@ async fn player(
                             stats.invalid_frames.fetch_add(1, Relaxed);
                         }
                         if let Message::Text(raw) = &message
-                            && let Some(DriverPhase::Claiming { kind, retry_at }) =
+                            && let Some(DriverPhase::Claiming { retry_at }) =
                                 &mut driver_phase
                             && let Ok(val) = serde_json::from_str::<Value>(raw)
                         {
                             if val["t"] == "car" && val["driver"].as_str() == Some(&my_id) {
                                 driver_phase = Some(DriverPhase::Driving { seq: 0 });
                             } else if val["t"] == "error" && val["code"] == "car_unavailable" {
-                                *kind = (*kind + 1) % 4;
                                 *retry_at = Instant::now();
                             } else if val["t"] == "error" && val["code"] == "booth_crowded" {
                                 *retry_at = Instant::now() + Duration::from_millis(150);

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import RAPIER from '@dimforge/rapier3d-compat'
-import { VehicleSim, isSeqLe } from './VehicleSim'
+import { DISPLAY_LEAD, VehicleSim, isSeqLe } from './VehicleSim'
 import { createSimWorld, type CarState } from './simCore'
 import { VEHICLES } from '../world/vehicles'
 import { SOLIDS, WORLD_BOUNDS } from '../world/layout'
@@ -124,8 +124,11 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     const clientPose = clientSim.selfPose()!
     const serverPose = serverWorld.state(0)!
 
-    const distDiff = Math.hypot(clientPose.x - serverPose.x, clientPose.z - serverPose.z)
-    expect(distDiff).toBeLessThan(0.05) // 小於 5 公分
+    // 畫面比物理晚 1 - DISPLAY_LEAD 步：累加器剛好歸零時，沿行進方向落後這麼多步的距離。
+    // 橫向（x）不受影響，仍要在 5 公分以內。
+    const behind = (Math.hypot(serverPose.vx, serverPose.vz) / VEHICLES.physics.hz) * (1 - DISPLAY_LEAD)
+    expect(Math.abs(clientPose.x - serverPose.x)).toBeLessThan(0.05)
+    expect(Math.abs(serverPose.z - clientPose.z - behind)).toBeLessThan(0.05)
 
     serverWorld.free()
     clientSim.dispose()
@@ -137,7 +140,6 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
 
     for (let i = 1; i <= 10; i++) {
       sim.pushInput(i, { dir: 0, mag: 1 })
-      sim.advance(1 / 30)
     }
 
     expect(sim.history.length).toBe(10)
@@ -165,7 +167,6 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     const seqs = [65530, 65534, 65535, 0, 1, 5, 6, 10]
     for (const seq of seqs) {
       sim.pushInput(seq, { dir: 0, mag: 1 })
-      sim.advance(1 / 30)
     }
 
     expect(sim.history.length).toBe(8)
@@ -181,14 +182,14 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
 
   it('4. 伺服器位置突然相差 4 公尺時直接套用（不平滑）', () => {
     const sim = createTestSim()
-    sim.setCars([makeCar(0, 0, 0, 0)], 0)
+    sim.setCars([makeCar(0, 0, 9, 0)], 0)
 
-    // 初始位置在 (0, 0)
+    // 初始位置在 (0, 9)：庭院南側的空地
     expect(sim.selfPose()!.x).toBeCloseTo(0, 2)
-    expect(sim.selfPose()!.z).toBeCloseTo(0, 2)
+    expect(sim.selfPose()!.z).toBeCloseTo(9, 2)
 
-    // 伺服器突然報告 (4, 0)
-    sim.reconcile(0, makeCar(0, 4, 0, 0), [])
+    // 伺服器突然報告 (4, 9)
+    sim.reconcile(0, makeCar(0, 4, 9, 0), [])
 
     // 差距 4m > 3m，誤差偏移直接設為 0，直接跳至 4
     expect(sim.errorOffset.x).toBe(0)
@@ -224,14 +225,14 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     sim.setCars([makeCar(0, 0, 0, 0)], 0)
 
     sim.pushInput(1, { dir: 0, mag: 1 })
-    sim.advance(1 / 30)
-    sim.reconcile(0, makeCar(0, 0.5, 0, 0), [])
+    // 校正量要超過柔性校正的範圍（0.6 公尺）才會產生誤差偏移
+    sim.reconcile(0, makeCar(0, 1.5, 0, 0), [])
 
     expect(sim.history.length).toBe(1)
     expect(Math.hypot(sim.errorOffset.x, sim.errorOffset.z)).toBeGreaterThan(0)
 
     // 下車 (self 設為 null)
-    sim.setCars([makeCar(0, 0.5, 0, 0)], null)
+    sim.setCars([makeCar(0, 1.5, 0, 0)], null)
 
     expect(sim.history.length).toBe(0)
     expect(sim.errorOffset.x).toBe(0)

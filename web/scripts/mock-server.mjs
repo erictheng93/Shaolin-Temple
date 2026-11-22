@@ -18,6 +18,7 @@ import { createServer } from 'node:http'
 import { WebSocketServer } from 'ws'
 import RAPIER from '@dimforge/rapier3d-compat'
 import { createSimWorld } from '../src/game/vehicles/simCore.ts'
+import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
 import { VEHICLES } from '../src/game/world/vehicles.ts'
 import { SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
@@ -182,6 +183,16 @@ const claimCar = (p, kind) => {
   const dz = p.z - VEHICLES.booth.counter.z
   if (Math.hypot(dx, dz) > VEHICLES.ride.boothRadius) return null
   if (p.claimAt && now() - p.claimAt < VEHICLES.ride.claimCooldownMs) return null
+  // 車種由伺服器依權重隨機分配（玩家不能挑）；已達數量上限的車種不參與抽選。
+  if (kind === undefined || kind === null) {
+    const stock = VEHICLES.kinds.map((k, i) => {
+      let n = 0
+      for (const car of cars.values()) if (car.kind === i) n++
+      return n < k.count ? (k.weight ?? 1) : 0
+    })
+    let roll = Math.random() * stock.reduce((a, b) => a + b, 0)
+    kind = stock.findIndex((w) => w > 0 && (roll -= w) < 0)
+  }
   if (kind < 0 || kind >= VEHICLES.kinds.length) return null
   let count = 0
   for (const car of cars.values()) if (car.kind === kind) count++
@@ -356,10 +367,12 @@ const dismountPlayer = (p) => {
   })
 }
 
-let physicsStep = 0
-// 物理世界模擬循環：30Hz
-setInterval(() => {
-  physicsStep++
+// 物理世界模擬循環：30Hz。計時器的實際間隔不準（Windows 上常是 40 多毫秒），所以依經過的時間補步，
+// 否則模擬會比真實時間慢，前端預測就一直被拉回來。每 2 步廣播一次 cars（15 Hz）。
+const STEP_MS = 1000 / VEHICLES.physics.hz
+let physicsAt = Date.now()
+let physicsSteps = 0
+const physicsStep = () => {
   const t = now()
   for (const car of cars.values()) {
     if (car.driver && t - car.lastInputAt > VEHICLES.physics.inputTimeoutMs) {
@@ -441,21 +454,29 @@ setInterval(() => {
       broadcast({ t: 'carGone', c })
     }
   }
-
-  // 碰碰車廣播：每 2 步一次 (15Hz)
-  if (physicsStep % 2 === 0) {
-    const allCars = sim.cars()
-    if (allCars.length) {
-      for (const to of players.values()) {
-        if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
-          const ack = to.lastDriveSeq ?? 0
-          const frame = encodeCars(ack, allCars)
-          if (frame) to.ws.send(frame)
-        }
-      }
+  if (++physicsSteps % VEHICLES.physics.broadcastEverySteps === 0) broadcastCars()
+}
+const broadcastCars = () => {
+  const allCars = sim.cars()
+  if (!allCars.length) return
+  for (const to of players.values()) {
+    if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
+      const frame = encodeCars(to.lastDriveSeq ?? 0, allCars)
+      if (frame) to.ws.send(frame)
     }
   }
-}, 1000 / 30)
+}
+setInterval(() => {
+  const t = now()
+  let steps = Math.floor((t - physicsAt) / STEP_MS)
+  if (steps > VEHICLES.physics.maxCatchUpSteps) {
+    steps = VEHICLES.physics.maxCatchUpSteps
+    physicsAt = t
+  } else {
+    physicsAt += steps * STEP_MS
+  }
+  for (let i = 0; i < steps; i++) physicsStep()
+}, 10)
 /** 房內短編號：取目前未使用的最小值，玩家離開後回收。超過 MAX_SHORT_ID（二進位幀只有 7 位元）時回傳 null。 */
 const allocN = () => {
   const used = new Set([...players.values()].map((p) => p.n))
@@ -739,8 +760,7 @@ wss.on('connection', (ws) => {
         break
       case 'claim':
       case 'ride_claim': {
-        const kind = typeof m.kind === 'number' ? m.kind : 0
-        const c = claimCar(me, kind)
+        const c = claimCar(me, null)
         if (c === null) {
           send(ws, { t: 'error', code: 'car_unavailable', message: '目前無法領車' })
         }
@@ -762,10 +782,8 @@ wss.on('connection', (ws) => {
       case 'drive': {
         if (me.riding !== null && me.riding !== undefined) {
           me.lastDriveSeq = m.seq ?? 0
-          const qDir = typeof m.dir === 'number' ? m.dir : 0
-          const qMag = typeof m.mag === 'number' ? m.mag : 0
-          const dir = (qDir * (Math.PI * 2)) / 256
-          const mag = Math.max(0, Math.min(1, qMag / 255))
+          // 線上值是量化過的整數（0..255），要換回弧度與 0..1 才能交給模擬。
+          const { dir, mag } = dequantizeDrive(typeof m.dir === 'number' ? m.dir : 0, typeof m.mag === 'number' ? m.mag : 0)
           sim.setInput(me.riding, { dir, mag })
           const car = cars.get(me.riding)
           if (car) {

@@ -9,6 +9,8 @@ pub struct Kind {
     pub id: String,
     pub rarity: String,
     pub count: u8,
+    /// 抽車的權重。
+    pub weight: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
