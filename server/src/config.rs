@@ -1,5 +1,5 @@
 use crate::auth::{AuthConfig, MIN_SECRET_BYTES, ProviderConfig, ProviderEndpoints, ProviderKind};
-use crate::room::{MAX_ROOM_CAPACITY, RoomConfig};
+use crate::room::{MAX_ROOM_CAPACITY, RoomConfig, SessionClock};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
@@ -11,6 +11,9 @@ pub struct Config {
     pub tick_hz: u32,
     /// 斷線保留秒數（`RESUME_GRACE_SECONDS`，1～600，預設 30）。
     pub resume_grace_seconds: u64,
+    /// 廟會時段（`VEHICLE_SESSION`）：未設定或空字串為依真實時間（`Wall`）；`always` 為永遠開放
+    /// （負載測試用），其他值啟動失敗。
+    pub session_clock: SessionClock,
     /// `METRICS_TOKEN`：設定後 `/metrics` 須帶 Bearer 權杖；未設定（或空字串）為開放。
     pub metrics_token: Option<String>,
     /// 登入設定；`SESSION_SECRET` 沒設定時為 `None`（純訪客，與協定版本 3 之前相同）。
@@ -23,6 +26,7 @@ impl Config {
         RoomConfig {
             tick: Duration::from_micros(1_000_000 / u64::from(self.tick_hz)),
             resume_grace: Duration::from_secs(self.resume_grace_seconds),
+            session_clock: self.session_clock,
             ..RoomConfig::new(self.room_capacity)
         }
     }
@@ -62,6 +66,11 @@ impl Config {
             .ok()
             .filter(|v| (1..=600).contains(v))
             .ok_or("RESUME_GRACE_SECONDS must be an integer in 1..=600")?;
+        let session_clock = match get("VEHICLE_SESSION")?.as_deref() {
+            None | Some("") => SessionClock::Wall,
+            Some("always") => SessionClock::AlwaysOpen,
+            Some(_) => return Err("VEHICLE_SESSION must be unset or \"always\"".into()),
+        };
         let origins = get("ALLOWED_ORIGINS")?.unwrap_or_else(|| "http://localhost:5173".into());
         let allowed_origins = origins
             .split(',')
@@ -75,6 +84,7 @@ impl Config {
             room_capacity,
             tick_hz,
             resume_grace_seconds,
+            session_clock,
             metrics_token: get("METRICS_TOKEN")?.filter(|v| !v.is_empty()),
             auth: parse_auth(&get)?,
             log_filter,
@@ -194,6 +204,12 @@ mod tests {
         assert_eq!(room.tick, Duration::from_millis(100));
         assert_eq!(room.resume_grace, Duration::from_secs(30));
         assert_eq!(room.outbound_capacity, 64);
+        assert_eq!(room.session_clock, SessionClock::Wall);
+        let always = Config::parse(|k| Ok((k == "VEHICLE_SESSION").then(|| "always".into())));
+        assert_eq!(
+            always.unwrap().room_config().session_clock,
+            SessionClock::AlwaysOpen
+        );
         for (key, value) in [
             ("PORT", "abc"),
             ("PORT", "0"),
@@ -207,6 +223,7 @@ mod tests {
             ("ALLOWED_ORIGINS", "*"),
             ("ALLOWED_ORIGINS", "https://example.com/path"),
             ("RUST_LOG", "[broken"),
+            ("VEHICLE_SESSION", "sometimes"),
         ] {
             assert!(
                 Config::parse(|k| Ok((k == key).then(|| value.into()))).is_err(),

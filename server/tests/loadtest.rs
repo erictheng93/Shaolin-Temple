@@ -1,13 +1,15 @@
 //! 負載工具的 smoke 測試：對本機伺服器跑幾秒，確認工具能連線、送出與統計，且伺服器沒有關閉任何連線。
 
-use temple_server::{ServerOptions, app_with_options};
+use temple_server::{ServerOptions, app_with_options, room::SessionClock};
 
 #[tokio::test]
 async fn loadtest_smoke_against_local_server() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        let options = ServerOptions::new(vec!["http://localhost:5173".into()]);
+        // 與正式壓測相同（VEHICLE_SESSION=always）：司機領車不受真實時間的廟會時段影響。
+        let mut options = ServerOptions::new(vec!["http://localhost:5173".into()]);
+        options.room.session_clock = SessionClock::AlwaysOpen;
         axum::serve(listener, app_with_options(options))
             .await
             .unwrap();
@@ -46,6 +48,8 @@ async fn loadtest_smoke_against_local_server() {
     assert_eq!(result["moving_players"], 3);
     assert_eq!(result["connect_failed"], 0);
     assert_eq!(result["closed_by_server"], 0);
+    // 兩位司機都領到車（伺服器以 AlwaysOpen 啟動，不受廟會時段影響）
+    assert_eq!(result["drivers_driving_at_start"], 2);
     assert!(result["recv_bytes_per_conn_s"].as_f64().unwrap() > 100.0);
     // moves 與 cars 是二進位幀，負載工具能逐則解碼，且歸類在 moves 與 cars 而不是 other。
     assert_eq!(result["invalid_frames"], 0);

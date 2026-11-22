@@ -437,6 +437,27 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 未做到／限制：
 - **負載測試為本機迴路**：伺服器負載測試未經真實外網長距離延遲與公網丟包抖動測試。
 
+### 廟會時段、遊戲區免撞與第 1 段稽核修正（2026-11-22，後端，計畫任務 18）
+
+- **廟會時段**：`shared/vehicles.json` 的 `session`（`periodMs` 3600000、`openMs` 1800000、`offsetMs` 0）以伺服器 Unix 毫秒計，`(ms − offset) mod period < open` 為開放（`params.rs` 的 `session_open`），即每小時的前 30 分鐘。時段外 `claim` 與 `ride`（上車）回 `error session_closed`（在其他檢查之前），下車不受影響。房間的 10 Hz tick 偵測「開放 → 關閉」的那一刻：所有騎士下車，每台車立即開始淡出（`car` 的 `fadeAt` = 結束時刻，與下車時「`fadeAt` 是淡出開始時刻」同義），`fadeMs`（15 秒）後移除並廣播 `carGone`。`car`／`carGone` 事件送給全房（含殿內），`cars` 幀只送庭院。
+- **時鐘**：`RoomConfig.session_clock`（`SessionClock::Wall` 預設、`Fixed { base_ms }` 給測試、`AlwaysOpen`）。環境變數 `VEHICLE_SESSION=always` 為永遠開放，給負載測試用（`loadtest --drivers` 的對象伺服器須這樣啟動，結果 JSON 的 `session_closed` 須為 0）；未設定為依真實時間，其他值啟動失敗。`fadeAt` 與時段用同一條時間軸（`Room::session_ms`，正式環境即 `now_ms()`）。
+- **遊戲區免撞**：`booth.zone`（含邊界）內的步行者不會被撞飛。
+- **補步**：物理 tick 改為 `MissedTickBehavior::Skip`，每次醒來依落後量補步（含本步）、最多 `maxCatchUpSteps`（3）步（`room.rs` 的 `catch_up_steps`）。原本的 Burst＋reset 在落後超過 100 ms 時只跑 1 步。
+- 新增錯誤代碼 `session_closed` 已加入固定資料 `server/tests/protocol-v5.json`。
+
+| 驗收項目 | 測試 |
+| --- | --- |
+| 時段邊界：0、1799999 開放；1800000、3599999 關閉；3600000 開放 | `params::tests::session_open_follows_period_and_open_window` |
+| 遊戲區包含檔口、櫃台與三個停車位 | `params::tests::zone_contains_booth_counter_and_bays` |
+| 時段外 claim／ride 回 `session_closed`，開放後可領 | `claim_and_ride_are_refused_with_session_closed_outside_the_window` |
+| 時段結束：騎士下車、每台車 `fadeAt` = 結束時刻、15 秒後 `carGone`、之後 claim 被拒 | `closing_the_session_dismounts_riders_and_fades_every_car` |
+| 遊戲區內不被撞、區外被同一台車撞 | `players_inside_the_game_zone_are_not_knocked` |
+| 非廣播步的撞擊帶到下一則 `cars` 幀 | `a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame` |
+| 落後 1 秒只補 3 步 | `catch_up_is_capped_at_three_steps_after_a_long_stall`、`catch_up_steps_counts_the_due_step_plus_missed_ones_up_to_the_cap` |
+| 不指定車種連領到滿：各車種不超過 count，之後 `car_unavailable` | `claim_assigns_a_random_kind_and_never_exceeds_stock` |
+| 殿內玩家收到 `car`／`carGone` 但收不到 `cars` 幀 | `cars_frames_only_reach_courtyard_players_but_car_events_reach_the_hall` |
+| `VEHICLE_SESSION` 設定解析 | `config.rs` `defaults_and_invalid_settings` |
+
 ## T9 部署與正式環境壓測（P1）
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。

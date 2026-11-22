@@ -79,6 +79,7 @@ const vi: Record<MessageKey, string> = {
   'server.boothCrowded': 'Khu vực quầy đang quá đông, vui lòng chờ chút',
   'server.claimCooldown': 'Vừa mới nhận xe, vui lòng chờ giây lát',
   'server.dismountFirst': 'Vui lòng xuống xe trước khi vào điện',
+  'server.sessionClosed': 'Hội chùa chưa mở, chưa thể lấy hay lên xe',
   'server.error': 'Máy chủ gặp sự cố. Xin thử lại sau.',
 
   'chat.label': 'Trò chuyện',
@@ -148,6 +149,8 @@ const vi: Record<MessageKey, string> = {
   'ride.modal.result': 'Chúc mừng, bạn rút được:',
   'ride.modal.go': 'Xuất phát!',
   'ride.modal.hint': 'Xe được phát ngẫu nhiên, không thể tự chọn',
+  'ride.session.closed': 'Hội chùa mở sau {time}',
+  'ride.session.open': 'Hội chùa đang diễn ra, còn {time}',
   'ride.modal.close': 'Đóng',
   'ride.rotateHint': 'Xoay ngang điện thoại để lái dễ hơn',
 
