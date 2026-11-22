@@ -1,9 +1,9 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式（協定版本 4）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 5）。
  *
  * 位置廣播 moves／sync 與動作廣播 action 是 WebSocket 二進位幀（格式與位元組配置見 binaryFrame.ts），
  * 其餘訊息與所有上行都是 JSON 文字。編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
- * 與 Rust 伺服器共用固定資料 server/tests/protocol-v4.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v5.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
  *
  * 版本：前端與伺服器的協定版本不同時，前端在 hello 時收到 error unsupported_version，
  * 不再重連並提示重新整理，不會出現「連上了但訊息解不開」的靜默故障。
@@ -138,11 +138,11 @@ export type ClientMessage =
   | { t: 'chat'; text: string }
   /** 更換衣裝（不需 reqId／ack）：伺服器驗證、限速（同聊天）、與目前相同不廣播，否則廣播 outfit 給同房所有人（含本人）。 */
   | { t: 'outfit'; outfit: number }
-  /** 領車：指定車種（0..KIND_COUNT-1），需在車棚範圍內。 */
-  | { t: 'claim'; kind: number }
+  /** 領車：需在檔口範圍內；車種由伺服器依 shared/vehicles.json 的 weight 隨機分配（額滿的車種不參與）。 */
+  | { t: 'claim' }
   /** 上車（帶 car: 0..15）或下車（缺少 car 或 null）。 */
   | { t: 'ride'; car?: number | null }
-  /** 碰碰車搖桿輸入：dir 角度（弧度）、mag 搖桿推量（0..1）、seq 序號。 */
+  /** 碰碰車搖桿輸入：dir 角度量化（0..255，一格 2π/256）、mag 搖桿推量量化（0..255）、seq 序號（0..65535）。 */
   | { t: 'drive'; seq: number; dir: number; mag: number }
 
 export type ServerMessage =

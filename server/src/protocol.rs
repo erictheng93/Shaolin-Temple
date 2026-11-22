@@ -77,10 +77,8 @@ pub enum ClientMessage {
     Outfit {
         outfit: Value,
     },
-    /// 領車：指定車款編號（0..KIND_COUNT-1）。
-    Claim {
-        kind: u8,
-    },
+    /// 領車：車種由伺服器依權重隨機分配，訊息不帶欄位。
+    Claim,
     /// 上下車：上車帶車輛編號（0..MAX_CARS-1），下車帶 null。
     Ride {
         #[serde(default)]
@@ -382,9 +380,8 @@ impl ClientMessage {
             } => id(req_id, MAX_REQ_ID_BYTES) && id(action, MAX_ACTION_ID_BYTES),
             Self::Zone { zone, .. } => id(zone, MAX_ZONE_BYTES),
             Self::Chat { text } => text.len() <= MAX_CHAT_RAW_BYTES,
-            Self::Claim { kind } => *kind < KIND_COUNT,
             Self::Ride { car } => car.is_none_or(|c| (c as usize) < MAX_CARS),
-            Self::Drive { .. } => true,
+            Self::Claim | Self::Drive { .. } => true,
             Self::Move { .. } | Self::Stop { .. } | Self::Ping { .. } | Self::Outfit { .. } => true,
         }
     }
@@ -436,7 +433,7 @@ impl ServerMessage {
 // | 3 | i16 | z，公分，同上 |
 // | 5 | u8 | heading，q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128，範圍 (−π, π] |
 //
-// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v4.json 的 binary 測試向量驗證一致。
+// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v5.json 的 binary 測試向量驗證一致。
 
 /// 幀型：`moves`（增量）。
 pub const FRAME_MOVES: u8 = 0x01;
@@ -870,10 +867,15 @@ mod tests {
         assert!(rename(MAX_RAW_NAME_BYTES).within_limits());
         assert!(rename(0).within_limits());
         assert!(!rename(MAX_RAW_NAME_BYTES + 1).within_limits());
-        let claim = |k: u8| ClientMessage::Claim { kind: k };
-        assert!(claim(0).within_limits());
-        assert!(claim(KIND_COUNT - 1).within_limits());
-        assert!(!claim(KIND_COUNT).within_limits());
+        assert!(matches!(
+            parse(r#"{"t":"claim"}"#.into()),
+            ClientMessage::Claim
+        ));
+        // 舊客戶端多帶的 kind 會被忽略（車種一律由伺服器決定）
+        assert!(matches!(
+            parse(r#"{"t":"claim","kind":3}"#.into()),
+            ClientMessage::Claim
+        ));
         let ride = |c: Option<u8>| ClientMessage::Ride { car: c };
         assert!(ride(None).within_limits());
         assert!(ride(Some(0)).within_limits());

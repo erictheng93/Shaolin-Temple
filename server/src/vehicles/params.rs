@@ -9,6 +9,8 @@ pub struct Kind {
     pub id: String,
     pub rarity: String,
     pub count: u8,
+    /// 抽車的權重。
+    pub weight: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -102,6 +104,30 @@ pub struct Booth {
     pub rect: BoothRect,
     pub counter: BoothCounter,
     pub bays: Vec<Bay>,
+    /// 遊戲區（西南角的鋪面範圍）：區內的步行者不會被撞飛。
+    pub zone: BoothRect,
+}
+
+impl BoothRect {
+    /// 含邊界。
+    pub fn contains(&self, x: f64, z: f64) -> bool {
+        (self.min_x as f64..=self.max_x as f64).contains(&x)
+            && (self.min_z as f64..=self.max_z as f64).contains(&z)
+    }
+}
+
+/// 廟會時段：以伺服器毫秒計，每 `period_ms` 一輪，每輪開頭的 `open_ms` 開放領車與上車。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Session {
+    pub period_ms: u64,
+    pub open_ms: u64,
+    pub offset_ms: u64,
+}
+
+/// `(server_ms - offset) mod period < open`（以 rem_euclid 取非負餘數）。
+pub fn session_open(server_ms: f64, s: &Session) -> bool {
+    (server_ms - s.offset_ms as f64).rem_euclid(s.period_ms as f64) < s.open_ms as f64
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,6 +140,7 @@ pub struct Params {
     pub fade: Fade,
     pub knock: Knock,
     pub booth: Booth,
+    pub session: Session,
 }
 
 static PARAMS: OnceLock<Params> = OnceLock::new();
@@ -205,6 +232,47 @@ pub(crate) mod tests {
                     r
                 );
             }
+        }
+    }
+
+    #[test]
+    fn session_open_follows_period_and_open_window() {
+        let s = &params().session;
+        assert!(session_open(0.0, s));
+        assert!(session_open(1_799_999.0, s));
+        assert!(!session_open(1_800_000.0, s));
+        assert!(!session_open(3_599_999.0, s));
+        assert!(session_open(3_600_000.0, s));
+        // offset 之前（負數）同樣以非負餘數計算。
+        let shifted = Session {
+            offset_ms: 1_000,
+            ..s.clone()
+        };
+        assert!(!session_open(999.0, &shifted));
+        assert!(session_open(1_000.0, &shifted));
+    }
+
+    #[test]
+    fn zone_contains_booth_counter_and_bays() {
+        let p = params();
+        let zone = &p.booth.zone;
+        let r = &p.booth.rect;
+        for (x, z) in [
+            (r.min_x, r.min_z),
+            (r.min_x, r.max_z),
+            (r.max_x, r.min_z),
+            (r.max_x, r.max_z),
+        ] {
+            assert!(zone.contains(x as f64, z as f64), "rect corner ({x}, {z})");
+        }
+        assert!(zone.contains(p.booth.counter.x as f64, p.booth.counter.z as f64));
+        for bay in &p.booth.bays {
+            assert!(
+                zone.contains(bay.x as f64, bay.z as f64),
+                "bay ({}, {})",
+                bay.x,
+                bay.z
+            );
         }
     }
 }

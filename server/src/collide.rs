@@ -6,7 +6,6 @@ pub const TOLERANCE: f64 = 0.15;
 pub const SEPARATE_PER_TICK: f64 = 0.1;
 pub const VIEW_DELAY_TICKS: usize = 2;
 pub const HISTORY_TICKS: usize = 4;
-pub const PORTAL_REACH: f64 = 0.35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Body {
@@ -23,7 +22,7 @@ pub struct Moved {
     pub z: f64,
 }
 
-/// 回傳 mover 的新位置與被推動的人。others 須依 n 由小到大。
+/// 回傳 mover 的新位置與被推動的人。others 在這裡依 n 由小到大排序（與前端相同），呼叫端不必先排。
 pub fn resolve_move(
     mover: (f64, f64),
     prev: (f64, f64),
@@ -32,7 +31,9 @@ pub fn resolve_move(
     valid: impl Fn(f64, f64) -> bool,
 ) -> ((f64, f64), Vec<Moved>) {
     let mut current_mover = mover;
-    let mut current_others = others.to_vec();
+    let mut others = others.to_vec();
+    others.sort_by_key(|b| b.n);
+    let mut current_others = others.clone();
 
     for _ in 0..2 {
         for o in &mut current_others {
@@ -373,225 +374,87 @@ mod tests {
         assert!(moved.is_empty(), "rooted bodies should not move");
     }
 
-    #[derive(Debug, Serialize, Deserialize)]
-    struct CollideFixtureFile {
-        cases: Vec<CollideCase>,
-        expected: Vec<CollideExpected>,
+    // 共用固定資料：前端 `web/src/game/world/collide.test.ts` 讀同一個檔並負責產生 expected，
+    // 這裡只讀取並比對（相差須小於 1e-9）。valid(x, z)：有 maxX 時是 x <= maxX，否則一律為真。
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FixtureFile {
+        move_cases: Vec<MoveCase>,
+        separate_cases: Vec<SeparateCase>,
     }
 
-    #[derive(Debug, Serialize, Deserialize, Clone)]
-    struct CollideCase {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct MoveCase {
         name: String,
         mover: (f64, f64),
         prev: (f64, f64),
         others: Vec<Body>,
         tolerance: f64,
-        wall: Option<f64>,
+        max_x: Option<f64>,
+        expected: MoveExpected,
     }
 
-    #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-    struct CollideExpected {
+    #[derive(Deserialize)]
+    struct MoveExpected {
+        x: f64,
+        z: f64,
+        moved: Vec<Moved>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SeparateCase {
         name: String,
-        mover: (f64, f64),
-        pushed: Vec<Moved>,
+        bodies: Vec<Body>,
+        max_x: Option<f64>,
+        expected: Vec<Moved>,
+    }
+
+    fn assert_moved_near(name: &str, expected: &[Moved], actual: &[Moved]) {
+        assert_eq!(
+            expected.iter().map(|m| m.n).collect::<Vec<_>>(),
+            actual.iter().map(|m| m.n).collect::<Vec<_>>(),
+            "{name}: 被移動的人不同"
+        );
+        for (e, a) in expected.iter().zip(actual) {
+            assert!(
+                (e.x - a.x).abs() < 1e-9 && (e.z - a.z).abs() < 1e-9,
+                "{name}: n={} 預期 ({}, {})，得到 ({}, {})",
+                e.n,
+                e.x,
+                e.z,
+                a.x,
+                a.z
+            );
+        }
     }
 
     #[test]
     fn collide_script_matches_fixture() {
-        let fixture_path =
+        let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/collide-script.json");
-        let update_fixture = std::env::var("UPDATE_FIXTURES").as_deref() == Ok("1");
+        let file: FixtureFile =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("read collide-script.json"))
+                .expect("invalid collide-script.json");
+        assert!(file.move_cases.len() >= 8 && file.separate_cases.len() >= 4);
+        let valid_of = |max_x: Option<f64>| move |x: f64, _z: f64| max_x.is_none_or(|m| x <= m);
 
-        let cases = vec![
-            CollideCase {
-                name: "head_on_overlap_is_split_evenly".into(),
-                mover: (0.2, 0.0),
-                prev: (-1.0, 0.0),
-                others: vec![Body {
-                    n: 2,
-                    x: 0.5,
-                    z: 0.0,
-                    rooted: false,
-                }],
-                tolerance: 0.0,
-                wall: None,
-            },
-            CollideCase {
-                name: "rooted_body_does_not_move_and_mover_takes_all".into(),
-                mover: (0.2, 0.0),
-                prev: (-1.0, 0.0),
-                others: vec![Body {
-                    n: 2,
-                    x: 0.5,
-                    z: 0.0,
-                    rooted: true,
-                }],
-                tolerance: 0.0,
-                wall: None,
-            },
-            CollideCase {
-                name: "pushed_body_blocked_by_a_wall_makes_the_mover_stop".into(),
-                mover: (0.2, 0.0),
-                prev: (-1.0, 0.0),
-                others: vec![Body {
-                    n: 2,
-                    x: 0.5,
-                    z: 0.0,
-                    rooted: false,
-                }],
-                tolerance: 0.0,
-                wall: Some(0.6),
-            },
-            CollideCase {
-                name: "overlap_within_tolerance_is_left_alone".into(),
-                mover: (0.0, 0.0),
-                prev: (-1.0, 0.0),
-                others: vec![Body {
-                    n: 2,
-                    x: 0.5,
-                    z: 0.0,
-                    rooted: false,
-                }],
-                tolerance: TOLERANCE,
-                wall: None,
-            },
-            CollideCase {
-                name: "coincident_bodies_separate_deterministically".into(),
-                mover: (0.0, 0.0),
-                prev: (0.0, 0.0),
-                others: vec![Body {
-                    n: 2,
-                    x: 0.0,
-                    z: 0.0,
-                    rooted: false,
-                }],
-                tolerance: 0.0,
-                wall: None,
-            },
-            CollideCase {
-                name: "mover_returns_to_prev_when_resolved_position_is_invalid".into(),
-                mover: (0.2, 0.0),
-                prev: (-0.5, 0.0),
-                others: vec![Body {
-                    n: 2,
-                    x: 0.5,
-                    z: 0.0,
-                    rooted: true,
-                }],
-                tolerance: 0.0,
-                wall: Some(-0.2),
-            },
-            CollideCase {
-                name: "diagonal_push_at_45_degrees".into(),
-                mover: (0.2, 0.2),
-                prev: (-1.0, -1.0),
-                others: vec![Body {
-                    n: 3,
-                    x: 0.5,
-                    z: 0.5,
-                    rooted: false,
-                }],
-                tolerance: 0.0,
-                wall: None,
-            },
-            CollideCase {
-                name: "three_bodies_in_a_line".into(),
-                mover: (0.4, 0.0),
-                prev: (-1.0, 0.0),
-                others: vec![
-                    Body {
-                        n: 1,
-                        x: 0.5,
-                        z: 0.0,
-                        rooted: false,
-                    },
-                    Body {
-                        n: 2,
-                        x: 0.9,
-                        z: 0.0,
-                        rooted: false,
-                    },
-                ],
-                tolerance: 0.0,
-                wall: None,
-            },
-        ];
-
-        let mut actual_expected = Vec::new();
-        for c in &cases {
-            let wall_max_x = c.wall;
-            let valid = move |x: f64, _z: f64| match wall_max_x {
-                Some(max_x) => x <= max_x,
-                None => true,
-            };
-            let (new_mover, pushed) = resolve_move(c.mover, c.prev, &c.others, c.tolerance, valid);
-            actual_expected.push(CollideExpected {
-                name: c.name.clone(),
-                mover: new_mover,
-                pushed,
-            });
-        }
-
-        if update_fixture {
-            let fixture = CollideFixtureFile {
-                cases,
-                expected: actual_expected,
-            };
-            let json = serde_json::to_string_pretty(&fixture).expect("serialize fixture");
-            if let Some(parent) = fixture_path.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-            std::fs::write(&fixture_path, json).expect("write collide-script.json");
-        } else {
-            let content = std::fs::read_to_string(&fixture_path).expect(
-                "failed to read collide-script.json. Run with UPDATE_FIXTURES=1 to generate.",
+        for c in &file.move_cases {
+            let (pos, moved) =
+                resolve_move(c.mover, c.prev, &c.others, c.tolerance, valid_of(c.max_x));
+            assert!(
+                (pos.0 - c.expected.x).abs() < 1e-9 && (pos.1 - c.expected.z).abs() < 1e-9,
+                "{}: mover 預期 ({}, {})，得到 {pos:?}",
+                c.name,
+                c.expected.x,
+                c.expected.z
             );
-            let file: CollideFixtureFile =
-                serde_json::from_str(&content).expect("invalid collide-script.json");
-
-            assert_eq!(file.cases.len(), actual_expected.len());
-            for (exp, act) in file.expected.iter().zip(actual_expected.iter()) {
-                assert_eq!(exp.name, act.name);
-                assert!(
-                    (exp.mover.0 - act.mover.0).abs() < 1e-9,
-                    "{}: mover x expected {}, got {}",
-                    exp.name,
-                    exp.mover.0,
-                    act.mover.0
-                );
-                assert!(
-                    (exp.mover.1 - act.mover.1).abs() < 1e-9,
-                    "{}: mover z expected {}, got {}",
-                    exp.name,
-                    exp.mover.1,
-                    act.mover.1
-                );
-                assert_eq!(
-                    exp.pushed.len(),
-                    act.pushed.len(),
-                    "{}: pushed count mismatch",
-                    exp.name
-                );
-                for (p_exp, p_act) in exp.pushed.iter().zip(act.pushed.iter()) {
-                    assert_eq!(p_exp.n, p_act.n);
-                    assert!(
-                        (p_exp.x - p_act.x).abs() < 1e-9,
-                        "{}: pushed n={} x expected {}, got {}",
-                        exp.name,
-                        p_exp.n,
-                        p_exp.x,
-                        p_act.x
-                    );
-                    assert!(
-                        (p_exp.z - p_act.z).abs() < 1e-9,
-                        "{}: pushed n={} z expected {}, got {}",
-                        exp.name,
-                        p_exp.n,
-                        p_exp.z,
-                        p_act.z
-                    );
-                }
-            }
+            assert_moved_near(&c.name, &c.expected.moved, &moved);
+        }
+        for c in &file.separate_cases {
+            let moved = separate(&c.bodies, valid_of(c.max_x));
+            assert_moved_near(&c.name, &c.expected, &moved);
         }
     }
 

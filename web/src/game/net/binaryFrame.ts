@@ -1,7 +1,7 @@
 /**
  * 伺服器下行的二進位幀（協定版本 4；v4 未改變二進位幀）：moves／sync（0x01／0x02，自 v2 起）與 action（0x03，v3 起）。
  * 前端解碼、mock 伺服器編碼都用這一份實作；Rust 端在 server/src/protocol.rs（encode_batch／decode_batch、
- * encode_action／decode_action），兩邊以 server/tests/protocol-v4.json 的 binary 測試向量驗證一致。
+ * encode_action／decode_action），兩邊以 server/tests/protocol-v5.json 的 binary 測試向量驗證一致。
  *
  * 這個檔案不 import 任何東西、只用可被移除的型別語法，讓 `node scripts/mock-server.mjs` 能直接載入
  * （Node 22.18 起內建 TypeScript 型別移除）。

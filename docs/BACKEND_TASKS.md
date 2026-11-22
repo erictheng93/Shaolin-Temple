@@ -416,26 +416,51 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 
 ### 協定版本 5 完成紀錄（2026-11-21，後端：庭院碰碰車）
 
-`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（116 個測試：lib 65、gameplay 14、loadtest 1、login 10、logging 1、metrics 4、protocol 9、websocket 13）在本機（Ubuntu Linux，rustc 1.93.1）通過。
+`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test`（2026-11-22 併入 `main` 後：168 個測試，lib 115、gameplay 14、loadtest 1、login 10、logging 1、metrics 3、protocol 12、websocket 12）在本機（Windows 11，rustc 1.95.0）通過。
 負載測試報告見 [LOAD_TEST_2026-11-21_VEHICLES.md](LOAD_TEST_2026-11-21_VEHICLES.md)。
 
 | 驗收項目 | 測試／驗證 |
 | --- | --- |
-| 剛體模擬與碰撞：Rapier2d 整合、邊界與 16 個庭院障礙物阻擋、車車彈性碰撞（restitution 0.6）、動態阻尼 | `src/vehicles/world.rs` `vehicle_world_simulation_and_collision` 等單元測試；`tests/gameplay.rs` |
-| 車輛駕駛動力學：純函式轉向 Gain、車速與倒車判定、側向抓地力衰減、阻尼衰減 | `src/vehicles/drive.rs` `drive_step_forward_and_turn` 等單元測試 |
-| 協定版本 5：二進位 `cars` 幀（0x04，10 bytes/車）、`claim`、`dismount`、`drive`、`car`、`carGone`、`knock` | `tests/protocol.rs`（二進位往返、JSON 往返、shared 向量檔驗證）、`tests/websocket.rs` |
+| 剛體模擬與碰撞：Rapier3d 整合、邊界與庭院障礙物阻擋、車車彈性碰撞（restitution 0.6）、動態阻尼 | `src/vehicles/world.rs` 的 `car_never_enters_a_solid_or_leaves_bounds`、`hitting_a_wall_reports_a_bump`、`drive_script_matches_fixture` 等單元測試；`tests/gameplay.rs` |
+| 車輛駕駛動力學：純函式轉向 Gain、車速與倒車判定、側向抓地力衰減、阻尼衰減 | `src/vehicles/drive.rs` 的 `full_stick_ahead_pushes_forward`、`steers_toward_target_on_the_short_side`、`stick_behind_at_low_speed_reverses` 等單元測試 |
+| 協定版本 5：二進位 `cars` 幀（0x04，表頭 3 bytes + 12 bytes/車）、`claim`、`ride`、`drive`、`car`、`carGone`、`knock` | `tests/protocol.rs`（二進位往返、JSON 往返、shared 向量檔驗證）、`tests/websocket.rs` |
 | 房間整合：檔口借車範圍驗證（2.5m 內）、冷卻時間（20s）、閒置下車（60s）、停放車輛淡出回收（15s）、下車位置偏移（1.1m） | `src/room/vehicles.rs`、`tests/websocket.rs` |
 | 撞飛與無敵機制：大於 2.5 m/s 撞擊步行動作者、拋物線飛行與恢復（各 900ms）、無敵保護（3000ms）、打斷當前動作 | `tests/gameplay.rs`、`src/room/vehicles.rs` |
 | 物理耗時指標：`temple_physics_step_seconds` 直方圖與 `temple_physics_step_seconds_max` 測量 | `tests/metrics.rs`、`/metrics` 端點實測 |
-| 負載工具與壓測：`loadtest --drivers <N>` 司機狀態機、10 房 100 車 500 連線 60 秒量測 | `tests/loadtest.rs`、[LOAD_TEST_2026-11-21_VEHICLES.md](LOAD_TEST_2026-11-21_VEHICLES.md)（平均每步 105 µs，cars 幀約 24 bytes/s） |
+| 負載工具與壓測：`loadtest --drivers <N>` 司機狀態機、10 房 100 車 500 連線 60 秒量測 | `tests/loadtest.rs`、[LOAD_TEST_2026-11-21_VEHICLES.md](LOAD_TEST_2026-11-21_VEHICLES.md)（2026-11-22 重新量測：每步平均 202 µs、最大 2.25 ms；每連線接收 3,025 bytes/s，其中 `cars` 1,845） |
+
+更新（2026-11-21，前端已全部完成）：
+- 前端視覺、駕駛操控、檔口 UI、預測模擬與重播校正（PR #40、PR #41）已全數實作並通過驗證。
+- 負載測試為本機迴路：未經外網公網延遲與丟包抖動實測；前端的校正量以 `netsim.test.ts` 的模擬網路檢查（單程 100±40 ms 以內 p95 < 0.30 m；數字與條件見 TECH_STACK.md），沒有手機在公網上的實測。
+- 領車（2026-11-22）：`claim` 不帶車種，房間在還有餘額的車種裡依 `shared/vehicles.json` 的 `weight` 抽一種（`room/vehicles.rs` 的 `pick_kind`、`roll_kind`；測試 `pick_kind_skips_full_kinds_and_follows_weights`、`claim_without_kind_draws_a_car`）。舊客戶端多帶的 `kind` 會被忽略。
 
 未做到／限制：
-- **僅完成後端實作**：前端視覺（Three.js 車輛渲染、輪胎與車身擺動、粒子煙霧火花、檔口互動 UI、操縱桿駕駛控制）屬於任務 9–12，待下階段 PR 實作。
-- **負載測試為本機迴路**：未經外網公網延遲與丟包抖動測試。
+- **負載測試為本機迴路**：伺服器負載測試未經真實外網長距離延遲與公網丟包抖動測試。
+
+### 廟會時段、遊戲區免撞與第 1 段稽核修正（2026-11-22，後端，計畫任務 18）
+
+- **廟會時段**：`shared/vehicles.json` 的 `session`（`periodMs` 3600000、`openMs` 1800000、`offsetMs` 0）以伺服器 Unix 毫秒計，`(ms − offset) mod period < open` 為開放（`params.rs` 的 `session_open`），即每小時的前 30 分鐘。時段外 `claim` 與 `ride`（上車）回 `error session_closed`（在其他檢查之前），下車不受影響。房間的 10 Hz tick 偵測「開放 → 關閉」的那一刻：所有騎士下車，每台車立即開始淡出（`car` 的 `fadeAt` = 結束時刻，與下車時「`fadeAt` 是淡出開始時刻」同義），`fadeMs`（15 秒）後移除並廣播 `carGone`。`car`／`carGone` 事件送給全房（含殿內），`cars` 幀只送庭院。
+- **時鐘**：`RoomConfig.session_clock`（`SessionClock::Wall` 預設、`Fixed { base_ms }` 給測試、`AlwaysOpen`）。環境變數 `VEHICLE_SESSION=always` 為永遠開放，給負載測試用（`loadtest --drivers` 的對象伺服器須這樣啟動，結果 JSON 的 `session_closed` 須為 0）；未設定為依真實時間，其他值啟動失敗。`fadeAt` 與時段用同一條時間軸（`Room::session_ms`，正式環境即 `now_ms()`）。
+- **遊戲區免撞**：`booth.zone`（含邊界）內的步行者不會被撞飛。
+- **補步**：物理 tick 改為 `MissedTickBehavior::Skip`，每次醒來依落後量補步（含本步）、最多 `maxCatchUpSteps`（3）步（`room.rs` 的 `catch_up_steps`）。原本的 Burst＋reset 在落後超過 100 ms 時只跑 1 步。
+- 新增錯誤代碼 `session_closed` 已加入固定資料 `server/tests/protocol-v5.json`。
+
+| 驗收項目 | 測試 |
+| --- | --- |
+| 時段邊界：0、1799999 開放；1800000、3599999 關閉；3600000 開放 | `params::tests::session_open_follows_period_and_open_window` |
+| 遊戲區包含檔口、櫃台與三個停車位 | `params::tests::zone_contains_booth_counter_and_bays` |
+| 時段外 claim／ride 回 `session_closed`，開放後可領 | `claim_and_ride_are_refused_with_session_closed_outside_the_window` |
+| 時段結束：騎士下車、每台車 `fadeAt` = 結束時刻、15 秒後 `carGone`、之後 claim 被拒 | `closing_the_session_dismounts_riders_and_fades_every_car` |
+| 遊戲區內不被撞、區外被同一台車撞 | `players_inside_the_game_zone_are_not_knocked` |
+| 非廣播步的撞擊帶到下一則 `cars` 幀 | `a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame` |
+| 落後 1 秒只補 3 步 | `catch_up_is_capped_at_three_steps_after_a_long_stall`、`catch_up_steps_counts_the_due_step_plus_missed_ones_up_to_the_cap` |
+| 不指定車種連領到滿：各車種不超過 count，之後 `car_unavailable` | `claim_assigns_a_random_kind_and_never_exceeds_stock` |
+| 殿內玩家收到 `car`／`carGone` 但收不到 `cars` 幀 | `cars_frames_only_reach_courtyard_players_but_car_events_reach_the_hall` |
+| `VEHICLE_SESSION` 設定解析 | `config.rs` `defaults_and_invalid_settings` |
 
 ### 玩家硬碰撞與每 tick 分離（2026-11-21，後端：Task 1～3）
 
-本機驗證（Windows，rustc 1.95.0）通過 `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings` 和 `cargo test --locked`。後端共 200 項測試通過（lib 142、gameplay 18、loadtest 2、logging 1、login 10、metrics 3、protocol 12、websocket 12）。另以本機迴路同時恢復滿房 50 條 WebSocket 連線，所有玩家都保有原本的身分與房間。
+本機驗證（Windows，rustc 1.95.0）通過 `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings` 和 `cargo test --locked`。後端共 213 項測試通過（合併 main 後；lib 155、gameplay 18、loadtest 2、logging 1、login 10、metrics 3、protocol 12、websocket 12）。另以本機迴路同時恢復滿房 50 條 WebSocket 連線，所有玩家都保有原本的身分與房間。
 
 **規則與數值**：
 - 最小距離 `MIN_DIST = 0.60` 公尺，推動步長上限 `SEPARATE_PER_TICK = 0.10` 公尺。
@@ -447,7 +472,7 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
   - 授予冷卻：兩次授予免推至少間隔 `ROOTED_GRANT_GAP = 2` 秒，冷卻內的定點動作照常接受與廣播，只是不授予免推，避免連送動作把寬限串成緩慢的免推步行。
   - 場景限定：只有屬於目前場景的動作才授予免推（`world::action_rooted_in`）：`prostrate`、`chant` 只在 `hall`，`bell` 只在 `courtyard`，`incense` 兩邊皆可；不符時動作仍照常接受與廣播。
   - 本人的位置被接受且不需校正時，清除待送的碰撞校正（`correction_pending`），避免稍後過時的 `Sync` 把行走中的玩家拉回。
-- 殿門範圍往庭院延伸 `PORTAL_REACH = 0.35` 公尺，前後端的庭院入口矩形邊界都是 `-4.65`。伺服器驗證出入口的 `PORTAL_TOLERANCE = 0.5` 公尺。
+- 殿門範圍往庭院延伸 0.35 公尺，前後端的庭院入口矩形邊界都是 `-4.65`。伺服器驗證出入口的 `PORTAL_TOLERANCE = 0.5` 公尺。
 
 | 驗收項目 | 測試／驗證 |
 | --- | --- |

@@ -4,7 +4,10 @@ use crate::{
         AuthKind, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MoveTuple, Moving, PlayerAction,
         PlayerSnapshot, ServerMessage,
     },
-    vehicles::{params::params, world::VehicleWorld},
+    vehicles::{
+        params::{params, session_open},
+        world::VehicleWorld,
+    },
     world::{self, PORTAL_TOLERANCE, Zone},
 };
 use std::{
@@ -57,6 +60,17 @@ const ACK_CACHE: usize = 64;
 const RENAME_BURST: f64 = 2.0;
 const RENAME_PER_SEC: f64 = 0.5;
 
+/// 廟會時段用的時鐘。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SessionClock {
+    /// 正式：以伺服器的 Unix 毫秒（`now_ms()`）判斷時段。
+    Wall,
+    /// 測試：`base_ms` 加上房間建立後經過的毫秒（tokio `Instant`，暫停時間的測試可以推進）。
+    Fixed { base_ms: f64 },
+    /// 永遠開放（負載工具；環境變數 `VEHICLE_SESSION=always`）。
+    AlwaysOpen,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RoomConfig {
     pub capacity: usize,
@@ -68,6 +82,8 @@ pub struct RoomConfig {
     pub outbound_capacity: usize,
     /// 移動中的玩家超過這段時間沒有新的位置訊息，視為停止（伺服器端停止看門狗）。
     pub stale_move: Duration,
+    /// 廟會時段的時鐘（預設 `Wall`）。
+    pub session_clock: SessionClock,
 }
 impl RoomConfig {
     pub fn new(capacity: usize) -> Self {
@@ -77,6 +93,7 @@ impl RoomConfig {
             resume_grace: Duration::from_secs(30),
             outbound_capacity: 64,
             stale_move: Duration::from_secs(1),
+            session_clock: SessionClock::Wall,
         }
     }
 }
@@ -140,17 +157,15 @@ enum RoomCommand {
         who: Who,
         outfit: u8,
     },
-    #[allow(dead_code)]
+    /// kind 為 None 時由房間抽車種（正式路徑）；測試可指定。
     Claim {
         who: Who,
-        kind: u8,
+        kind: Option<u8>,
     },
-    #[allow(dead_code)]
     Ride {
         who: Who,
         car: Option<u8>,
     },
-    #[allow(dead_code)]
     Drive {
         who: Who,
         seq: u16,
@@ -335,12 +350,12 @@ impl Membership {
             })
             .await;
     }
-    pub async fn claim(&self, kind: u8) {
+    pub async fn claim(&self) {
         let _ = self
             .room
             .send(RoomCommand::Claim {
                 who: self.who.clone(),
-                kind,
+                kind: None,
             })
             .await;
     }
@@ -513,6 +528,10 @@ pub struct Room {
     pub(crate) vehicles: VehicleWorld,
     pub(crate) cars: BTreeMap<u8, Car>,
     pub(crate) physics_steps: u64,
+    /// 房間建立的時刻（`SessionClock::Fixed` 以它為起點）。
+    pub(crate) created: Instant,
+    /// 上一個 tick 的時段是否開放；偵測「開放 → 關閉」用。
+    pub(crate) session_was_open: bool,
 }
 
 impl Room {
@@ -527,7 +546,24 @@ impl Room {
             vehicles: VehicleWorld::new(&world::COURTYARD),
             cars: BTreeMap::new(),
             physics_steps: 0,
+            created: Instant::now(),
+            session_was_open: true,
         }
+    }
+    /// 廟會時段與車輛 `fadeAt` 用的伺服器毫秒：`Wall`／`AlwaysOpen` 為 `now_ms()`，
+    /// `Fixed` 為 `base_ms` 加上房間建立至 `now` 的毫秒。
+    pub(crate) fn session_ms(&self, now: Instant) -> f64 {
+        match self.config.session_clock {
+            SessionClock::Fixed { base_ms } => {
+                base_ms + now.saturating_duration_since(self.created).as_secs_f64() * 1000.0
+            }
+            SessionClock::Wall | SessionClock::AlwaysOpen => now_ms(),
+        }
+    }
+    /// 目前是否在廟會時段內（可以領車、上車）。
+    pub(crate) fn session_is_open(&self, now: Instant) -> bool {
+        self.config.session_clock == SessionClock::AlwaysOpen
+            || session_open(self.session_ms(now), &params().session)
     }
     fn new_token(&self) -> String {
         format!("{:x}.{:032x}", self.no, rand::random::<u128>())
@@ -1172,6 +1208,7 @@ impl Room {
             }
             self.broadcast(ServerMessage::Leave { id }, now, |_| true);
         }
+        self.check_session(now);
         self.cleanup_expired_cars(now);
         // 停止看門狗
         for p in self.players.values_mut() {
@@ -1243,6 +1280,12 @@ impl Room {
     }
 }
 
+/// 物理 tick 醒來一次要跑幾步：本步加上落後的整數步數，最多 `max` 步（至少 1 步）。
+pub(crate) fn catch_up_steps(lag: Duration, step: Duration, max: u32) -> u32 {
+    let behind = lag.as_nanos() / step.as_nanos().max(1);
+    (1 + behind).min(u128::from(max.max(1))) as u32
+}
+
 async fn run_room(
     no: u64,
     config: RoomConfig,
@@ -1258,9 +1301,9 @@ async fn run_room(
     let p_params = params();
     let step_duration = Duration::from_nanos(1_000_000_000 / p_params.physics.hz as u64);
     let mut physics_tick = interval(step_duration);
-    physics_tick.set_missed_tick_behavior(MissedTickBehavior::Burst);
-    let mut burst_steps = 0u32;
-    let mut burst_at = Instant::now();
+    // Skip：錯過的 tick 不連續補發，下一次對齊到原本的節拍；補幾步由 catch_up_steps 依落後量決定。
+    physics_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let max_steps = p_params.physics.max_catch_up_steps;
 
     loop {
         tokio::select! {
@@ -1295,26 +1338,22 @@ async fn run_room(
                     RoomCommand::Rename { who, name } => room.rename(&who, name, now),
                     RoomCommand::Chat { who, text } => room.chat(&who, text, now),
                     RoomCommand::Outfit { who, outfit } => room.set_outfit(&who, outfit, now),
-                    RoomCommand::Claim { who, kind } => room.claim(&who, kind, now),
+                    RoomCommand::Claim { who, kind } => {
+                        let kind = kind.unwrap_or_else(|| room.roll_kind());
+                        room.claim(&who, kind, now)
+                    }
                     RoomCommand::Ride { who, car } => room.ride(&who, car, now),
                     RoomCommand::Drive { who, seq, dir, mag } => room.drive(&who, seq, dir, mag, now),
                 }
             }
-            _ = physics_tick.tick() => {
+            deadline = physics_tick.tick() => {
                 let now = Instant::now();
-                if now.duration_since(burst_at) < Duration::from_millis(10) {
-                    burst_steps += 1;
-                    if burst_steps > p_params.physics.max_catch_up_steps {
-                        physics_tick.reset();
-                        burst_steps = 0;
-                        burst_at = now;
-                        continue;
+                // 依排定時間的落後量補步（含本步），最多 maxCatchUpSteps 步；更久的落後直接放棄。
+                let steps = catch_up_steps(now.saturating_duration_since(deadline), step_duration, max_steps);
+                for _ in 0..steps {
+                    if !room.should_physics_step() {
+                        break;
                     }
-                } else {
-                    burst_steps = 1;
-                }
-                burst_at = now;
-                if room.should_physics_step() {
                     let started = std::time::Instant::now();
                     room.physics_step(now);
                     room.metrics.physics_done(started.elapsed());

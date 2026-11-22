@@ -148,7 +148,9 @@ export const COURTYARD_CENSER: CenserDef = {
 
 export const CENSERS: ReadonlyArray<CenserDef> = [COURTYARD_CENSER, ...HALL_CENSERS]
 
-/** 庭院：殿門入口包含階梯及其前方空間，與伺服器的庭院入口一致。 */
+/** 庭院：殿門前的階梯即入口（主殿障礙物邊緣 z≈-5.85），往前延伸到階梯前方約 0.85 公尺。 */
+// maxZ 原本是 -5.0；往門前延伸 0.35 公尺，門口有人時不必擠到門檻才進得去。出殿落點在 z = -3.6，要與它保持 1 公尺
+// 的緩衝（zones.test.ts），所以取 -4.65。數值與 server/src/world.rs 一致。
 const COURTYARD_DOOR: Rect = { minX: -1.6, maxX: 1.6, minZ: -6.2, maxZ: -4.65 }
 /**
  * 點擊導向殿門的範圍：主殿本體加上其後方。點在屋頂或牆上時，射線會穿過建築打到後方地面，
@@ -181,7 +183,7 @@ export const ZONES: Record<ZoneId, ZoneDef> = {
       ...HALL_PILLARS.map((p) => square(p.x, p.z, 0.32)),
     ].map((r) => pad(r, PLAYER_RADIUS)),
     spawn: { x: 0, z: 7.4, heading: Math.PI },
-    // 出殿落點離殿門入口約 1.05 公尺，避免一出殿又往前走就立刻再次進殿；仍在香爐（z ≥ -2.75）前方
+    // 出殿落點離殿門入口（maxZ -5.0）約 1.4 公尺，避免一出殿又往前走就立刻再次進殿；仍在香爐（z ≥ -2.75）前方
     portals: [{ rect: HALL_DOOR, to: 'courtyard', spawn: { x: 0, z: -3.6, heading: 0 } }],
     cameraBounds: { minX: -7.6, maxX: 7.6, minZ: -8.6, maxZ: 8.7, maxY: 6.4 },
     camera: { distance: 7, min: 3.5, max: 9 },

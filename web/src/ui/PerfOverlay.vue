@@ -14,6 +14,7 @@ defineProps<{ ui: UiState }>()
     <div>{{ t('perf.quality', { quality: ui.quality, level: ui.adaptive.level, max: ui.adaptive.max }) }}</div>
     <div v-if="ui.perf.rttMs !== null">RTT {{ Math.round(ui.perf.rttMs) }} ms</div>
     <div v-if="ui.perf.pos" class="pos">{{ t('perf.position') }} {{ formatPosition(ui.perf.pos) }}</div>
+    <div v-if="ui.perf.carCorrectionP95 !== null && ui.perf.carCorrectionP95 !== undefined">Car P95 {{ ui.perf.carCorrectionP95.toFixed(2) }} m</div>
   </aside>
 </template>
 
