@@ -744,7 +744,7 @@ impl Room { fn session_ms(&self, now: Instant) -> f64; }    // Wall: now_ms()；
 
 **B. 遊戲區免撞**：撞飛判定跳過位置在 `params().booth.zone` 內的玩家（含邊界）。
 
-**B2. 車種隨機分配（2026-11-21 新增）**：上行 `claim` 改為不帶車種（`{"t":"claim"}`；`ClientMessage::Claim` 去掉 `kind`，收到多餘的 `kind` 欄位忽略即可）。`Kind` 加 `weight: u32`（`shared/vehicles.json` 已由前端分支加上 45／35／15／5，合併時保留）。領車時在「場上數量未達 `count`」的車種中依權重抽一種；全部都滿回 `car_unavailable`。抽選函式寫成純函式 `pick_kind(stock: &[u8], roll: f32) -> Option<u8>`（`roll` 為 0..1），房間以 `rand` 取 `roll`。固定資料：`client` 的 `claim` 範例去掉 `kind`、`invalid` 去掉 `claim.kind = 4`。測試：`pick_kind_respects_weights_and_skips_full_kinds`（`roll` 0.0 → classic、0.44 → classic、0.46 → woodfish、0.96 → firewheel；firewheel 已滿時 0.99 → racer；全滿 → `None`）、`claim_assigns_a_random_kind_and_never_exceeds_stock`（連領到滿，各車種數量都不超過 `count`）。原本 `kind_stock_is_limited_to_its_count` 改以這兩個測試取代。前端與 mock 已先改好（分支 `feat/bumper-cars-art`）。
+**B2. 車種隨機分配（2026-11-21 新增）**：上行 `claim` 改為不帶車種（`{"t":"claim"}`；`ClientMessage::Claim` 去掉 `kind`，收到多餘的 `kind` 欄位忽略即可）。`Kind` 加 `weight: u32`（`shared/vehicles.json` 已由前端分支加上 45／35／15／5，合併時保留）。領車時在「場上數量未達 `count`」的車種中依權重抽一種；全部都滿回 `car_unavailable`。抽選函式寫成純函式 `pick_kind(stock: &[u32], roll: u32) -> Option<u8>`（`stock` 是各車種的權重、已額滿的填 0，`roll` 為 0..權重總和 的整數；整數版每個 `roll` 恰好對應一個車種，測試可以窮舉），房間以 `rand` 取 `roll`（PR #48 已依此實作）。固定資料：`client` 的 `claim` 範例去掉 `kind`、`invalid` 去掉 `claim.kind = 4`。測試：`pick_kind_skips_full_kinds_and_follows_weights`（窮舉每個 `roll`：各車種抽到的次數等於權重、額滿的抽不到；全滿 → `None`）、`claim_assigns_a_random_kind_and_never_exceeds_stock`（連領到滿，各車種數量都不超過 `count`）。原本 `kind_stock_is_limited_to_its_count` 改以這兩個測試取代。前端與 mock 已先改好（分支 `feat/bumper-cars-art`）。
 
 **C. 第 1 段稽核修正**（2026-11-21 稽核 PR #37 的結果）
 
