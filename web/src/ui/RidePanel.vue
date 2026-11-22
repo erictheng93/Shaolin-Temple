@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { RideUi } from '../game/vehicles/Vehicles'
 import { CAR_KINDS, formatCountdown, sessionBlocks } from '../game/world/vehicles'
 import { t, type MessageKey } from '../i18n'
 
-const props = defineProps<{ ride: RideUi }>()
+const props = defineProps<{ ride: RideUi; touch?: boolean; landscape?: boolean }>()
 const emit = defineEmits<{ toggle: []; claim: []; close: [] }>()
 
 const RARITY_KEYS: Record<'common' | 'rare' | 'mythic', MessageKey> = {
@@ -27,6 +27,14 @@ const sessionText = computed(() => {
 const LABEL = { dismount: 'ride.dismount', mount: 'ride.mount', talk: 'ride.talk' } as const
 const ICON = { dismount: '🚪', mount: '🏎️', talk: '🎟️' } as const
 
+// 直向開車的提示：每次上車重新出現，關掉後這一趟不再顯示
+const hintDismissed = ref(false)
+watch(
+  () => props.ride.riding,
+  () => (hintDismissed.value = false),
+)
+const rotateHint = computed(() => props.ride.riding && props.touch && !props.landscape && !hintDismissed.value && !claim.value.open)
+
 // 抽到車之後視窗自己收起來，玩家已經坐在車上了。
 let timer: ReturnType<typeof setTimeout> | null = null
 watch(
@@ -42,11 +50,18 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
 <template>
   <!-- 右側欄、說話按鈕上方：上車／下車／領車，鍵盤是 E -->
   <p v-if="sessionText" class="session-pill" :class="{ closed: !ride.session?.open }" role="status">{{ sessionText }}</p>
-  <button v-if="mode" type="button" class="ride-btn" :class="[mode, { blocked }]" :aria-disabled="blocked" :aria-label="t(LABEL[mode])" @click="emit('toggle')">
+  <button v-if="mode" type="button" class="ride-btn" :class="[`mode-${mode}`, { blocked }]" :aria-disabled="blocked" :aria-label="t(LABEL[mode])" @click="emit('toggle')">
     <span class="ride-icon" aria-hidden="true">{{ ICON[mode] }}</span>
     <span class="ride-label">{{ t(LABEL[mode]) }}</span>
     <span class="key-hint" aria-hidden="true">E</span>
   </button>
+
+  <!-- 觸控裝置直向開車：建議轉成橫向（畫面比較寬，看得到前面的路）。每次上車出現一次，可以關掉。 -->
+  <div v-if="rotateHint" class="rotate-hint" role="status">
+    <span class="rotate-icon" aria-hidden="true">📱</span>
+    <span>{{ t('ride.rotateHint') }}</span>
+    <button type="button" :aria-label="t('ride.modal.close')" @click="hintDismissed = true">×</button>
+  </div>
 
   <!-- 領車視窗：Q 版的紙卡，小沙彌從卡片上緣探頭 -->
   <div v-if="claim.open" class="claim-veil" @click.self="emit('close')">
@@ -112,7 +127,44 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
   z-index: 10;
 }
 .ride-btn:active { transform: scale(0.96); }
-.ride-btn.dismount, .ride-btn.talk { border-color: var(--accent); }
+/* 直向開車時的提示：橫向比較好開 */
+.rotate-hint {
+  position: absolute;
+  top: calc(max(12px, env(safe-area-inset-top)) + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+  padding: 8px 8px 8px 14px;
+  border-radius: 999px;
+  border: 3px solid #5a3b25;
+  background: #f7efdc;
+  box-shadow: 0 4px 0 #5a3b25;
+  color: #5a3b25;
+  font-size: 0.9rem;
+  font-weight: 700;
+  z-index: 20;
+}
+.rotate-icon {
+  display: inline-block;
+  animation: tilt 1.6s ease-in-out infinite;
+}
+@keyframes tilt {
+  50% { transform: rotate(-90deg); }
+}
+.rotate-hint button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+.ride-btn.mode-dismount, .ride-btn.mode-talk { border-color: var(--accent); }
 .key-hint {
   font-size: 0.7rem;
   padding: 1px 6px;
@@ -319,6 +371,38 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
 }
 .prize.rare .ribbon { background: #2f6fb5; }
 .prize.mythic .ribbon { background: #c2281f; }
+
+/* 矮的畫面（橫向手機）：卡片加寬、四種車排成一列、小沙彌縮小，整張卡要放得進畫面 */
+@media (max-height: 520px) {
+  .claim-card {
+    width: min(540px, 100%);
+    margin-top: 30px;
+    padding: 44px 16px 12px;
+    box-shadow: 0 5px 0 var(--brown), 0 12px 20px rgba(0, 0, 0, 0.35);
+  }
+  .monk { top: -40px; width: 72px; height: 72px; }
+  .monk .ear { top: 30px; width: 14px; height: 18px; }
+  .monk .ear.left { left: -9px; }
+  .monk .ear.right { right: -9px; }
+  .monk .eye { top: 34px; width: 7px; height: 9px; }
+  .monk .eye.l { left: 18px; }
+  .monk .eye.r { right: 18px; }
+  .monk .blush { top: 43px; width: 11px; height: 6px; }
+  .monk .blush.l { left: 8px; }
+  .monk .blush.r { right: 8px; }
+  .monk .mouth { top: 45px; width: 10px; height: 5px; margin-left: -5px; }
+  .monk .hands { width: 18px; height: 20px; margin-left: -9px; bottom: -8px; }
+  .title { margin-bottom: 4px; font-size: 1.05rem; }
+  .bubble { margin: 8px 0 10px; padding: 6px 12px; font-size: 0.88rem; }
+  .odds { grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+  .odds li { padding: 6px 8px; column-gap: 6px; }
+  .odds .dot { width: 14px; height: 14px; }
+  .odds-name { font-size: 0.8rem; }
+  .go { min-height: 44px; font-size: 1rem; }
+  .hint { display: none; }
+  .prize { margin: 4px 0 10px; padding: 18px 12px 10px; }
+  .prize-name { font-size: 1.25rem; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .claim-card, .prize, .monk { animation: none; }

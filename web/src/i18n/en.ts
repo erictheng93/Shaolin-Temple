@@ -152,6 +152,7 @@ const en: Record<MessageKey, string> = {
   'ride.session.closed': 'Temple fair starts in {time}',
   'ride.session.open': 'Temple fair open, {time} left',
   'ride.modal.close': 'Close',
+  'ride.rotateHint': 'Turn your phone sideways for easier driving',
 
   'perf.label': 'Performance',
   'perf.position': 'Position',

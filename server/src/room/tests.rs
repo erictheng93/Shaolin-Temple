@@ -504,12 +504,12 @@ async fn only_portal_positions_may_change_zone() {
     }
     // 出入口外 0.6 公尺（容許 0.5）仍是 invalid_zone
     p.walk_to_door().await;
-    p.position(0.0, -4.4, PI, false).await;
+    p.position(0.0, -4.05, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
     assert_eq!(count(&p.drain(), "error"), 1);
     // 容許誤差內成功，且位置是伺服器的落點
-    p.position(0.0, -4.6, PI, false).await;
+    p.position(0.0, -4.25, PI, false).await;
     p.zone("hall").await;
     sleep(TICK).await;
     let got = p.drain();

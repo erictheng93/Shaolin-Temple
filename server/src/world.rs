@@ -178,7 +178,8 @@ pub static COURTYARD: Zone = Zone {
             min_x: -1.6,
             max_x: 1.6,
             min_z: -6.2,
-            max_z: -5.0,
+            // 往門前延伸 0.35 公尺（原本 -5.0），與前端 zones.ts 的 COURTYARD_DOOR 一致
+            max_z: -4.65,
         },
         to: "hall",
         spawn: Pose {
