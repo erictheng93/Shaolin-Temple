@@ -865,7 +865,13 @@ async fn slow_receiver_never_delays_others_and_is_closed_on_undroppable_overflow
     let mover = connect(&room).await;
     let mut fast = connect(&room).await;
     let mut slow = connect(&room).await; // 完全不讀取
-    sleep(TICK).await;
+    // 出生點只在 x 方向隨機、z 都相同，重抽 10 次仍可能和別人重疊；之後進房的 late 若疊到
+    // mover 或 fast，每 tick 的分離會多送 moves。先把兩人移離出生的那一排（相距都超過 MIN_DIST），
+    // 誰都不會被推動，收到幾則 moves 才是確定的。
+    let mover_z = 11.7;
+    mover.position(mover.x, mover_z, 0.0, false).await;
+    fast.position(fast.x, 10.3, 0.0, false).await;
+    sleep(TICK * 2).await;
     fast.drain();
     slow.drain();
     let mut batches = 0;
@@ -874,7 +880,7 @@ async fn slow_receiver_never_delays_others_and_is_closed_on_undroppable_overflow
     // 10 秒、每個 tick 都有 moves：慢速接收者的佇列長度永遠不超過上限 64，快的人每 tick 照收
     for i in 0..100 {
         let wiggle = f64::from(i % 2) * 0.02;
-        mover.position(mover.x + wiggle, mover.z, 0.0, true).await;
+        mover.position(mover.x + wiggle, mover_z, 0.0, true).await;
         sleep(TICK).await;
         assert!(slow.rx.len() <= 64);
         batches += fast.drain().len();
@@ -894,7 +900,7 @@ async fn slow_receiver_never_delays_others_and_is_closed_on_undroppable_overflow
         Err(mpsc::error::TryRecvError::Disconnected)
     ));
     // 房間與其他人不受影響：照常 tick，也沒有為此廣播 leave
-    mover.position(mover.x + 0.3, mover.z, 0.0, true).await;
+    mover.position(mover.x + 0.3, mover_z, 0.0, true).await;
     sleep(TICK * 2).await;
     let got = fast.drain();
     assert_eq!(count(&got, "leave"), 0);
