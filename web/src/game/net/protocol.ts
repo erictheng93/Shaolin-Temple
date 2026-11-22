@@ -144,6 +144,8 @@ export type ClientMessage =
   | { t: 'ride'; car?: number | null }
   /** 碰碰車搖桿輸入：dir 角度量化（0..255，一格 2π/256）、mag 搖桿推量量化（0..255）、seq 序號（0..65535）。 */
   | { t: 'drive'; seq: number; dir: number; mag: number }
+  /** 手動開關廟會時段（暫時的功能，任何玩家都能按）：伺服器記住後廣播 fair 給同房所有人；之後不再依時鐘，直到伺服器重啟。 */
+  | { t: 'fair'; open: boolean }
 
 export type ServerMessage =
   | {
@@ -191,6 +193,8 @@ export type ServerMessage =
   | { t: 'knock'; id: string; x: number; z: number; toX: number; toZ: number; at: number }
   /** 碰碰車動態物理幀（二進位幀）。 */
   | { t: 'cars'; ack: number; cars: CarState[] }
+  /** 廟會時段被手動開啟或關閉（同房所有人；有手動狀態時 welcome 之後也補送一則）。沒收到過就依時鐘。 */
+  | { t: 'fair'; open: boolean }
 
 /** 聊天訊息的字元上限（Unicode 字元），與伺服器一致。 */
 export const CHAT_MAX_CHARS = 80
@@ -395,6 +399,8 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
       return isCarSnapshot(m) ? (m as unknown as ServerMessage) : null
     case 'carGone':
       return isCarId(m.c) ? (m as ServerMessage) : null
+    case 'fair':
+      return typeof m.open === 'boolean' ? (m as ServerMessage) : null
     case 'knock':
       return isStr(m.id) &&
         isNum(m.x) &&

@@ -151,6 +151,10 @@ const vi: Record<MessageKey, string> = {
   'ride.modal.hint': 'Xe được phát ngẫu nhiên, không thể tự chọn',
   'ride.session.closed': 'Hội chùa mở sau {time}',
   'ride.session.open': 'Hội chùa đang diễn ra, còn {time}',
+  'ride.session.manualOpen': 'Hội chùa đang mở (thủ công)',
+  'ride.session.manualClosed': 'Hội chùa đã đóng (thủ công)',
+  'ride.session.turnOn': 'Mở hội chùa',
+  'ride.session.turnOff': 'Đóng hội chùa',
   'ride.modal.close': 'Đóng',
   'ride.rotateHint': 'Xoay ngang điện thoại để lái dễ hơn',
 

@@ -238,6 +238,8 @@ export class GameCore {
   private chatLog: ChatEntry[] = []
   private chatSeq = 0
   private serverOffset = 0
+  /** 伺服器廣播的廟會手動狀態；null＝依時鐘。每次 welcome 重設（有手動狀態時伺服器會在 welcome 後補送）。 */
+  private fairOverride: boolean | null = null
   private rtt: number | null = null
   private stats = new Map<string, { label: MessageKey; value: string | number }>()
   private uiTimer: ReturnType<typeof setInterval>
@@ -484,7 +486,12 @@ export class GameCore {
 
   /** 廟會時段是否關閉：離線或尚未收到伺服器時間時視為開放。 */
   private sessionClosed(): boolean {
-    return this.net.enabled && this.selfId !== null && !sessionState(performance.now() + this.serverOffset).open
+    return this.net.enabled && this.selfId !== null && !(this.fairOverride ?? sessionState(performance.now() + this.serverOffset).open)
+  }
+
+  /** 手動開關廟會時段（暫時的功能）：送出與目前相反的狀態，畫面等伺服器廣播才變。 */
+  toggleFair(): void {
+    if (this.net.enabled && this.selfId !== null) this.net.sendFair(this.sessionClosed())
   }
 
   /** 開關領車視窗。 */
@@ -1194,6 +1201,7 @@ export class GameCore {
           }
         }
         this.vehicles.onWelcome(m.cars ?? [])
+        this.fairOverride = null
         break
       }
       case 'join':
@@ -1260,6 +1268,10 @@ export class GameCore {
         this.vehicles.onCarGone(m.c)
         this.pushUi(true)
         this.wake()
+        break
+      case 'fair':
+        this.fairOverride = m.open
+        this.pushUi(true)
         break
       case 'cars':
         this.vehicles.onCars(m.ack, m.cars, performance.now())
@@ -1439,9 +1451,9 @@ export class GameCore {
     curRide.claim = this.claimUi
     if (curZone === 'courtyard' && this.net.enabled && this.selfId !== null) {
       const ss = sessionState(now + this.serverOffset)
-      curRide.session = { open: ss.open, secs: Math.ceil(ss.msToChange / 1000) }
+      curRide.session = this.fairOverride === null ? { open: ss.open, secs: Math.ceil(ss.msToChange / 1000) } : { open: this.fairOverride, secs: 0, manual: true }
     }
-    const curRideKey = `${curRide.session ? `${curRide.session.open}/${curRide.session.secs}` : ''}:${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}:${this.claimUi.open}:${this.claimUi.pending}:${this.claimUi.result}:${this.claimUi.error}`
+    const curRideKey = `${curRide.session ? `${curRide.session.open}/${curRide.session.secs}/${curRide.session.manual}` : ''}:${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}:${this.claimUi.open}:${this.claimUi.pending}:${this.claimUi.result}:${this.claimUi.error}`
 
     let dirty = force
     if (!dirty) {

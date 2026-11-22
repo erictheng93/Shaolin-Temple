@@ -172,6 +172,7 @@ function toggleMute() {
         :landscape="landscape"
         @toggle="() => core?.toggleRide()"
         @claim="() => core?.claimCar()"
+        @fair="() => core?.toggleFair()"
         @close="() => core?.setClaimOpen(false)"
       />
       <ChatPanel :chat="ui.chat" :send="(t) => core?.sendChat(t) ?? 'offline'" />

@@ -97,7 +97,8 @@ impl RateLimiter {
             }
             ClientMessage::Drive { .. } => Some(&mut self.drive),
             ClientMessage::Chat { .. } => Some(&mut self.chat),
-            ClientMessage::Outfit { .. } => Some(&mut self.outfit),
+            // fair 與衣裝共用額度（都是低頻的狀態切換）
+            ClientMessage::Outfit { .. } | ClientMessage::Fair { .. } => Some(&mut self.outfit),
             _ => None,
         };
         let allowed = self.all.has_token(now) && specific.as_mut().is_none_or(|b| b.has_token(now));

@@ -221,7 +221,9 @@ const bayIsFree = (bx, bz) => {
 }
 
 // 廟會時段（與正式伺服器同規則）：關閉時拒絕領車與上車；MOCK_SESSION=always 強制一律開放。
-const sessionOpen = () => process.env.MOCK_SESSION === 'always' || sessionState(Date.now()).open
+// fair 訊息（暫時的功能）：任何玩家都能手動開關，之後不再依時鐘，直到重啟。
+let fairOverride = null
+const sessionOpen = () => fairOverride ?? (process.env.MOCK_SESSION === 'always' || sessionState(Date.now()).open)
 const SESSION_CLOSED = { t: 'error', code: 'session_closed', message: 'The temple fair is closed' }
 
 const claimCar = (p, kind) => {
@@ -760,6 +762,7 @@ wss.on('connection', (ws) => {
         send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), cars: carSnapshots(), auth })
         if (renamed) for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: old.id, name })
         if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
+        if (fairOverride !== null) send(ws, { t: 'fair', open: fairOverride })
         return
       }
       const n = allocN()
@@ -792,6 +795,7 @@ wss.on('connection', (ws) => {
         cars: carSnapshots(),
         auth,
       })
+      if (fairOverride !== null) send(ws, { t: 'fair', open: fairOverride })
       broadcast({ t: 'join', player: snapshot(me) }, id)
       return
     }
@@ -832,6 +836,12 @@ wss.on('connection', (ws) => {
       }
       case 'chat':
         if (typeof m.text === 'string' && m.text.length <= 512 && takeChatToken(me)) broadcastChat(me, m.text)
+        break
+      case 'fair':
+        // 關閉時的下車與淡出由 physicsStep 的「開放 → 關閉」偵測處理
+        if (typeof m.open !== 'boolean' || !takeToken(me, 'fair')) break
+        fairOverride = m.open
+        broadcast({ t: 'fair', open: fairOverride })
         break
       case 'outfit':
         if (!takeToken(me, 'outfit') || !validOutfit(m.outfit) || m.outfit === me.outfit) break

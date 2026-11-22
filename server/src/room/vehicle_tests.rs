@@ -2104,3 +2104,47 @@ fn claim_assigns_a_random_kind_and_never_exceeds_stock() {
     let expected: Vec<u8> = p.kinds.iter().map(|k| k.count).collect();
     assert_eq!(counts, expected, "claims until full use up every kind");
 }
+
+// 手動開關廟會（fair）：時鐘在開放時段內，手動關閉 → 全房收到 fair、騎士下車、車開始淡出、claim 被拒；
+// 新連線在 welcome 之後收到 fair；手動開啟後 claim 不再回 session_closed。
+#[tokio::test(start_paused = true)]
+async fn fair_override_closes_and_reopens_the_session_for_everyone() {
+    let room = spawn_room(cfg());
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    a.walk_to_counter().await;
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    assert!(find_car_msg(&a.drain()).is_some());
+    b.drain();
+
+    let fair = |open: bool, who: &Who| RoomCommand::Fair {
+        who: who.clone(),
+        open,
+    };
+    let is_fair = |msgs: &[ServerMessage], open: bool| {
+        msgs.iter()
+            .any(|m| matches!(m, ServerMessage::Fair { open: o } if *o == open))
+    };
+    room.send(fair(false, &b.who)).await.unwrap();
+    sleep(Duration::from_millis(250)).await;
+    let (ma, mb) = (a.drain(), b.drain());
+    assert!(is_fair(&ma, false) && is_fair(&mb, false));
+    let car = find_car_msg(&ma).expect("closing broadcasts the car");
+    assert_eq!(car.driver, None);
+    assert!(car.fade_at.is_some());
+    a.claim(0).await;
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(error_code(&a.drain()), Some("session_closed"));
+
+    let mut c = connect(&room).await;
+    assert!(is_fair(&c.drain(), false));
+
+    room.send(fair(true, &a.who)).await.unwrap();
+    sleep(Duration::from_millis(50)).await;
+    assert!(is_fair(&a.drain(), true));
+    // 領車冷卻還沒過，所以只確認不再被時段擋下。
+    a.claim(1).await;
+    sleep(Duration::from_millis(50)).await;
+    assert_ne!(error_code(&a.drain()), Some("session_closed"));
+}

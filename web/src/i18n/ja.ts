@@ -151,6 +151,10 @@ const ja: Record<MessageKey, string> = {
   'ride.modal.hint': 'くるまはランダムです。選べません',
   'ride.session.closed': '縁日まであと {time}',
   'ride.session.open': '縁日開催中、残り {time}',
+  'ride.session.manualOpen': '縁日開催中（手動）',
+  'ride.session.manualClosed': '縁日は終了（手動）',
+  'ride.session.turnOn': '縁日を開く',
+  'ride.session.turnOff': '縁日を閉じる',
   'ride.modal.close': '閉じる',
   'ride.rotateHint': 'スマホを横向きにすると運転しやすくなります',
 

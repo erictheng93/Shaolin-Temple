@@ -314,6 +314,7 @@ async fn session_inner(
                     }
                     ClientMessage::Rename { name } => member.rename(clean_name(&name)).await,
                     ClientMessage::Claim => member.claim().await,
+                    ClientMessage::Fair { open } => member.fair(open).await,
                     ClientMessage::Ride { car } => member.ride(car).await,
                     ClientMessage::Drive { seq, dir, mag } => member.drive(seq, dir, mag),
                     ClientMessage::Hello { .. } => {}

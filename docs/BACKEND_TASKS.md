@@ -458,6 +458,16 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 | 殿內玩家收到 `car`／`carGone` 但收不到 `cars` 幀 | `cars_frames_only_reach_courtyard_players_but_car_events_reach_the_hall` |
 | `VEHICLE_SESSION` 設定解析 | `config.rs` `defaults_and_invalid_settings` |
 
+### 手動開關廟會 `fair`（2026-11-22，暫時的功能）
+
+向下相容擴充，不升協定版本。**任何玩家都能按，沒有權限檢查**；正式上線前要拿掉或加上權限。
+
+- 上行 `{ t:'fair', open: boolean }`（`open` 缺少或不是布林＝無效訊息）。限速與 `outfit` 共用額度。
+- 房間記住 `fair_override = Some(open)`，之後 `session_is_open` 不看時鐘（也蓋過 `VEHICLE_SESSION=always`），直到房間結束或伺服器重啟；沒有「回到依時鐘」的指令。
+- 下行 `{ t:'fair', open }` 廣播給同房所有人（含本人、不分場景）；有手動狀態時，新進與恢復的連線在 `welcome` 之後補收一則。沒收過的客戶端依時鐘。
+- 手動關閉沿用時段結束的處理（下一個 tick 的 `check_session`：騎士下車、每台車開始淡出）。
+- 測試：`fair_override_closes_and_reopens_the_session_for_everyone`；固定資料 `protocol-v5.json` 有效與無效的 `fair`。前端按鈕在庭院的廟會倒數標籤上方（`ui/RidePanel.vue`），mock 伺服器同規則。
+
 ### 玩家硬碰撞與每 tick 分離（2026-11-21，後端：Task 1～3）
 
 本機驗證（Windows，rustc 1.95.0）通過 `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings` 和 `cargo test --locked`。後端共 213 項測試通過（合併 main 後；lib 155、gameplay 18、loadtest 2、logging 1、login 10、metrics 3、protocol 12、websocket 12）。另以本機迴路同時恢復滿房 50 條 WebSocket 連線，所有玩家都保有原本的身分與房間。
