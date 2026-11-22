@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient, PENALTY_RECONNECT_MS } from './NetworkClient'
 import { encodeAction, encodeBatch } from './binaryFrame'
-import type { ServerMessage } from './protocol'
+import { PROTOCOL_VERSION, type ServerMessage } from './protocol'
 
 class FakeSocket {
   static OPEN = 1
@@ -376,7 +376,7 @@ describe('NetworkClient 改名', () => {
     client.setName('清泉')
     connectOnline()
     vi.advanceTimersByTime(100)
-    expect(hellos()).toEqual([{ t: 'hello', v: 4, name: '清泉' }])
+    expect(hellos()).toEqual([{ t: 'hello', v: PROTOCOL_VERSION, name: '清泉' }])
     expect(last().sent.some((m) => m.t === 'rename')).toBe(false)
   })
 })
@@ -424,5 +424,64 @@ describe('NetworkClient 登入權杖', () => {
     client.connect()
     last().open()
     expect(last().sent[0]).toMatchObject({ session: 'abc' })
+  })
+})
+
+describe('NetworkClient 碰碰車駕駛與上下車', () => {
+  it('sendDrive 輸入不變時每 500 ms 送一次、改變時最多 15 Hz', () => {
+    connectOnline()
+    const s = last()
+    const drives = () => s.sent.filter((m) => m.t === 'drive')
+
+    // 第一次送出：立即送出
+    const seq0 = client.sendDrive(0, 1)
+    expect(seq0).toBe(0)
+    expect(drives()).toHaveLength(1)
+
+    // 輸入不變，經過 100ms：被節流（未達 500ms）
+    vi.advanceTimersByTime(100)
+    const seqFail = client.sendDrive(0, 1)
+    expect(seqFail).toBeNull()
+    expect(drives()).toHaveLength(1)
+
+    // 輸入不變，再過 400ms（合計 500ms）：500ms 心跳送出
+    vi.advanceTimersByTime(400)
+    const seq1 = client.sendDrive(0, 1)
+    expect(seq1).toBe(1)
+    expect(drives()).toHaveLength(2)
+
+    // 輸入改變，但只過 30ms（> 15 Hz 間隔 66.67ms）：被節流
+    vi.advanceTimersByTime(30)
+    const seqFail2 = client.sendDrive(Math.PI / 2, 1)
+    expect(seqFail2).toBeNull()
+    expect(drives()).toHaveLength(2)
+
+    // 輸入改變，再過 40ms（距上次送出達 70ms > 66.7ms）：送出
+    vi.advanceTimersByTime(40)
+    const seq2 = client.sendDrive(Math.PI / 2, 1)
+    expect(seq2).toBe(2)
+    expect(drives()).toHaveLength(3)
+  })
+
+  it('seq 在 65535 之後回到 0', () => {
+    connectOnline()
+    ;(client as unknown as { driveSeq: number }).driveSeq = 65535
+    const seq1 = client.sendDrive(0, 1)
+    expect(seq1).toBe(65535)
+
+    vi.advanceTimersByTime(100)
+    const seq2 = client.sendDrive(1, 1)
+    expect(seq2).toBe(0)
+  })
+
+  it('進入背景時若在騎乘先送 ride null（由 GameCore 呼叫，測 setBackground 不會清掉這則）', () => {
+    connectOnline()
+    const s = last()
+    client.sendRide(null)
+    expect(s.sent).toContainEqual({ t: 'ride', car: null })
+
+    client.setBackground(true)
+    // 再次確認已送出的 ride 訊息依然存在，且不會被 drain 影響
+    expect(s.sent).toContainEqual({ t: 'ride', car: null })
   })
 })

@@ -1,13 +1,13 @@
 use temple_server::protocol::{
-    ActionFrame, BatchKind, ClientMessage, MAX_MESSAGE_BYTES, MoveTuple, Moving, OUTFIT_COUNT,
-    PROTOCOL_VERSION, ServerMessage, decode_action, decode_batch, encode_action, encode_batch,
-    unwrap_started_at,
+    ActionFrame, BatchKind, CarState, ClientMessage, KIND_COUNT, MAX_CARS, MAX_MESSAGE_BYTES,
+    MoveTuple, Moving, OUTFIT_COUNT, PROTOCOL_VERSION, ServerMessage, decode_action, decode_batch,
+    decode_cars, encode_action, encode_batch, encode_cars, unwrap_started_at,
 };
 use temple_server::world;
 #[test]
 fn shared_frontend_fixtures_round_trip() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("protocol-v4.json")).unwrap();
+        serde_json::from_str(include_str!("protocol-v5.json")).unwrap();
     for value in fixtures["server"].as_array().unwrap() {
         let message: ServerMessage = serde_json::from_value(value.clone()).unwrap();
         let actual = serde_json::to_value(message).unwrap();
@@ -143,7 +143,7 @@ fn malformed_client_fields_rejected() {
 }
 
 fn fixtures() -> serde_json::Value {
-    serde_json::from_str(include_str!("protocol-v4.json")).unwrap()
+    serde_json::from_str(include_str!("protocol-v5.json")).unwrap()
 }
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())
@@ -313,6 +313,126 @@ fn action_encoding_refuses_what_the_frame_cannot_carry() {
         n: 0,
         code: 0,
         started_at: 0.0,
+    };
+    assert!(serde_json::to_string(&message).is_err());
+}
+
+#[test]
+fn car_kind_count_matches_shared_fixture() {
+    let fixtures = fixtures();
+    assert_eq!(fixtures["kindCount"].as_u64(), Some(u64::from(KIND_COUNT)));
+}
+
+#[test]
+fn shared_cars_vectors_encode_and_decode() {
+    let fixtures = fixtures();
+    let cars_fixture = &fixtures["binary"]["cars"];
+    let valid = cars_fixture["valid"].as_array().unwrap();
+    assert_eq!(valid.len(), 5);
+    for case in valid {
+        let name = case["name"].as_str().unwrap();
+        let bytes = hex(case["hex"].as_str().unwrap());
+        let input = &case["input"];
+        let ack = input["ack"].as_u64().unwrap() as u16;
+        let cars: Vec<CarState> = input["cars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| CarState {
+                c: c["c"].as_u64().unwrap() as u8,
+                occupied: c["occupied"].as_bool().unwrap(),
+                bumped: c["bumped"].as_bool().unwrap(),
+                x: c["x"].as_f64().unwrap(),
+                z: c["z"].as_f64().unwrap(),
+                heading: c["heading"].as_f64().unwrap(),
+                vx: c["vx"].as_f64().unwrap(),
+                vz: c["vz"].as_f64().unwrap(),
+                w: c["w"].as_f64().unwrap(),
+            })
+            .collect();
+        assert_eq!(
+            encode_cars(ack, &cars).as_deref(),
+            Some(&bytes[..]),
+            "{name}"
+        );
+        let message = ServerMessage::Cars {
+            ack,
+            cars: cars.clone(),
+        };
+        assert_eq!(
+            message.to_frame(),
+            Some(temple_server::protocol::Frame::Binary(bytes.clone())),
+            "{name}"
+        );
+        let decoded = decode_cars(&bytes).unwrap();
+        assert_eq!(decoded.0, ack, "{name}");
+        let expected_cars: Vec<CarState> = case["decoded"]["cars"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| CarState {
+                c: c["c"].as_u64().unwrap() as u8,
+                occupied: c["occupied"].as_bool().unwrap(),
+                bumped: c["bumped"].as_bool().unwrap(),
+                x: c["x"].as_f64().unwrap(),
+                z: c["z"].as_f64().unwrap(),
+                heading: c["heading"].as_f64().unwrap(),
+                vx: c["vx"].as_f64().unwrap(),
+                vz: c["vz"].as_f64().unwrap(),
+                w: c["w"].as_f64().unwrap(),
+            })
+            .collect();
+        assert_eq!(decoded.1.len(), expected_cars.len(), "{name}");
+        for (actual, expected) in decoded.1.iter().zip(expected_cars.iter()) {
+            assert_eq!(actual.c, expected.c, "{name}");
+            assert_eq!(actual.occupied, expected.occupied, "{name}");
+            assert_eq!(actual.bumped, expected.bumped, "{name}");
+            assert!((actual.x - expected.x).abs() < 1e-12, "{name}");
+            assert!((actual.z - expected.z).abs() < 1e-12, "{name}");
+            let d = (actual.heading - expected.heading).rem_euclid(2.0 * std::f64::consts::PI);
+            let heading_diff = if d > std::f64::consts::PI {
+                2.0 * std::f64::consts::PI - d
+            } else {
+                d
+            };
+            assert!(heading_diff < 1e-12, "{name}");
+            assert!((actual.vx - expected.vx).abs() < 1e-12, "{name}");
+            assert!((actual.vz - expected.vz).abs() < 1e-12, "{name}");
+            assert!((actual.w - expected.w).abs() < 1e-12, "{name}");
+        }
+        // 解出來的值再編碼一次得到同一個幀（量化是冪等的）。
+        assert_eq!(encode_cars(decoded.0, &decoded.1), Some(bytes), "{name}");
+    }
+    let invalid = cars_fixture["invalid"].as_array().unwrap();
+    assert_eq!(invalid.len(), 7);
+    for case in invalid {
+        let bytes = hex(case["hex"].as_str().unwrap());
+        assert!(decode_cars(&bytes).is_none(), "{}", case["name"]);
+    }
+}
+
+#[test]
+fn cars_encoding_refuses_what_the_frame_cannot_carry() {
+    let dummy = CarState {
+        c: 0,
+        occupied: false,
+        bumped: false,
+        x: 0.0,
+        z: 0.0,
+        heading: 0.0,
+        vx: 0.0,
+        vz: 0.0,
+        w: 0.0,
+    };
+    assert!(encode_cars(0, &[dummy; MAX_CARS]).is_some());
+    assert!(encode_cars(0, &[dummy; MAX_CARS + 1]).is_none());
+    let mut bad_car = dummy;
+    bad_car.c = MAX_CARS as u8;
+    assert!(encode_cars(0, &[bad_car]).is_none());
+    // Cars 不以 JSON 送出。
+    let message = ServerMessage::Cars {
+        ack: 0,
+        cars: vec![dummy],
     };
     assert!(serde_json::to_string(&message).is_err());
 }

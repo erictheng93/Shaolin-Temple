@@ -1,9 +1,9 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式（協定版本 4）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 5）。
  *
  * 位置廣播 moves／sync 與動作廣播 action 是 WebSocket 二進位幀（格式與位元組配置見 binaryFrame.ts），
  * 其餘訊息與所有上行都是 JSON 文字。編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
- * 與 Rust 伺服器共用固定資料 server/tests/protocol-v4.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v5.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
  *
  * 版本：前端與伺服器的協定版本不同時，前端在 hello 時收到 error unsupported_version，
  * 不再重連並提示重新整理，不會出現「連上了但訊息解不開」的靜默故障。
@@ -30,17 +30,23 @@
 
 import {
   FRAME_ACTION,
+  FRAME_CARS,
+  FRAME_MOVES,
+  FRAME_SYNC,
+  MAX_CARS,
   MAX_MOVES_PER_MESSAGE,
   MAX_SHORT_ID,
   decodeAction,
   decodeBatch,
+  decodeCars,
   unwrapStartedAt,
+  type CarWireState,
   type MoveTuple,
 } from './binaryFrame'
 
-export { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, type MoveTuple }
+export { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MAX_CARS, type MoveTuple, type CarWireState }
 
-export const PROTOCOL_VERSION = 4
+export const PROTOCOL_VERSION = 5
 /** 單則訊息上限（bytes）。超過即丟棄，伺服器端也應設相同上限。 */
 export const MAX_MESSAGE_BYTES = 16 * 1024
 /**
@@ -93,6 +99,27 @@ export const MAX_WIRE_OUTFIT = 255
 export const isOutfitWire = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= MAX_WIRE_OUTFIT
 
+/** 車種數量：4 種（小沙彌、白象、青獅、金剛），新增車種只能加在尾端。 */
+export const KIND_COUNT = 4
+
+export const isCarKind = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < KIND_COUNT
+
+export const isCarId = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < MAX_CARS
+
+export interface CarSnapshot {
+  c: number
+  kind: number
+  driver: string | null
+  x: number
+  z: number
+  heading: number
+  fadeAt: number | null
+}
+
+export type CarState = CarWireState
+
 export type ClientMessage =
   /**
    * outfit：目前衣裝；缺少或無效時伺服器當作 0（恢復連線時缺少則沿用保存的衣裝）。
@@ -111,6 +138,12 @@ export type ClientMessage =
   | { t: 'chat'; text: string }
   /** 更換衣裝（不需 reqId／ack）：伺服器驗證、限速（同聊天）、與目前相同不廣播，否則廣播 outfit 給同房所有人（含本人）。 */
   | { t: 'outfit'; outfit: number }
+  /** 領車：需在檔口範圍內；車種由伺服器依 shared/vehicles.json 的 weight 隨機分配（額滿的車種不參與）。 */
+  | { t: 'claim' }
+  /** 上車（帶 car: 0..15）或下車（缺少 car 或 null）。 */
+  | { t: 'ride'; car?: number | null }
+  /** 碰碰車搖桿輸入：dir 角度量化（0..255，一格 2π/256）、mag 搖桿推量量化（0..255）、seq 序號（0..65535）。 */
+  | { t: 'drive'; seq: number; dir: number; mag: number }
 
 export type ServerMessage =
   | {
@@ -120,6 +153,7 @@ export type ServerMessage =
       resumeToken: string
       serverTime: number
       players: PlayerSnapshot[]
+      cars: CarSnapshot[]
       /** 伺服器認定的身份；帶了 session 卻是 'guest' 代表權杖失效。 */
       auth: AuthKind
     }
@@ -149,6 +183,14 @@ export type ServerMessage =
   /** 某玩家（含自己）的名字改了；name 是伺服器清理後的結果。送給同房所有人、不分場景。 */
   | { t: 'name'; id: string; name: string }
   | { t: 'error'; code: string; message: string }
+  /** 車輛狀態快照更新（產生、認領、上車、下車、淡出）。 */
+  | ({ t: 'car' } & CarSnapshot)
+  /** 車輛移除（淡出結束後完全回收）。 */
+  | { t: 'carGone'; c: number }
+  /** 撞擊衝量提示。 */
+  | { t: 'knock'; id: string; x: number; z: number; toX: number; toZ: number; at: number }
+  /** 碰碰車動態物理幀（二進位幀）。 */
+  | { t: 'cars'; ack: number; cars: CarState[] }
 
 /** 聊天訊息的字元上限（Unicode 字元），與伺服器一致。 */
 export const CHAT_MAX_CHARS = 80
@@ -213,6 +255,15 @@ function isPlayer(v: unknown): v is PlayerSnapshot {
   return isObj(v.action) && isStr(v.action.id) && isNum(v.action.startedAt)
 }
 
+function isCarSnapshot(v: unknown): v is CarSnapshot {
+  if (!isObj(v)) return false
+  if (!isCarId(v.c) || !isCarKind(v.kind)) return false
+  if (v.driver !== null && !isStr(v.driver)) return false
+  if (!isNum(v.x) || !isNum(v.z) || !isNum(v.heading)) return false
+  if (v.fadeAt !== null && !isNum(v.fadeAt)) return false
+  return true
+}
+
 /** 還原 action 幀所需的連線狀態。 */
 export interface DecodeContext {
   /** 房內短編號 → 玩家 id；對照不到回傳 undefined。 */
@@ -271,13 +322,26 @@ function decodeActionMessage(raw: ArrayBuffer, ctx: DecodeContext | undefined): 
 
 /**
  * 解析伺服器訊息。格式不符、過大或未知類型時回傳 null，呼叫端直接忽略，不讓壞資料進入遊戲狀態。
- * ArrayBuffer（WebSocket binaryType = 'arraybuffer'）是二進位幀（moves／sync／action）；字串是 JSON。
- * moves／sync／action 只接受二進位幀，以 JSON 送來的視為無效（舊版格式）。action 幀需要 ctx 才能還原。
+ * ArrayBuffer（WebSocket binaryType = 'arraybuffer'）是二進位幀（moves／sync／action／cars）；字串是 JSON。
+ * moves／sync／action／cars 只接受二進位幀，以 JSON 送來的視為無效（舊版格式）。action 幀需要 ctx 才能還原。
  */
 export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null {
   if (raw instanceof ArrayBuffer) {
     if (raw.byteLength > MAX_MESSAGE_BYTES || raw.byteLength === 0) return null
-    return new Uint8Array(raw)[0] === FRAME_ACTION ? decodeActionMessage(raw, ctx) : decodeBatch(raw)
+    const tag = new Uint8Array(raw)[0]
+    switch (tag) {
+      case FRAME_MOVES:
+      case FRAME_SYNC:
+        return decodeBatch(raw)
+      case FRAME_ACTION:
+        return decodeActionMessage(raw, ctx)
+      case FRAME_CARS: {
+        const decoded = decodeCars(raw)
+        return decoded ? { t: 'cars', ack: decoded.ack, cars: decoded.cars } : null
+      }
+      default:
+        return null
+    }
   }
   if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_BYTES) return null
   let m: unknown
@@ -295,9 +359,13 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
         isNum(m.serverTime) &&
         Array.isArray(m.players) &&
         m.players.every(isPlayer) &&
+        (m.cars === undefined || (Array.isArray(m.cars) && m.cars.every(isCarSnapshot))) &&
         typeof m.auth === 'string' &&
         AUTH_KINDS.includes(m.auth)
-        ? (m as ServerMessage)
+        ? ({
+            ...m,
+            cars: Array.isArray(m.cars) ? m.cars : [],
+          } as ServerMessage)
         : null
     case 'join':
       return isPlayer(m.player) ? (m as ServerMessage) : null
@@ -323,6 +391,19 @@ export function decode(raw: unknown, ctx?: DecodeContext): ServerMessage | null 
       return isStr(m.id) && isOutfitWire(m.outfit) ? (m as ServerMessage) : null
     case 'error':
       return isStr(m.code) && isStr(m.message) ? (m as ServerMessage) : null
+    case 'car':
+      return isCarSnapshot(m) ? (m as unknown as ServerMessage) : null
+    case 'carGone':
+      return isCarId(m.c) ? (m as ServerMessage) : null
+    case 'knock':
+      return isStr(m.id) &&
+        isNum(m.x) &&
+        isNum(m.z) &&
+        isNum(m.toX) &&
+        isNum(m.toZ) &&
+        isNum(m.at)
+        ? (m as ServerMessage)
+        : null
     default:
       return null
   }

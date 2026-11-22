@@ -1,0 +1,71 @@
+{
+  "kinds": [
+    { "id": "classic", "rarity": "common", "count": 4, "weight": 45 },
+    { "id": "woodfish", "rarity": "common", "count": 3, "weight": 35 },
+    { "id": "racer", "rarity": "rare", "count": 2, "weight": 15 },
+    { "id": "firewheel", "rarity": "mythic", "count": 1, "weight": 5 }
+  ],
+  "car": {
+    "halfWidth": 0.55,
+    "halfHeight": 0.3,
+    "halfLength": 0.9,
+    "mass": 120.0,
+    "linearDamping": 0.6,
+    "angularDamping": 4.0,
+    "restitution": 0.6,
+    "friction": 0.2,
+    "maxSpeed": 8.0,
+    "reverseMaxSpeed": 3.0,
+    "driveForce": 1400.0,
+    "turnRate": 3.2,
+    "steerGain": 4.0,
+    "steerBlend": 0.25,
+    "lateralGrip": 0.15,
+    "reverseAngle": 2.618,
+    "reverseBelowSpeed": 1.5
+  },
+  "physics": {
+    "hz": 30,
+    "maxCatchUpSteps": 3,
+    "broadcastEverySteps": 2,
+    "inputTimeoutMs": 500
+  },
+  "ride": {
+    "mountRadius": 1.5,
+    "boothRadius": 2.5,
+    "claimCooldownMs": 20000,
+    "idleDismountMs": 60000,
+    "dismountOffset": 1.1
+  },
+  "fade": {
+    "idleMs": 45000,
+    "fadeMs": 15000
+  },
+  "knock": {
+    "minSpeed": 2.5,
+    "hitRadius": 0.6,
+    "distancePerSpeed": 0.6,
+    "minDistance": 2.0,
+    "maxDistance": 5.0,
+    "flightMs": 900,
+    "recoverMs": 900,
+    "immuneMs": 3000
+  },
+  "booth": {
+    "rect": {
+      "minX": -15.5,
+      "maxX": -12.5,
+      "minZ": 8.0,
+      "maxZ": 10.5
+    },
+    "counter": {
+      "x": -12.0,
+      "z": 9.25
+    },
+    "bays": [
+      { "x": -10.5, "z": 7.0, "heading": 1.5708 },
+      { "x": -10.5, "z": 9.25, "heading": 1.5708 },
+      { "x": -10.5, "z": 11.5, "heading": 1.5708 }
+    ]
+  }
+}

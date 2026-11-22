@@ -27,7 +27,7 @@ const deg = THREE.MathUtils.degToRad
  * 門外景貼圖（public/backdrops/hall_doorway.ktx2）的版本：重新擷取後要加一。public/ 的檔案沒有雜湊，
  * 網址帶版本才不會拿到快取的舊圖。改了 DOORWAY_VIEW 或代理幾何也要重新擷取（UV 跟著變）。
  */
-export const DOORWAY_VIEW_VERSION = '2'
+export const DOORWAY_VIEW_VERSION = '3'
 
 /** 殿內座標加上這個位移就是庭院座標。 */
 export const HALL_TO_COURTYARD: readonly [number, number, number] = [0, 0.8, -18.45]
@@ -209,7 +209,7 @@ export function facadeToHall(x: number, y: number, z: number): [number, number, 
  * 殿內景貼圖（public/backdrops/hall_interior.ktx2）的版本：重新擷取後要加一（理由同 DOORWAY_VIEW_VERSION）。
  * 改了殿內的樣子、神像、INTERIOR_FLOOR_VIEW／INTERIOR_BACK_VIEW 或代理房間都要重新擷取。
  */
-export const INTERIOR_VIEW_VERSION = '1'
+export const INTERIOR_VIEW_VERSION = '2'
 
 /**
  * 殿內景分兩層、兩個擷取視點（庭院座標）：

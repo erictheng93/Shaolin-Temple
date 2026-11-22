@@ -1,5 +1,5 @@
 import type { AvatarRig } from '../render/AvatarFactory'
-import { FACE_CALM, FACE_SMILE, PIVOT_HEIGHT, PROP_NONE } from '../render/AvatarFactory'
+import { FACE_CALM, FACE_SMILE, FACE_DIZZY, PIVOT_HEIGHT, PROP_NONE } from '../render/AvatarFactory'
 
 /**
  * 動畫片段：p 為 0..1 的進度，直接設定 rig 的姿勢。now 是目前時間（performance.now 毫秒），
@@ -47,6 +47,19 @@ export class AnimationSystem {
       rig.pivot.position.y = PIVOT_HEIGHT - e * 0.3
       rig.pivot.rotation.x = e * 0.25
     }],
+    ['ride', (rig) => {
+      rig.pivot.position.y = PIVOT_HEIGHT - 0.18
+      rig.pivot.rotation.x = 0.2
+    }],
+    ['knocked', (rig, p) => {
+      rig.lift = Math.max(0, 4 * 1.6 * p * (1 - p))
+      rig.face = FACE_DIZZY
+      if (p < 0.8) {
+        rig.pivot.rotation.x = Math.sin((p / 0.8) * Math.PI) * Math.PI * 4
+      } else {
+        rig.pivot.rotation.set(0, 0, 0)
+      }
+    }],
   ])
 
   registerClip(name: string, fn: ClipFn): () => void {
@@ -70,6 +83,7 @@ export class AnimationSystem {
 
   /** 每幀套用姿勢。now 為毫秒，t 為秒（呼吸用）。 */
   apply(rig: AvatarRig, state: AnimState, now: number, dt: number, t: number): void {
+    rig.lift = 0
     rig.pivot.rotation.set(0, 0, 0)
     rig.pivot.position.y = PIVOT_HEIGHT
     rig.head.rotation.set(0, 0, 0)
