@@ -1,4 +1,5 @@
 import { Emitter } from '../core/Emitter'
+import { quantizeDrive } from '../vehicles/drive'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import {
@@ -249,10 +250,10 @@ export class NetworkClient {
   private lastDriveDir = -1
   private lastDriveMag = -1
 
-  /** 領取碰碰車。 */
-  sendClaim(kind: number): void {
+  /** 向領車 NPC 抽一台碰碰車；車種由伺服器隨機分配。 */
+  sendClaim(): void {
     if (!this.enabled || this.status !== 'online') return
-    this.sendNow({ t: 'claim', kind })
+    this.sendNow({ t: 'claim' })
   }
 
   /** 上下車（car 為車編號，null 為下車）。 */
@@ -269,10 +270,11 @@ export class NetworkClient {
     if (!this.enabled || this.status !== 'online') return null
     const now = performance.now()
 
-    const qDir = Math.round(((dir % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * 256) & 0xff
-    const qMag = Math.round(Math.max(0, Math.min(1, mag)) * 255) & 0xff
+    const { dir: qDir, mag: qMag } = quantizeDrive(dir, mag)
 
     const changed = qDir !== this.lastDriveDir || qMag !== this.lastDriveMag
+    // 沒變化時也要定期重送：伺服器超過 inputTimeoutMs（500）沒收到就把輸入歸零。
+    // 間隔要明顯短於逾時，否則每次重送都剛好晚一點到，車每半秒掉一下油門。
     const minInterval = changed ? 1000 / 15 : 200
 
     if (this.lastDriveAt > -Infinity && now - this.lastDriveAt < minInterval) {
@@ -426,6 +428,8 @@ export class NetworkClient {
         // hello 送出後、welcome 之前改了名：hello 帶的是舊名字，被清掉的 rename 要補送。
         if (this.opts.name !== this.helloName) this.queue.push({ t: 'rename', name: this.opts.name })
         this.welcomed = true
+        // 馬上量一次來回延遲，不等第一次心跳（20 秒後）：開車的預測要用它估計伺服器狀態晚了多久。
+        this.sendNow({ t: 'ping', ts: performance.now() })
         if (this.helloHadSession && msg.auth === 'guest') {
           this.session = undefined
           this.events.emit('sessionExpired', undefined)

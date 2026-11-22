@@ -60,6 +60,7 @@ export class Players {
   nearRadius = 14
   /** 本機玩家所在場景；只顯示同場景的遠端玩家。 */
   localZone = 'courtyard'
+  private npcs: Array<{ avatar: Avatar; anim: ReturnType<typeof createAnimState>; zone: string }> = []
   /** 復用篩選陣列，避免 cull() 每半秒分配新陣列。 */
   private cullList: RemotePlayer[] = []
 
@@ -232,7 +233,24 @@ export class Players {
   /** 本機玩家切換場景後立即重新計算可見性。 */
   setLocalZone(zone: string): void {
     this.localZone = zone
+    for (const npc of this.npcs) npc.avatar.root.visible = npc.zone === zone
     this.cull()
+  }
+
+  /**
+   * 加一尊不會走動的 NPC（本機物件，不經網路）。用玩家同一套公仔與批次繪製，不增加 draw call。
+   * y 是腳底高度（站在台子或凳子上時用）。回傳的函式讓它點一次頭。
+   */
+  addNpc(o: { name: string; outfit: number; zone: string; x: number; y: number; z: number; heading: number }): () => void {
+    const avatar = this.factory.create({ name: o.name, outfit: o.outfit, local: false })
+    avatar.root.position.set(o.x, o.y, o.z)
+    avatar.root.rotation.y = o.heading
+    avatar.root.visible = o.zone === this.localZone
+    avatar.setLabelVisible(true)
+    this.parent.add(avatar.root)
+    const npc = { avatar, anim: createAnimState(), zone: o.zone }
+    this.npcs.push(npc)
+    return () => this.anim.play(npc.anim, 'nod', performance.now(), 900)
   }
 
   syncLocalTransform(): void {
@@ -301,6 +319,7 @@ export class Players {
 
     this.syncLocalTransform()
     this.anim.apply(this.local.avatar, this.local.anim, now, dt, t)
+    for (const npc of this.npcs) if (npc.avatar.root.visible) this.anim.apply(npc.avatar, npc.anim, now, dt, t)
     if (this.anim.isActive(this.local.anim, now)) active = true
     if (this.local.avatar.tickBubble(now)) active = true
 

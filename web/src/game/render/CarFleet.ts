@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { ResourceTracker } from './ResourceTracker'
 
-export const CAR_MODEL_VERSION = 1
+export const CAR_MODEL_VERSION = 3
 export const CAR_CAPACITY = 16
 
 export interface CarInstance {
@@ -12,6 +12,12 @@ export interface CarInstance {
   heading: number
   opacity: number
 }
+
+/** 經典碰碰車的四種烤漆色：紅、藍、黃、綠（線性 RGB）。 */
+export const CAR_PAINTS: ReadonlyArray<readonly [number, number, number]> = ['#b3352a', '#2f6fb5', '#e0b02e', '#3f8f4f'].map((h) => {
+  const c = new THREE.Color(h)
+  return [c.r, c.g, c.b] as const
+})
 
 const BAYER_SHADER = `
 if (vOpacity < 0.999) {
@@ -30,8 +36,11 @@ if (vOpacity < 0.999) {
 function patchCarMaterial(mat: THREE.Material): void {
   mat.onBeforeCompile = (shader) => {
     shader.vertexShader =
-      'attribute float carKind;\nattribute float kindId;\nattribute float opacity;\nvarying float vOpacity;\n' +
-      shader.vertexShader.replace(
+      'attribute float carKind;\nattribute float kindId;\nattribute float opacity;\nattribute float carPaint;\nattribute vec3 paint;\nvarying float vOpacity;\n' +
+      shader.vertexShader
+        // 烤漆部位（carPaint > 0）改用這台車自己的顏色；深度材質沒有這一段，替換不會發生。
+        .replace('#include <color_vertex>', '#include <color_vertex>\n if ( carPaint > 0.0 ) vColor.rgb = paint * carPaint;')
+        .replace(
         '#include <begin_vertex>',
         '#include <begin_vertex>\n transformed *= step( abs( carKind - kindId ), 0.5 );\n vOpacity = opacity;',
       )
@@ -97,6 +106,7 @@ export class CarFleet {
   private mesh: THREE.InstancedMesh
   private kindAttr: THREE.InstancedBufferAttribute
   private opacityAttr: THREE.InstancedBufferAttribute
+  private paintAttr: THREE.InstancedBufferAttribute
   private dummy = new THREE.Object3D()
   private tracker: ResourceTracker
   private loaded = false
@@ -128,9 +138,11 @@ export class CarFleet {
     const opacityArray = new Float32Array(CAR_CAPACITY).fill(1)
     this.kindAttr = new THREE.InstancedBufferAttribute(kindArray, 1)
     this.opacityAttr = new THREE.InstancedBufferAttribute(opacityArray, 1)
+    this.paintAttr = new THREE.InstancedBufferAttribute(new Float32Array(CAR_CAPACITY * 3), 3)
 
     fallbackGeo.setAttribute('kindId', this.kindAttr)
     fallbackGeo.setAttribute('opacity', this.opacityAttr)
+    fallbackGeo.setAttribute('paint', this.paintAttr)
 
     this.mesh = new THREE.InstancedMesh(fallbackGeo, mat, CAR_CAPACITY)
     this.mesh.customDepthMaterial = depthMat
@@ -138,6 +150,8 @@ export class CarFleet {
     this.mesh.receiveShadow = false
     this.mesh.frustumCulled = false
     this.mesh.count = 0
+    // 車散布整個庭院，實例位置每幀在變；InstancedMesh 的包圍球只算一次，不關掉會被誤剔除。
+    this.mesh.frustumCulled = false
 
     // 初始化所有實例矩陣為縮放 0
     for (let i = 0; i < CAR_CAPACITY; i++) {
@@ -184,6 +198,12 @@ export class CarFleet {
       this.tracker.track(geo)
       geo.setAttribute('kindId', this.kindAttr)
       geo.setAttribute('opacity', this.opacityAttr)
+      geo.setAttribute('paint', this.paintAttr)
+      const paintAttr = geo.getAttribute('_paint')
+      if (paintAttr) {
+        geo.setAttribute('carPaint', paintAttr)
+        geo.deleteAttribute('_paint')
+      }
 
       this.mesh.geometry = geo
       this.loaded = true
@@ -193,7 +213,7 @@ export class CarFleet {
   }
 
   sync(
-    cars: Iterable<{ kind: number; x: number; z: number; heading: number; opacity: number }>,
+    cars: Iterable<{ c?: number; kind: number; x: number; z: number; heading: number; opacity: number }>,
     _t: number,
   ): void {
     let count = 0
@@ -209,6 +229,8 @@ export class CarFleet {
 
       this.mesh.setMatrixAt(count, this.dummy.matrix)
       kindArr[count] = c.kind
+      // 烤漆色依車的編號輪流（只有經典碰碰車有烤漆部位）：所有人看到的顏色一致，不需要協定欄位。
+      this.paintAttr.array.set(CAR_PAINTS[(c.c ?? 0) % CAR_PAINTS.length]!, count * 3)
       opacityArr[count] = Math.max(0, Math.min(1, c.opacity))
       count++
     }
@@ -222,6 +244,7 @@ export class CarFleet {
 
     this.mesh.instanceMatrix.needsUpdate = true
     this.kindAttr.needsUpdate = true
+    this.paintAttr.needsUpdate = true
     this.opacityAttr.needsUpdate = true
     this.mesh.count = count
   }
