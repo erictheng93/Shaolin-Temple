@@ -654,3 +654,193 @@ async fn resume_replaces_the_old_connection_and_closes_it() {
         "pong"
     );
 }
+
+// ---- 玩家硬碰撞與每 tick 分離 E2E 測試（真實 WebSocket） ----
+
+#[tokio::test]
+async fn websocket_walking_into_standing_player_pushes_them_over_wire() {
+    let server = server_with(options()).await;
+    let mut b = connect(&server).await;
+    let me_b = hello(&mut b, None).await;
+    let mut a = connect(&server).await;
+    let me_a = hello(&mut a, None).await;
+
+    collect(&mut b, Duration::from_millis(300)).await;
+    collect(&mut a, Duration::from_millis(300)).await;
+
+    // B 站在自己出生點 (me_b.x, 11.0) 並確認停下
+    send(&mut b, position("stop", me_b.x, 11.0)).await;
+    sleep(Duration::from_millis(150)).await;
+
+    // A 移至 B 後方 0.8 公尺處 (me_b.x, 11.8)
+    // 因在初始額度（1.0 公尺）內，可直接到位
+    send(&mut a, position("stop", me_b.x, 11.8)).await;
+    sleep(Duration::from_millis(200)).await;
+
+    collect(&mut b, Duration::from_millis(200)).await;
+    collect(&mut a, Duration::from_millis(200)).await;
+
+    // A 往前撞進 B：目標 (me_b.x, 11.3)，位移 0.5 公尺（在額度內），
+    // 與 B 距離 0.3 公尺 < MIN_DIST 0.60，重疊量 0.30 公尺 > 容差 0.15 公尺
+    send(&mut a, position("move", me_b.x, 11.3)).await;
+
+    // B 應在 WebSocket 上收到二進位 Sync 訊息（被推動）
+    let b_msgs = collect(&mut b, Duration::from_millis(600)).await;
+    let b_syncs = tuples_of(&b_msgs, "sync", me_b.n);
+    assert!(
+        !b_syncs.is_empty(),
+        "B 應收到被推動的二進位 Sync 訊息，實際收到: {b_msgs:?}"
+    );
+    // B 應被往 -z 方向推動（z 變小，< 11.0）
+    let final_b_z = b_syncs.last().unwrap().1;
+    assert!(
+        final_b_z < 11.0,
+        "B 應被往前推 (z < 11.0)，實際為 {}",
+        final_b_z
+    );
+
+    // A 撞上 B 應在 WebSocket 上收到二進位 Sync 糾正（A 被擋住，z > 11.3）
+    let a_msgs = collect(&mut a, Duration::from_millis(600)).await;
+    let a_syncs = tuples_of(&a_msgs, "sync", me_a.n);
+    assert!(
+        !a_syncs.is_empty(),
+        "A 撞上 B 應收到二進位 Sync 糾正，實際收到: {a_msgs:?}"
+    );
+    let final_a_z = a_syncs.last().unwrap().1;
+    assert!(
+        final_a_z > 11.3,
+        "A 應被擋住往後退 (z > 11.3)，實際為 {}",
+        final_a_z
+    );
+
+    // 兩者最終距離應 >= MIN_DIST - TOLERANCE (0.6 - 0.15 = 0.45)
+    let dist = (final_a_z - final_b_z).abs();
+    assert!(
+        dist >= temple_server::collide::MIN_DIST - temple_server::collide::TOLERANCE - 1e-4,
+        "A 與 B 最終距離應 >= 0.45，實際為 {dist}"
+    );
+}
+
+#[tokio::test]
+async fn websocket_station_action_rooted_player_unmovable_over_wire() {
+    let server = server_with(options()).await;
+    let mut b = connect(&server).await;
+    let me_b = hello(&mut b, None).await;
+    let mut a = connect(&server).await;
+    let me_a = hello(&mut a, None).await;
+
+    collect(&mut b, Duration::from_millis(300)).await;
+    collect(&mut a, Duration::from_millis(300)).await;
+
+    // B 站在出生點 (me_b.x, 11.0) 並開始定點動作上香 (incense，庭院也可授予免推)
+    send(&mut b, position("stop", me_b.x, 11.0)).await;
+    sleep(Duration::from_millis(150)).await;
+    send(
+        &mut b,
+        json!({ "t": "action", "reqId": "r_incense", "id": "incense" }),
+    )
+    .await;
+
+    // A 確認收到 action 廣播
+    let action_msg = recv_kind(&mut a, "action").await;
+    assert_eq!(action_msg["id"], "incense");
+
+    // A 移至 B 後方 0.8 公尺處 (me_b.x, 11.8)
+    send(&mut a, position("stop", me_b.x, 11.8)).await;
+    sleep(Duration::from_millis(200)).await;
+
+    collect(&mut b, Duration::from_millis(200)).await;
+    collect(&mut a, Duration::from_millis(200)).await;
+
+    // A 往前試圖走進 B 所在位置 (me_b.x, 11.3)
+    send(&mut a, position("move", me_b.x, 11.3)).await;
+
+    // B 處於 rooted 狀態，絕不應收到任何 sync 糾正或位移
+    let b_msgs = collect(&mut b, Duration::from_millis(500)).await;
+    let b_syncs = tuples_of(&b_msgs, "sync", me_b.n);
+    assert!(
+        b_syncs.is_empty(),
+        "定點動作中的 B 絕不可被推動或收到 Sync，實際收到: {b_syncs:?}"
+    );
+
+    // A 承擔全部重疊，收到 Sync 糾正退回至 11.55 以上
+    let a_msgs = collect(&mut a, Duration::from_millis(500)).await;
+    let a_syncs = tuples_of(&a_msgs, "sync", me_a.n);
+    assert!(!a_syncs.is_empty(), "A 撞上定點動作的 B 應收到 Sync 糾正");
+    let a_last_z = a_syncs.last().unwrap().1;
+    assert!(
+        a_last_z >= 11.55,
+        "A 應被完全阻擋在 11.55 外，實際為 {a_last_z}"
+    );
+}
+
+#[tokio::test]
+async fn websocket_doorway_crowd_allows_incoming_player_to_enter_hall_over_wire() {
+    let server = server_with(options()).await;
+    let mut b1 = connect(&server).await;
+    hello(&mut b1, None).await;
+    let mut b2 = connect(&server).await;
+    hello(&mut b2, None).await;
+    let mut p3 = connect(&server).await;
+    let me3 = hello(&mut p3, None).await;
+
+    // 三人在真實時間下繞過香爐走到殿門口（累積足夠移動額度）
+    // 第 1 段：走到東側庭院通道 (2.0, 5.0)
+    sleep(Duration::from_millis(1500)).await;
+    send(&mut b1, position("stop", 2.0, 5.0)).await;
+    send(&mut b2, position("stop", 2.0, 5.0)).await;
+    send(&mut p3, position("stop", 2.0, 5.0)).await;
+
+    // 第 2 段：沿通道前進到殿門東南側 (2.0, -4.0)
+    sleep(Duration::from_millis(2000)).await;
+    send(&mut b1, position("stop", 2.0, -4.0)).await;
+    send(&mut b2, position("stop", 2.0, -4.0)).await;
+    send(&mut p3, position("stop", 2.0, -4.0)).await;
+
+    // 第 3 段：b1 與 b2 站在殿門口線，p3 走到前端殿門觸發線
+    sleep(Duration::from_millis(1000)).await;
+    send(&mut b1, position("stop", -0.3, -5.0)).await;
+    send(&mut b2, position("stop", 0.3, -5.0)).await;
+    send(&mut p3, position("stop", 0.0, -4.65)).await;
+
+    sleep(Duration::from_millis(300)).await;
+    collect(&mut p3, Duration::from_millis(200)).await;
+
+    // P3 發送切換場景進殿請求
+    send(
+        &mut p3,
+        json!({ "t": "zone", "zone": "hall", "x": 0, "z": -4.65, "heading": 0 }),
+    )
+    .await;
+
+    // P3 應成功收到進殿的 zone 切換訊息
+    let zone_msg = recv_kind(&mut p3, "zone").await;
+    assert_eq!(
+        (zone_msg["id"].as_str(), zone_msg["zone"].as_str()),
+        (Some(me3.id.as_str()), Some("hall")),
+        "P3 抵達觸發線後應成功進殿，收到: {zone_msg:?}"
+    );
+}
+
+#[tokio::test]
+async fn websocket_spawn_natural_separation_over_wire() {
+    let server = server_with(options()).await;
+    let mut c1 = connect(&server).await;
+    let me1 = hello(&mut c1, None).await;
+    let mut c2 = connect(&server).await;
+    let me2 = hello(&mut c2, None).await;
+
+    // 收集連線後的 moves 廣播
+    let c1_msgs = collect(&mut c1, Duration::from_millis(800)).await;
+    let c1_moves = tuples_of(&c1_msgs, "moves", me1.n);
+    let c2_moves = tuples_of(&c1_msgs, "moves", me2.n);
+    let final_c1_x = c1_moves.last().map(|m| m.0).unwrap_or(me1.x);
+    let final_c1_z = c1_moves.last().map(|m| m.1).unwrap_or(me1.z);
+    let final_c2_x = c2_moves.last().map(|m| m.0).unwrap_or(me2.x);
+    let final_c2_z = c2_moves.last().map(|m| m.1).unwrap_or(me2.z);
+    let dist = (final_c1_x - final_c2_x).hypot(final_c1_z - final_c2_z);
+    assert!(
+        dist >= temple_server::collide::MIN_DIST - temple_server::collide::TOLERANCE - 1e-4,
+        "自然分離後兩人距離應在容許範圍內 (>= 0.45)，實際為 {dist}"
+    );
+}

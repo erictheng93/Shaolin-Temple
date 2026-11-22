@@ -121,6 +121,14 @@ describe('NetworkClient action 幀', () => {
     ])
   })
 
+  it('送出動作前先送出佇列裡的位置（站位比動作早到伺服器）', () => {
+    online([])
+    const before = last().sent.length
+    client.sendPosition(1, 2, 0, false)
+    void client.sendAction('chant')
+    expect(last().sent.slice(before).map((m) => m.t)).toEqual(['stop', 'action'])
+  })
+
   it('對照不到的 n（從未加入、或已 leave）整則忽略', () => {
     const got: ServerMessage[] = []
     online(got)

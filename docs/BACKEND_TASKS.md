@@ -458,6 +458,33 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 | 殿內玩家收到 `car`／`carGone` 但收不到 `cars` 幀 | `cars_frames_only_reach_courtyard_players_but_car_events_reach_the_hall` |
 | `VEHICLE_SESSION` 設定解析 | `config.rs` `defaults_and_invalid_settings` |
 
+### 玩家硬碰撞與每 tick 分離（2026-11-21，後端：Task 1～3）
+
+本機驗證（Windows，rustc 1.95.0）通過 `cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings` 和 `cargo test --locked`。後端共 213 項測試通過（合併 main 後；lib 155、gameplay 18、loadtest 2、logging 1、login 10、metrics 3、protocol 12、websocket 12）。另以本機迴路同時恢復滿房 50 條 WebSocket 連線，所有玩家都保有原本的身分與房間。
+
+**規則與數值**：
+- 最小距離 `MIN_DIST = 0.60` 公尺，推動步長上限 `SEPARATE_PER_TICK = 0.10` 公尺。
+- 移動碰撞的重疊容許值為 `TOLERANCE = 0.15` 公尺。每 tick 分離的判定容限為 1 mm。
+- 延遲補償使用 `VIEW_DELAY_TICKS = 2` 的歷史位置（預設約 0.2 秒）。碰撞結果與請求位置相差超過 0.05 公尺時，向移動者送出校正。
+- 位置校正的最短間隔為 `CORRECTION_GAP = 300` 毫秒。節流期間若玩家受到碰撞校正，房間會在間隔屆滿後的 tick 用 `Sync` 補送當下的伺服器位置。
+- 定點免推適用於 `prostrate`（禮拜 8,000 毫秒）、`chant`（誦經 24,000 毫秒）、`incense`（上香 6,000 毫秒）、`bell`（敲鐘 3,400 毫秒）。伺服器接受的位置離開動作起點超過 0.05 公尺，或玩家切換場景時即解除免推。`bow`（合十 2,200 毫秒）期間可被推動。
+  - 到位寬限：已部署的客戶端先送 `action`、下一次送出佇列才送最後的 `stop`，所以動作開始後 `ROOTED_SETTLE = 500` 毫秒內的第一個 `stop`（`moving = false`），若離起點不超過 `ROOTED_SETTLE_DISTANCE = 0.6` 公尺，就把起點重新錨定到該位置並保留免推；每次動作只能重新錨定一次，移動中的位置、逾時或更遠的 `stop` 照舊解除。
+  - 授予冷卻：兩次授予免推至少間隔 `ROOTED_GRANT_GAP = 2` 秒，冷卻內的定點動作照常接受與廣播，只是不授予免推，避免連送動作把寬限串成緩慢的免推步行。
+  - 場景限定：只有屬於目前場景的動作才授予免推（`world::action_rooted_in`）：`prostrate`、`chant` 只在 `hall`，`bell` 只在 `courtyard`，`incense` 兩邊皆可；不符時動作仍照常接受與廣播。
+  - 本人的位置被接受且不需校正時，清除待送的碰撞校正（`correction_pending`），避免稍後過時的 `Sync` 把行走中的玩家拉回。
+- 殿門範圍往庭院延伸 0.35 公尺，前後端的庭院入口矩形邊界都是 `-4.65`。伺服器驗證出入口的 `PORTAL_TOLERANCE = 0.5` 公尺。
+
+| 驗收項目 | 測試／驗證 |
+| --- | --- |
+| 碰撞純函式：對頭碰撞平分、rooted 不動、牆體阻擋停下、容差內不推、重合點確定性推離、每 tick 最大位移限制、rooted 雙方不推 | `src/collide.rs` 單元測試；`collide-script.json` 共用測試向量 |
+| 位置驗證與延遲補償：推動站立玩家、推動者收到 sync 且出現在 moves、定點動作不可推動、鞠躬可被推動、不穿牆推動、200ms 前離開的位置不糾正、撞飛與騎乘不參與碰撞、糾正節流限制 | `src/room/tests.rs`（`walking_into_a_standing_player_pushes_them_and_slows_the_walker`、`pushed_player_receives_a_sync_and_appears_in_moves`、`player_in_a_station_action_cannot_be_pushed`、`bowing_player_can_be_pushed`、`player_is_not_pushed_through_an_obstacle`、`moving_into_a_spot_the_other_player_left_200ms_ago_is_not_corrected`、`riders_knocked_and_grace_players_do_not_collide`、`two_players_pressing_against_each_other_get_at_most_one_sync_per_correction_gap`） |
+| 每 tick 分離與殿門範圍：同點出生自動漂移分開、殿門前人群不阻礙進殿切換、玩家可推擠穿過閒置人群線、分離絕不移動 rooted 玩家 | `src/room/tests.rs`（`players_spawned_on_the_same_point_drift_apart`、`a_crowd_standing_in_front_of_the_hall_door_does_not_stop_entry`、`a_player_can_push_through_a_line_of_idle_players`、`separation_never_moves_a_rooted_player`） |
+| 審查回歸：移動者與被推者在推擠停止後各收到一筆最新位置校正。連續小步離開定點或換場景會解除免推 | `src/room/tests.rs`（`collision_corrections_coalesce_and_flush_after_the_last_push`、`moving_away_from_a_station_action_or_changing_zones_clears_rooting`、`late_stop_after_a_station_action_re_anchors_once`、`settle_grace_expires_and_does_not_apply_to_moving_positions`、`station_actions_only_grant_rooting_after_the_grant_gap`、`rooting_is_only_granted_for_actions_of_the_current_zone`、`pushed_player_whose_own_position_is_accepted_gets_no_stale_sync`） |
+
+未做到／限制：
+- 前端已同步殿門範圍。前端硬碰撞與 mock 伺服器整合屬於 Task 4～6。
+- 定點免推只檢查場景、不檢查站位距離——改過的客戶端仍可站在原地反覆送定點動作而維持免推（需要把蒲團、香爐、鐘亭站位抄到 `world.rs` 才能檢查，留待後續）。
+
 ## T9 部署與正式環境壓測（P1）
 
 Dokploy 上部署伺服器映像與前端靜態檔；前端建置設定 `VITE_WS_URL`；WebSocket 經反向代理的逾時與升級設定；日誌輪替；以外部機器對正式環境重跑 T7 情境；確認 1 vCPU／2 GiB 在 Dokploy、代理與（未來）PostgreSQL 同時運作時的餘裕。

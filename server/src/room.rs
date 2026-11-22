@@ -42,8 +42,17 @@ const SPEED_MARGIN: f64 = 1.5;
 const BUDGET_CAP: f64 = world::MOVE_SPEED * SPEED_MARGIN * 2.0;
 /// 加入、切換場景、恢復連線後的起始額度（公尺）。
 const BUDGET_START: f64 = 1.0;
-/// 位置被拒時把伺服器上的位置回傳給本人，兩次之間至少相隔這段時間。
+/// 回傳位置校正給本人的最短間隔。
 const CORRECTION_GAP: Duration = Duration::from_millis(300);
+const MOVER_CORRECTION_DISTANCE: f64 = 0.05;
+const ROOTED_MOVE_DISTANCE: f64 = 0.05;
+/// 定點動作的「到位寬限」：已部署的客戶端先送 action、下一次送出佇列才送最後的 stop，
+/// 所以動作開始後這段時間內的第一個 stop 可以重新錨定站位（只一次）。
+const ROOTED_SETTLE: Duration = Duration::from_millis(500);
+/// 寬限內允許重新錨定的最大距離（公尺）：抵達時的 0.3 公尺吸附加上約一個送出間隔的步行。
+const ROOTED_SETTLE_DISTANCE: f64 = 0.6;
+/// 兩次授予定點免推的最短間隔，避免連續送動作把寬限串成緩慢的「免推步行」。
+const ROOTED_GRANT_GAP: Duration = Duration::from_secs(2);
 /// 每位玩家快取的 reqId 結果筆數。
 const ACK_CACHE: usize = 64;
 /// 改名額度（每位玩家，`rename` 與帶新名字的斷線恢復共用）：可連續改 2 次，之後平均每 2 秒 1 次。
@@ -195,6 +204,8 @@ pub(crate) struct Player {
     budget: f64,
     /// 最近一次把位置校正回傳給本人的時間。
     corrected_at: Option<Instant>,
+    /// 因玩家碰撞而待送給本人的座標校正。
+    correction_pending: bool,
     /// 下個 tick 要廣播這位玩家的位置。
     dirty: bool,
     /// 這位收件人的 moves 曾被丟棄，下個放得進佇列的 tick 改送 sync。
@@ -211,8 +222,36 @@ pub(crate) struct Player {
     pub(crate) needs_cars_sync: bool,
     pub(crate) knocked_until: Option<Instant>,
     pub(crate) immune_until: Option<Instant>,
+    pub(crate) trail: [(f64, f64); 4],
+    pub(crate) trail_len: u8,
+    rooted_action: Option<RootedAction>,
+    /// 最近一次授予定點免推的時間（`ROOTED_GRANT_GAP` 冷卻用）。
+    rooted_granted_at: Option<Instant>,
 }
+
+struct RootedAction {
+    until: Instant,
+    /// 動作被接受的時間，到位寬限以它為基準。
+    started: Instant,
+    x: f64,
+    z: f64,
+    /// 已經因到位寬限重新錨定過一次。
+    settled: bool,
+}
+
 impl Player {
+    fn take_correction(&mut self, now: Instant) -> Option<MoveTuple> {
+        if self
+            .corrected_at
+            .is_some_and(|at| now.saturating_duration_since(at) < CORRECTION_GAP)
+        {
+            return None;
+        }
+        self.corrected_at = Some(now);
+        self.correction_pending = false;
+        Some(tuple(self))
+    }
+
     /// 有額度就扣一次並回 true。
     fn take_rename(&mut self, now: Instant) -> bool {
         let elapsed = now.saturating_duration_since(self.rename_at).as_secs_f64();
@@ -223,6 +262,25 @@ impl Player {
         }
         self.rename_tokens -= 1.0;
         true
+    }
+
+    pub(crate) fn push_trail(&mut self) {
+        self.trail[3] = self.trail[2];
+        self.trail[2] = self.trail[1];
+        self.trail[1] = self.trail[0];
+        self.trail[0] = (self.x, self.z);
+        if self.trail_len < 4 {
+            self.trail_len += 1;
+        }
+    }
+
+    pub(crate) fn trail_pos(&self, delay_ticks: usize) -> (f64, f64) {
+        if delay_ticks == 0 || self.trail_len == 0 {
+            return (self.x, self.z);
+        }
+        let max_idx = (self.trail_len as usize).saturating_sub(1);
+        let idx = (delay_ticks - 1).min(max_idx);
+        self.trail[idx]
     }
 }
 
@@ -545,6 +603,21 @@ impl Room {
             .filter(|p| p.link.as_ref().is_some_and(|l| l.conn == who.conn))
     }
 
+    /// 在線、未騎乘、未被撞飛、非斷線保留期。
+    pub(crate) fn collides(p: &Player, now: Instant) -> bool {
+        p.link.is_some()
+            && p.grace_until.is_none()
+            && p.riding.is_none()
+            && p.knocked_until.is_none_or(|t| now >= t)
+    }
+
+    /// 定點動作（prostrate、chant、incense、bell）進行中。
+    pub(crate) fn rooted(p: &Player, now: Instant) -> bool {
+        p.rooted_action
+            .as_ref()
+            .is_some_and(|action| now < action.until)
+    }
+
     fn join(
         &mut self,
         name: String,
@@ -561,6 +634,18 @@ impl Room {
         self.next_conn += 1;
         let conn = self.next_conn;
         let spawn = world::COURTYARD.spawn;
+        let mut sx = spawn.x + rand::random_range(-2.0..=2.0);
+        let sz = spawn.z;
+        for _ in 0..10 {
+            let occupied = self.players.values().any(|p| {
+                p.zone.id == world::COURTYARD.id
+                    && (p.x - sx).hypot(p.z - sz) < crate::collide::MIN_DIST
+            });
+            if !occupied {
+                break;
+            }
+            sx = spawn.x + rand::random_range(-2.0..=2.0);
+        }
         let player = Player {
             id: id.clone(),
             n,
@@ -569,8 +654,8 @@ impl Room {
             outfit,
             token: self.new_token(),
             zone: &world::COURTYARD,
-            x: spawn.x + rand::random_range(-2.0..=2.0),
-            z: spawn.z,
+            x: sx,
+            z: sz,
             heading: spawn.heading,
             moving: false,
             action: None,
@@ -580,6 +665,7 @@ impl Room {
             last_pos_msg: now,
             budget: BUDGET_START,
             corrected_at: None,
+            correction_pending: false,
             dirty: false,
             needs_sync: false,
             acks: VecDeque::new(),
@@ -593,6 +679,10 @@ impl Room {
             needs_cars_sync: true,
             knocked_until: None,
             immune_until: None,
+            trail: [(sx, sz); 4],
+            trail_len: 1,
+            rooted_action: None,
+            rooted_granted_at: None,
         };
         self.players.insert(id.clone(), player);
         if !self.send_welcome(&id) {
@@ -642,8 +732,11 @@ impl Room {
         p.grace_until = None;
         p.needs_sync = false;
         p.needs_cars_sync = true;
+        p.correction_pending = false;
         p.last_at = now;
         p.budget = BUDGET_START;
+        p.trail = [(p.x, p.z); 4];
+        p.trail_len = 1;
         if p.moving {
             p.moving = false;
             p.dirty = true;
@@ -747,25 +840,132 @@ impl Room {
             // 拒絕（太遠，或直線穿過障礙物）：維持原位置，下個 tick 重送給其他人，
             // 並以只含本人的 sync 把伺服器上的位置回傳給本人，讓他的畫面回到同一個位置。
             p.dirty = true;
-            if p.corrected_at
-                .is_some_and(|t| at.saturating_duration_since(t) < CORRECTION_GAP)
-            {
-                return;
+            if let Some(correction) = p.take_correction(at) {
+                let id = p.id.clone();
+                self.send_correction(&id, correction, at);
             }
-            p.corrected_at = Some(at);
-            let correction = ServerMessage::Sync { m: vec![tuple(p)] };
-            let id = p.id.clone();
-            self.send_to(&id, correction, at);
             return;
         }
+        // --- 碰撞解析 ---
+        let zone = p.zone;
+        let p_id = p.id.clone();
+        let p_prev = (p.x, p.z);
+
+        // 取同場景其他 collides 的玩家，位置用 VIEW_DELAY_TICKS 個 tick 前的紀錄，依 n 排序
+        let mut others: Vec<crate::collide::Body> = self
+            .players
+            .values()
+            .filter(|q| q.zone.id == zone.id && q.id != p_id && Self::collides(q, at))
+            .map(|q| {
+                let (ox, oz) = q.trail_pos(crate::collide::VIEW_DELAY_TICKS);
+                crate::collide::Body {
+                    n: q.n,
+                    x: ox,
+                    z: oz,
+                    rooted: Self::rooted(q, at),
+                }
+            })
+            .collect();
+        others.sort_by_key(|b| b.n);
+
+        let ((res_x, res_z), pushed) = crate::collide::resolve_move(
+            (cx, cz),
+            p_prev,
+            &others,
+            crate::collide::TOLERANCE,
+            |x, z| zone.is_valid(x, z),
+        );
+
         let heading = world::normalize_heading(heading);
-        if (cx, cz, heading, moving) != (p.x, p.z, p.heading, p.moving) {
+        let mover_diff = (res_x - cx).hypot(res_z - cz);
+
+        // mover 的結果與送來的位置相差超過 0.05：存結果、dirty = true，並比照既有的拒絕分支對本人送 sync
+        let correct_mover = mover_diff > MOVER_CORRECTION_DISTANCE;
+        let (final_x, final_z) = if correct_mover {
+            (res_x, res_z)
+        } else {
+            (cx, cz)
+        };
+
+        let Some(p) = self.players.get_mut(&p_id) else {
+            return;
+        };
+        if (final_x, final_z, heading, moving) != (p.x, p.z, p.heading, p.moving) {
             p.dirty = true;
         }
-        (p.x, p.z, p.heading, p.moving) = (cx, cz, heading, moving);
-        p.budget = budget - distance;
+        (p.x, p.z, p.heading, p.moving) = (final_x, final_z, heading, moving);
+        if let Some(action) = p.rooted_action.as_mut() {
+            let dist = (final_x - action.x).hypot(final_z - action.z);
+            if dist > ROOTED_MOVE_DISTANCE {
+                if !moving
+                    && !action.settled
+                    && dist <= ROOTED_SETTLE_DISTANCE
+                    && at.saturating_duration_since(action.started) <= ROOTED_SETTLE
+                {
+                    // 到位寬限：action 先到、最後的 stop 後到，重新錨定一次並保留免推。
+                    (action.x, action.z, action.settled) = (final_x, final_z, true);
+                } else {
+                    p.rooted_action = None;
+                }
+            }
+        }
+        let moved_dist = (final_x - p_prev.0).hypot(final_z - p_prev.1);
+        p.budget = (budget - moved_dist).max(0.0);
         p.last_at = at;
         p.last_pos_msg = at;
+
+        let mut syncs_to_send = Vec::new();
+
+        if correct_mover {
+            p.dirty = true;
+            p.correction_pending = true;
+            if let Some(correction) = p.take_correction(at) {
+                syncs_to_send.push((p_id, correction));
+            }
+        } else {
+            // 本人的位置被接受且不需校正：之前待送的碰撞校正已過時，不要再把他拉回去。
+            p.correction_pending = false;
+        }
+
+        // 被推動的人：把推動的位移量加到目前位置上，再做一次 valid 檢查，不合法就不動；dirty = true、moving 不變，對他本人送 sync（同樣節流）
+        for m in pushed {
+            let Some(orig) = others.iter().find(|b| b.n == m.n) else {
+                continue;
+            };
+            let dx = m.x - orig.x;
+            let dz = m.z - orig.z;
+            if let Some(q) = self
+                .players
+                .values_mut()
+                .find(|q| q.n == m.n && q.zone.id == zone.id)
+            {
+                let new_x = q.x + dx;
+                let new_z = q.z + dz;
+                if q.zone.is_valid(new_x, new_z) {
+                    q.x = new_x;
+                    q.z = new_z;
+                    q.dirty = true;
+                    q.correction_pending = true;
+                    if let Some(correction) = q.take_correction(at) {
+                        syncs_to_send.push((q.id.clone(), correction));
+                    }
+                }
+            }
+        }
+
+        for (target_id, correction) in syncs_to_send {
+            self.send_correction(&target_id, correction, at);
+        }
+    }
+
+    fn send_correction(&mut self, id: &str, correction: MoveTuple, now: Instant) {
+        self.send_to(
+            id,
+            ServerMessage::Sync {
+                m: vec![correction],
+            },
+            now,
+        );
     }
 
     fn action(&mut self, who: &Who, req_id: String, action: String, data_ok: bool, now: Instant) {
@@ -799,6 +999,22 @@ impl Room {
                         id: id.into(),
                         started_at,
                     });
+                    let cooled = p
+                        .rooted_granted_at
+                        .is_none_or(|at| now.saturating_duration_since(at) >= ROOTED_GRANT_GAP);
+                    if p.riding.is_none() && world::action_rooted_in(id, p.zone.id) && cooled {
+                        let ms = world::action_duration_ms(id).unwrap_or(0);
+                        p.rooted_granted_at = Some(now);
+                        p.rooted_action = Some(RootedAction {
+                            until: now + Duration::from_millis(ms),
+                            started: now,
+                            x: p.x,
+                            z: p.z,
+                            settled: false,
+                        });
+                    } else {
+                        p.rooted_action = None;
+                    }
                     started = Some((p.n, code, started_at, p.zone.id));
                 }
                 ack
@@ -894,6 +1110,10 @@ impl Room {
         p.dirty = false;
         p.last_at = now;
         p.last_pos_msg = now;
+        p.trail = [(spawn.x, spawn.z); 4];
+        p.trail_len = 1;
+        p.rooted_action = None;
+        p.correction_pending = false;
         let message = ServerMessage::Zone {
             id: who.id.clone(),
             zone: zone.id.into(),
@@ -997,6 +1217,50 @@ impl Room {
                 p.dirty = true;
             }
         }
+
+        // 每 tick 呼叫 separate 分離玩家
+        for z in world::ZONES {
+            let mut bodies: Vec<crate::collide::Body> = self
+                .players
+                .values()
+                .filter(|p| p.zone.id == z.id && Self::collides(p, now))
+                .map(|p| crate::collide::Body {
+                    n: p.n,
+                    x: p.x,
+                    z: p.z,
+                    rooted: Self::rooted(p, now),
+                })
+                .collect();
+            bodies.sort_by_key(|b| b.n);
+            if bodies.len() > 1 {
+                let moved = crate::collide::separate(&bodies, |x, z_coord| z.is_valid(x, z_coord));
+                for m in moved {
+                    if let Some(p) = self
+                        .players
+                        .values_mut()
+                        .find(|p| p.n == m.n && p.zone.id == z.id)
+                    {
+                        p.x = m.x;
+                        p.z = m.z;
+                        p.dirty = true;
+                        p.correction_pending = true;
+                    }
+                }
+            }
+        }
+        let corrections: Vec<_> = self
+            .players
+            .values_mut()
+            .filter(|p| p.link.is_some() && p.correction_pending)
+            .filter_map(|p| {
+                p.take_correction(now)
+                    .map(|correction| (p.id.clone(), correction))
+            })
+            .collect();
+        for (id, correction) in corrections {
+            self.send_correction(&id, correction, now);
+        }
+
         let states = self.states();
         for p in self.players.values_mut() {
             p.dirty = false;
@@ -1009,6 +1273,9 @@ impl Room {
             .collect();
         for (id, sync) in recipients {
             self.send_batch(&id, &states, sync, now);
+        }
+        for p in self.players.values_mut() {
+            p.push_trail();
         }
     }
 }

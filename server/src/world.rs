@@ -99,6 +99,11 @@ impl Zone {
             !o.contains(x0, z0) && o.crosses(x0, z0, x1, z1)
         })
     }
+
+    /// (x, z) 是否在場景邊界內且不在任何加邊障礙物內。
+    pub fn is_valid(&self, x: f64, z: f64) -> bool {
+        self.bounds.contains(x, z) && !self.obstacles.iter().any(|o| o.contains(x, z))
+    }
 }
 
 /// 角色半徑，與前端 `PLAYER_RADIUS` 相同。
@@ -178,6 +183,7 @@ pub static COURTYARD: Zone = Zone {
             min_x: -1.6,
             max_x: 1.6,
             min_z: -6.2,
+
             // 往門前延伸 0.35 公尺（原本 -5.0），與前端 zones.ts 的 COURTYARD_DOOR 一致
             max_z: -4.65,
         },
@@ -258,6 +264,37 @@ pub fn action_code(id: &str) -> Option<u8> {
 /// 回傳清單中的同名動作；不在清單內為 `None`。
 pub fn action(id: &str) -> Option<&'static str> {
     ACTIONS.iter().copied().find(|a| *a == id)
+}
+
+/// 動作的持續時間（毫秒）。
+/// 數值來源：
+/// - "bow": 2200 ms (web/src/game/gameplay/modules/worship.ts:11)
+/// - "prostrate": 8000 ms (web/src/game/gameplay/modules/worship.ts:15)
+/// - "chant": 24000 ms (web/src/game/gameplay/modules/chant.ts:21)
+/// - "chant_end": 800 ms (web/src/game/gameplay/modules/chant.ts:30)
+/// - "incense": 6000 ms (web/src/game/gameplay/modules/worship.ts:49)
+/// - "bell": 3400 ms (web/src/game/world/bell.ts:40)
+pub fn action_duration_ms(id: &str) -> Option<u64> {
+    match id {
+        "bow" => Some(2200),
+        "prostrate" => Some(8000),
+        "chant" => Some(24000),
+        "chant_end" => Some(800),
+        "incense" => Some(6000),
+        "bell" => Some(3400),
+        _ => None,
+    }
+}
+
+/// 定點動作（進行中不可被推動）是否屬於該場景：跪拜與誦經在殿內、敲鐘在庭院、上香兩邊都有。
+/// 其他動作或場景不符時為 false（動作本身仍照常接受與廣播，只是不授予免推）。
+pub fn action_rooted_in(id: &str, zone_id: &str) -> bool {
+    match id {
+        "prostrate" | "chant" => zone_id == "hall",
+        "bell" => zone_id == "courtyard",
+        "incense" => zone_id == "hall" || zone_id == "courtyard",
+        _ => false,
+    }
 }
 
 /// 移動速度（公尺／秒），與前端 `MOVE_SPEED` 相同。

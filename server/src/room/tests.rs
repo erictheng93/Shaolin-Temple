@@ -330,15 +330,44 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     let room = spawn_room(RoomConfig::new(50));
     let mut clients = Vec::new();
     for _ in 0..50 {
-        clients.push(connect(&room).await);
+        clients.push(connect_with(&room, 512).await);
     }
-    sleep(TICK).await;
+    let ns: Vec<u8> = clients.iter().map(|c| c.n).collect();
+    let mut positions: Vec<f64> = clients.iter().map(|c| c.x).collect();
+    loop {
+        let mut any_moves = false;
+        for _ in 0..50 {
+            sleep(TICK).await;
+            for c in &mut clients {
+                for msg in c.drain() {
+                    any_moves = true;
+                    if let ServerMessage::Moves { m } = msg {
+                        for entry in m {
+                            if let Some(idx) = ns.iter().position(|&n| n == entry.0) {
+                                positions[idx] = entry.1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !any_moves {
+            break;
+        }
+    }
+    sleep(Duration::from_secs(1)).await;
     clients.iter_mut().for_each(|c| _ = c.drain());
-    let (x, z) = (clients[7].x + 0.123_456, 11.0 - 0.014_9);
-    clients[7].position(x, z, 7.0, true).await;
+    let (mover_idx, &mover_x) = positions
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .unwrap();
+    let mover_n = clients[mover_idx].n;
+    let (x, z) = (mover_x + 0.123_456, 11.0 - 0.014_9);
+    clients[mover_idx].position(x, z, 7.0, true).await;
     sleep(TICK * 2).await;
     let expected = (
-        7,
+        mover_n,
         round2(x),
         round2(z),
         round2(7.0 - 2.0 * PI),
@@ -346,7 +375,7 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     );
     for (i, c) in clients.iter_mut().enumerate() {
         let got = c.drain();
-        if i == 7 {
+        if i == mover_idx {
             assert!(got.is_empty(), "the mover does not receive itself");
         } else {
             assert_eq!(kinds(&got), ["moves"], "client {i}");
@@ -357,10 +386,14 @@ async fn only_the_mover_is_sent_once_per_tick_rounded_and_stop_is_sent_once() {
     sleep(TICK * 5).await;
     assert!(clients.iter_mut().all(|c| c.drain().is_empty()));
     // 停下時送一次 moving: 0，之後不再重送（重複的 stop 沒有變化，也不送）
-    clients[7].position(x, z, 7.0, false).await;
-    clients[7].position(x, z, 7.0, false).await;
+    clients[mover_idx].position(x, z, 7.0, false).await;
+    clients[mover_idx].position(x, z, 7.0, false).await;
     sleep(TICK * 2).await;
-    for (i, c) in clients.iter_mut().enumerate().filter(|(i, _)| *i != 7) {
+    for (i, c) in clients
+        .iter_mut()
+        .enumerate()
+        .filter(|(i, _)| *i != mover_idx)
+    {
         let got = move_tuples(&c.drain());
         assert_eq!(got.len(), 1, "client {i}");
         assert_eq!(got[0].4, Moving::Stopped);
@@ -378,6 +411,8 @@ async fn tick_rate_follows_config() {
         });
         let mover = connect(&room).await;
         let mut watcher = connect(&room).await;
+        watcher.position(watcher.x, 10.3, 0.0, false).await;
+        sleep(TICK * 2).await;
         watcher.drain();
         let mut batches = 0;
         // 每 10 ms 一則位置，每個 tick 都有變動；10 秒內收到的 moves 則數 = tick 數
@@ -407,10 +442,15 @@ async fn moves_and_actions_stay_in_zone_but_zone_join_leave_reach_everyone() {
     let mut hall_b = connect(&room).await;
     hall_a.enter_hall().await;
     hall_b.enter_hall().await;
+    sleep(Duration::from_secs(2)).await;
+    yard.position(0.0, 8.0, 0.0, false).await;
+    hall_b.position(1.5, 6.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
     // 換場景的 zone 廣播，所有場景的人都收到（各兩則）
     assert_eq!(count(&yard.drain(), "zone"), 2);
     yard_mover.drain();
     hall_a.drain();
+    hall_b.drain();
     // 殿內玩家移動、做動作：庭院玩家完全收不到，殿內另一人收到
     hall_a.position(0.3, 7.4, 0.0, true).await;
     hall_a.action("r1", "bow", true).await;
@@ -448,8 +488,11 @@ async fn zone_change_broadcasts_zone_then_syncs_the_switcher() {
     let mut hall = connect(&room).await;
     let mut mover = connect(&room).await;
     hall.enter_hall().await;
+    sleep(Duration::from_secs(1)).await;
+    hall.position(1.5, 7.4, PI, false).await;
     sleep(TICK).await;
     yard.drain();
+    hall.drain();
     mover.drain();
     // 離殿門太遠（伺服器依速度上限拒絕該位置）時，位置仍在庭院中央
     mover.position(0.0, -5.6, PI, false).await;
@@ -502,7 +545,7 @@ async fn only_portal_positions_may_change_zone() {
             "{zone}: {got:?}"
         );
     }
-    // 出入口外 0.6 公尺（容許 0.5）仍是 invalid_zone
+    // 超出殿門邊界 0.60 公尺，超過伺服器容許範圍
     p.walk_to_door().await;
     p.position(0.0, -4.05, PI, false).await;
     p.zone("hall").await;
@@ -570,6 +613,7 @@ async fn positions_are_clamped_rejected_and_use_each_zones_bounds() {
     b.enter_hall().await;
     hall_watcher.enter_hall().await;
     sleep(Duration::from_secs(3)).await;
+    hall_watcher.drain();
     b.position(9.0, 8.9, 0.0, false).await;
     sleep(TICK * 2).await;
     let got = move_tuples(&hall_watcher.drain());
@@ -863,7 +907,9 @@ async fn dropped_moves_are_replaced_by_one_sync_when_the_queue_has_room() {
     let mover = connect(&room).await;
     let still = connect(&room).await;
     let mut slow = connect_with(&room, 4).await;
-    sleep(TICK).await;
+    still.position(still.x, 11.7, 0.0, false).await;
+    slow.position(slow.x, 10.3, 0.0, false).await;
+    sleep(TICK * 2).await;
     slow.drain();
     // 佇列只有 4 格：8 個 tick 的 moves 前 4 則入列，其餘被丟棄
     let mut last = (0.0, 0.0);
@@ -1330,4 +1376,720 @@ async fn resume_renames_share_the_per_player_rename_budget() {
     rename(&a3, "五").await;
     sleep(TICK).await;
     assert_eq!(names(&b.drain()), [(id.clone(), "五".to_string())]);
+}
+
+// ---- 玩家碰撞（Task 2） ----
+
+#[tokio::test(start_paused = true)]
+async fn walking_into_a_standing_player_pushes_them_and_slows_the_walker() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    // A 朝 B (x 方向) 走向 (-0.2, 8.0)，試圖與 B 重疊 (0.2 < 0.6)
+    a.position(-0.2, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let moves = move_tuples(&watcher.drain());
+    let a_move = moves.iter().find(|m| m.0 == a.n).copied();
+    let b_move = moves.iter().find(|m| m.0 == b.n).copied();
+
+    assert!(a_move.is_some(), "A 應該有移動");
+    assert!(b_move.is_some(), "B 應該被推動");
+    let a_pos = a_move.unwrap();
+    let b_pos = b_move.unwrap();
+
+    assert!(b_pos.1 > 0.0, "B 的 x 應被推往前，實際為 {}", b_pos.1);
+    assert!(a_pos.1 < -0.2, "A 的 x 應被推回，實際為 {}", a_pos.1);
+    let dist = (b_pos.1 - a_pos.1).hypot(b_pos.2 - a_pos.2);
+    assert!(
+        dist >= 0.6 - 0.15 - 1e-4,
+        "兩人距離應 >= 0.45，實際為 {dist}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn pushed_player_receives_a_sync_and_appears_in_moves() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    a.position(-0.1, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let b_syncs = corrections(&mut b);
+    assert!(!b_syncs.is_empty(), "B 被推動時應收到 sync 校正");
+    assert!(b_syncs[0].1 > 0.0, "B 的 sync x 應大於 0.0");
+
+    let w_moves = move_tuples(&watcher.drain());
+    assert!(
+        w_moves.iter().any(|m| m.0 == b.n),
+        "watcher 的 moves 應包含被推動的 B"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn player_in_a_station_action_cannot_be_pushed() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    b.action("req-1", "incense", true).await;
+    sleep(TICK).await;
+    b.drain();
+    a.drain();
+    watcher.drain();
+
+    a.position(-0.1, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let a_syncs = corrections(&mut a);
+    assert!(!a_syncs.is_empty(), "A 被定點動作阻擋應收到 sync 校正");
+    assert!(
+        a_syncs[0].1 <= -0.1,
+        "A 的位置應被推回 <= -0.1，實際為 {}",
+        a_syncs[0].1
+    );
+
+    let w_moves = move_tuples(&watcher.drain());
+    assert!(
+        !w_moves.iter().any(|m| m.0 == b.n),
+        "跪拜中的 B 不能被推動出現在 moves 中"
+    );
+    assert!(
+        corrections(&mut b).is_empty(),
+        "跪拜中的 B 不能收到位置變更 sync"
+    );
+}
+
+#[test]
+fn collision_corrections_coalesce_and_flush_after_the_last_push() {
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (a_tx, mut a_rx) = mpsc::channel(16);
+    let (b_tx, mut b_rx) = mpsc::channel(16);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    for (who, x) in [(&a, -1.0), (&b, 0.0)] {
+        let p = room.live(who).unwrap();
+        (p.x, p.z) = (x, 8.0);
+        p.trail = [(x, 8.0); 4];
+    }
+    a_rx.try_recv().unwrap();
+    b_rx.try_recv().unwrap();
+
+    room.position(&a, -0.2, 8.0, 0.0, true, now);
+    for (who, rx) in [(&a, &mut a_rx), (&b, &mut b_rx)] {
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Sync { m } if m == [tuple(room.live(who).unwrap())]
+        ));
+    }
+    let first_push_x = room.live(&b).unwrap().x;
+    let second = now + Duration::from_millis(100);
+    room.position(&a, 0.0, 8.0, 0.0, false, second);
+    let last_push_x = room.live(&b).unwrap().x;
+    assert!(last_push_x > first_push_x);
+
+    room.tick(second);
+    room.tick(now + CORRECTION_GAP - Duration::from_millis(1));
+    for rx in [&mut a_rx, &mut b_rx] {
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
+    }
+
+    room.tick(now + CORRECTION_GAP);
+    assert_eq!(room.live(&b).unwrap().x, last_push_x);
+    for (who, rx) in [(&a, &mut a_rx), (&b, &mut b_rx)] {
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::Sync { m } if m == [tuple(room.live(who).unwrap())]
+        ));
+    }
+    room.tick(now + CORRECTION_GAP * 2);
+    for rx in [&mut a_rx, &mut b_rx] {
+        assert!(std::iter::from_fn(|| rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
+    }
+}
+
+#[test]
+fn moving_away_from_a_station_action_or_changing_zones_clears_rooting() {
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (b_tx, _b_rx) = mpsc::channel(16);
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    let p = room.live(&b).unwrap();
+    (p.x, p.z) = (0.0, 8.0);
+    p.trail = [(0.0, 8.0); 4];
+    room.action(&b, "incense".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+
+    room.position(&b, 0.03, 8.0, 0.0, false, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+    // 移動中的位置不吃到位寬限，離開站位超過 0.05 就解除
+    room.position(&b, 0.06, 8.0, 0.0, true, now);
+    assert!(!Room::rooted(room.live(&b).unwrap(), now));
+    room.position(&b, 1.0, 8.0, 0.0, false, now);
+    assert_eq!(room.live(&b).unwrap().x, 1.0);
+
+    let (a_tx, _a_rx) = mpsc::channel(16);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let p = room.live(&a).unwrap();
+    (p.x, p.z) = (0.8, 8.0);
+    room.tick(now);
+    assert!(room.live(&b).unwrap().x > 1.0);
+
+    let p = room.live(&b).unwrap();
+    (p.x, p.z) = (0.0, -4.65);
+    // 距離上次授予超過冷卻時間，才會再授予
+    let later = now + ROOTED_GRANT_GAP;
+    room.action(&b, "bell".into(), "bell".into(), true, later);
+    assert!(Room::rooted(room.live(&b).unwrap(), later));
+    room.switch_zone(&b, "hall", later);
+    let p = room.live(&b).unwrap();
+    assert_eq!(p.zone.id, "hall");
+    assert!(!Room::rooted(p, later));
+}
+
+/// 單人房：玩家站在庭院 (0, 8)。
+fn rooted_fixture(now: Instant) -> (Room, Who, mpsc::Receiver<ServerMessage>) {
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (tx, rx) = mpsc::channel(64);
+    let who = room.join("B".into(), AuthKind::Guest, 0, tx, now).unwrap();
+    let p = room.live(&who).unwrap();
+    (p.x, p.z) = (0.0, 8.0);
+    p.trail = [(0.0, 8.0); 4];
+    (room, who, rx)
+}
+
+#[test]
+fn late_stop_after_a_station_action_re_anchors_once() {
+    let now = Instant::now();
+    let (mut room, b, _rx) = rooted_fixture(now);
+    let ms = Duration::from_millis;
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+
+    // 最後的 stop 晚到、離原位 0.2 公尺：寬限內重新錨定，仍然免推
+    room.position(&b, 0.2, 8.0, 0.0, false, now + ms(100));
+    assert!(Room::rooted(room.live(&b).unwrap(), now + ms(100)));
+    // 只能重新錨定一次
+    room.position(&b, 0.4, 8.0, 0.0, false, now + ms(200));
+    assert!(!Room::rooted(room.live(&b).unwrap(), now + ms(200)));
+}
+
+#[test]
+fn settle_grace_expires_and_does_not_apply_to_moving_positions() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, b, _rx) = rooted_fixture(now);
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    room.position(&b, 0.2, 8.0, 0.0, false, now + ms(600));
+    assert!(!Room::rooted(room.live(&b).unwrap(), now + ms(600)));
+
+    let (mut room, b, _rx) = rooted_fixture(now);
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    room.position(&b, 0.2, 8.0, 0.0, true, now + ms(100));
+    assert!(!Room::rooted(room.live(&b).unwrap(), now + ms(100)));
+}
+
+#[test]
+fn station_actions_only_grant_rooting_after_the_grant_gap() {
+    let now = Instant::now();
+    let (mut room, b, _rx) = rooted_fixture(now);
+    room.action(&b, "r1".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+    // 1 秒後再送：動作照常接受，但不授予免推
+    let t1 = now + Duration::from_secs(1);
+    room.action(&b, "r2".into(), "incense".into(), true, t1);
+    assert_eq!(
+        room.live(&b).unwrap().action.as_ref().unwrap().id,
+        "incense"
+    );
+    assert!(!Room::rooted(room.live(&b).unwrap(), t1));
+
+    // 距離上次授予滿 2 秒才再授予
+    let t2 = now + ROOTED_GRANT_GAP;
+    room.action(&b, "r3".into(), "incense".into(), true, t2);
+    assert!(Room::rooted(room.live(&b).unwrap(), t2));
+}
+
+#[test]
+fn rooting_is_only_granted_for_actions_of_the_current_zone() {
+    let now = Instant::now();
+    let (mut room, b, _rx) = rooted_fixture(now);
+    // 庭院：誦經不授予、上香授予
+    room.action(&b, "r1".into(), "chant".into(), true, now);
+    assert_eq!(room.live(&b).unwrap().action.as_ref().unwrap().id, "chant");
+    assert!(!Room::rooted(room.live(&b).unwrap(), now));
+    room.action(&b, "r2".into(), "incense".into(), true, now);
+    assert!(Room::rooted(room.live(&b).unwrap(), now));
+
+    // 殿內：敲鐘不授予、上香授予
+    let t = now + Duration::from_secs(3);
+    let p = room.live(&b).unwrap();
+    (p.x, p.z) = (0.0, -4.65);
+    room.switch_zone(&b, "hall", t);
+    assert_eq!(room.live(&b).unwrap().zone.id, "hall");
+    room.action(&b, "r3".into(), "bell".into(), true, t);
+    assert_eq!(room.live(&b).unwrap().action.as_ref().unwrap().id, "bell");
+    assert!(!Room::rooted(room.live(&b).unwrap(), t));
+    room.action(&b, "r4".into(), "incense".into(), true, t);
+    assert!(Room::rooted(room.live(&b).unwrap(), t));
+}
+
+#[test]
+fn pushed_player_whose_own_position_is_accepted_gets_no_stale_sync() {
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (a_tx, mut a_rx) = mpsc::channel(32);
+    let (b_tx, mut b_rx) = mpsc::channel(32);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    for (who, x) in [(&a, -1.0), (&b, 0.0)] {
+        let p = room.live(who).unwrap();
+        (p.x, p.z) = (x, 8.0);
+        p.trail = [(x, 8.0); 4];
+    }
+    a_rx.try_recv().unwrap();
+    b_rx.try_recv().unwrap();
+
+    room.position(&a, -0.2, 8.0, 0.0, true, now);
+    let ms = Duration::from_millis;
+    room.position(&a, 0.0, 8.0, 0.0, false, now + ms(100));
+    let pushed_x = room.live(&b).unwrap().x;
+    assert!(room.live(&b).unwrap().correction_pending);
+    while b_rx.try_recv().is_ok() {}
+
+    // B 自己的下一個位置被接受（離開 A 遠一點，不需校正）
+    room.position(&b, pushed_x + 0.8, 8.0, 0.0, true, now + ms(150));
+    assert!(!room.live(&b).unwrap().correction_pending);
+    while a_rx.try_recv().is_ok() {}
+
+    room.tick(now + CORRECTION_GAP);
+    room.tick(now + CORRECTION_GAP * 2);
+    assert!(std::iter::from_fn(|| b_rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn bowing_player_can_be_pushed() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    watcher.position(0.0, 6.0, 0.0, false).await;
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    b.action("req-1", "bow", true).await;
+    sleep(TICK).await;
+    b.drain();
+    a.drain();
+    watcher.drain();
+
+    a.position(-0.1, 8.0, 0.0, true).await;
+    sleep(TICK * 2).await;
+
+    let b_syncs = corrections(&mut b);
+    assert!(!b_syncs.is_empty(), "合十中的 B 可以被推動並收到 sync");
+    let w_moves = move_tuples(&watcher.drain());
+    assert!(
+        w_moves.iter().any(|m| m.0 == b.n),
+        "合十中的 B 應被推動出現在 moves 中"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn player_is_not_pushed_through_an_obstacle() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    let mut watcher = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // B 站在香爐右側 (1.2, 1.5)，背靠香爐障礙物 (邊界在 1.15)
+    // A 站在 (2.2, 1.5)
+    b.position(1.2, 1.5, 0.0, false).await;
+    a.position(2.2, 1.5, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+    watcher.drain();
+
+    // A 朝 -x 走向 B (1.4, 1.5)，推動 B 向 -x
+    a.position(1.4, 1.5, 0.0, true).await;
+    sleep(TICK).await;
+
+    let w_moves = move_tuples(&watcher.drain());
+    if let Some(b_move) = w_moves.iter().find(|m| m.0 == b.n) {
+        assert!(
+            world::COURTYARD.is_valid(b_move.1, b_move.2),
+            "B 不能被推入障礙物"
+        );
+    }
+    for s in corrections(&mut b) {
+        assert!(
+            world::COURTYARD.is_valid(s.1, s.2),
+            "B 的 sync 不能在障礙物內"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn moving_into_a_spot_the_other_player_left_200ms_ago_is_not_corrected() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    let p0 = (0.0, 8.0);
+    b.position(p0.0, p0.1, 0.0, false).await;
+    a.position(-1.5, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+
+    // B 走開到 (1.0, 8.0)
+    b.position(1.0, 8.0, 0.0, true).await;
+    sleep(TICK * 2 + Duration::from_millis(10)).await;
+    a.drain();
+    b.drain();
+
+    // A 走到 B 原本的位置 p0
+    a.position(p0.0, p0.1, 0.0, false).await;
+    sleep(TICK * 2).await;
+
+    let a_syncs = corrections(&mut a);
+    assert!(
+        a_syncs.is_empty(),
+        "A 走到 B 200ms 前離開的位置不應被糾正，收到: {a_syncs:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn riders_knocked_and_grace_players_do_not_collide() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let b = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    b.position(0.0, 8.0, 0.0, false).await;
+    a.position(-1.0, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // B 斷線進入保留期
+    b.disconnect().await;
+    sleep(TICK).await;
+    a.drain();
+
+    // A 走到 B 的位置 (0.0, 8.0)
+    a.position(0.0, 8.0, 0.0, false).await;
+    sleep(TICK).await;
+
+    let a_syncs = corrections(&mut a);
+    assert!(
+        a_syncs.is_empty(),
+        "A 走入斷線保留玩家的位置不應發生玩家碰撞糾正"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn two_players_pressing_against_each_other_get_at_most_one_sync_per_correction_gap() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut a = connect(&room).await;
+    let mut b = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    b.position(0.2, 8.0, 0.0, false).await;
+    a.position(-0.2, 8.0, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+
+    let mut a_sync_count = 0;
+    for _ in 0..20 {
+        a.position(0.1, 8.0, 0.0, true).await;
+        b.position(-0.1, 8.0, 0.0, true).await;
+        sleep(Duration::from_millis(50)).await;
+        a_sync_count += corrections(&mut a).len();
+    }
+
+    assert!(
+        a_sync_count <= 5,
+        "1 秒內 sync 次數應受 CORRECTION_GAP 節流限制，實際收到 {a_sync_count} 次"
+    );
+    assert!(a_sync_count >= 1, "互相推擠應至少收到 1 次 sync");
+}
+
+// ---- 玩家碰撞：每 tick 分離與殿門範圍（Task 3） ----
+
+#[tokio::test(start_paused = true)]
+async fn players_spawned_on_the_same_point_drift_apart() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut watcher = connect(&room).await;
+    watcher.enter_hall().await;
+    sleep(Duration::from_secs(2)).await;
+    watcher.position(2.0, 7.4, 0.0, false).await;
+    sleep(TICK * 2).await;
+    watcher.drain();
+
+    // A 與 B 走到門口，同時送出 zone("hall") 進殿，伺服器進殿落點都在 (0.0, 7.4)
+    let a = connect(&room).await;
+    let b = connect(&room).await;
+    a.walk_to_door().await;
+    b.walk_to_door().await;
+    a.zone("hall").await;
+    b.zone("hall").await;
+    watcher.drain();
+
+    let mut last_a = (0.0, 7.4);
+    let mut last_b = (0.0, 7.4);
+    let mut ticks = 0;
+    for _ in 0..10 {
+        sleep(TICK).await;
+        ticks += 1;
+        let moves = move_tuples(&watcher.drain());
+        if let Some(m) = moves.iter().find(|m| m.0 == a.n) {
+            let step = (m.1 - last_a.0).hypot(m.2 - last_a.1);
+            assert!(
+                step <= crate::collide::SEPARATE_PER_TICK + 1e-4,
+                "A 每個 tick 位移應 <= 0.1，實際為 {step}"
+            );
+            last_a = (m.1, m.2);
+        }
+        if let Some(m) = moves.iter().find(|m| m.0 == b.n) {
+            let step = (m.1 - last_b.0).hypot(m.2 - last_b.1);
+            assert!(
+                step <= crate::collide::SEPARATE_PER_TICK + 1e-4,
+                "B 每個 tick 位移應 <= 0.1，實際為 {step}"
+            );
+            last_b = (m.1, m.2);
+        }
+        let dist = (last_a.0 - last_b.0).hypot(last_a.1 - last_b.1);
+        if dist >= crate::collide::MIN_DIST - 1e-4 {
+            break;
+        }
+    }
+    let final_dist = (last_a.0 - last_b.0).hypot(last_a.1 - last_b.1);
+    assert!(
+        final_dist >= crate::collide::MIN_DIST - 1e-4,
+        "10 個 tick 內兩人距離應 >= 0.6，實際為 {final_dist}"
+    );
+    assert!(ticks <= 10, "應在 10 個 tick 內分開");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crowd_standing_in_front_of_the_hall_door_does_not_stop_entry() {
+    let room = spawn_room(RoomConfig::new(50));
+    // 4 人並排站在殿門前 (z = -5.0)
+    let mut c1 = connect_with(&room, 256).await;
+    let mut c2 = connect_with(&room, 256).await;
+    let mut c3 = connect_with(&room, 256).await;
+    let mut c4 = connect_with(&room, 256).await;
+    let mut p5 = connect_with(&room, 256).await;
+
+    // 依移動額度將所有人繞過香爐走到殿門口附近
+    for (wx, wz) in [(2.0, 5.0), (2.0, -4.0)] {
+        sleep(Duration::from_secs(6)).await;
+        c1.drain();
+        c2.drain();
+        c3.drain();
+        c4.drain();
+        p5.drain();
+        c1.position(wx, wz, 0.0, false).await;
+        c2.position(wx, wz, 0.0, false).await;
+        c3.position(wx, wz, 0.0, false).await;
+        c4.position(wx, wz, 0.0, false).await;
+        p5.position(wx, wz, 0.0, false).await;
+    }
+    sleep(Duration::from_secs(3)).await;
+    c1.drain();
+    c2.drain();
+    c3.drain();
+    c4.drain();
+    p5.drain();
+    c1.position(-0.9, -5.0, 0.0, false).await;
+    c2.position(-0.3, -5.0, 0.0, false).await;
+    c3.position(0.3, -5.0, 0.0, false).await;
+    c4.position(0.9, -5.0, 0.0, false).await;
+    sleep(Duration::from_secs(3)).await;
+    p5.drain();
+
+    // 第 5 人走到前端殿門觸發線
+    p5.position(0.0, -4.65, 0.0, false).await;
+    sleep(Duration::from_secs(1)).await;
+    p5.drain();
+
+    // 送出切換場景
+    p5.zone("hall").await;
+    sleep(TICK * 2).await;
+
+    let got = p5.drain();
+    assert!(
+        got.iter().any(|m| match m {
+            ServerMessage::Zone { zone, .. } => zone == "hall",
+            _ => false,
+        }),
+        "第 5 人在門前 1 公尺內應成功切換進殿，收到: {got:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_player_can_push_through_a_line_of_idle_players() {
+    let room = spawn_room(RoomConfig::new(50));
+    let b1 = connect(&room).await;
+    let b2 = connect(&room).await;
+    let b3 = connect(&room).await;
+    let mut a = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // 3 人橫排擋路站在 z = 8.0
+    b1.position(-0.6, 8.0, 0.0, false).await;
+    b2.position(0.0, 8.0, 0.0, false).await;
+    b3.position(0.6, 8.0, 0.0, false).await;
+    // A 站在橫排後方 z = 8.8
+    a.position(0.0, 8.8, PI, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+
+    // A 持續往前走 5 秒（朝 -z 方向前進）
+    let mut cur_z = 8.8;
+    for _ in 0..50 {
+        cur_z -= 0.05;
+        a.position(0.0, cur_z, PI, true).await;
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    // 取得最新 sync 或最新狀態，驗證 A 通過那條線 (z < 8.0)
+    let syncs = corrections(&mut a);
+    let final_z = syncs.last().map(|s| s.2).unwrap_or(cur_z);
+    assert!(
+        final_z < 8.0,
+        "A 持續往前走 5 秒應能通過人牆 (z 應 < 8.0)，實際為 {final_z}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn separation_never_moves_a_rooted_player() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut b = connect(&room).await;
+    let a = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    b.position(0.0, 8.0, 0.0, false).await;
+    // B 在庭院執行定點動作（上香）
+    b.action("r1", "incense", true).await;
+    sleep(TICK).await;
+    b.drain();
+
+    // A 走到與 B 重疊的位置 (0.1, 8.0)（距離 0.1 < 0.6）
+    a.position(0.1, 8.0, 0.0, false).await;
+    b.drain();
+
+    // 經歷 5 個 tick 的分離
+    sleep(TICK * 5).await;
+
+    let b_syncs = corrections(&mut b);
+    assert!(
+        b_syncs.is_empty(),
+        "定點動作中的 B 絕不能被分離機制移動或收到 sync，收到: {b_syncs:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn player_pushed_against_incense_burner_stops_and_pusher_is_blocked() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut b = connect(&room).await;
+    let mut a = connect(&room).await;
+    sleep(Duration::from_secs(2)).await;
+
+    // 將 B 移至香爐南側外緣 (0.0, -0.85)（香爐障礙物邊界為 z <= -0.90）
+    b.position(2.0, 5.0, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    b.position(2.0, -0.85, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    b.position(0.0, -0.85, 0.0, false).await;
+    sleep(Duration::from_secs(2)).await;
+    b.drain();
+
+    // A 移動到 B 後方 (0.0, -0.2)
+    a.position(2.0, 5.0, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    a.position(2.0, -0.2, 0.0, false).await;
+    sleep(Duration::from_secs(4)).await;
+    a.position(0.0, -0.2, PI, false).await;
+    sleep(Duration::from_secs(2)).await;
+    a.drain();
+    b.drain();
+
+    // A 嘗試往前推擠 B：向 -z 移動，目標 (0.0, -0.70)
+    a.position(0.0, -0.70, PI, true).await;
+    sleep(TICK * 2).await;
+
+    // 驗證 B 沒有被推進香爐 (z 必須 > -0.90)
+    let b_syncs = corrections(&mut b);
+    if let Some(sync) = b_syncs.last() {
+        assert!(
+            sync.2 >= -0.90,
+            "B 絕不可被推進香爐障礙物內部 (z 應 >= -0.90)，實際為 {}",
+            sync.2
+        );
+    }
+
+    // 驗證 A 收到糾正，且 A 也絕不在香爐障礙物內部
+    let a_syncs = corrections(&mut a);
+    assert!(!a_syncs.is_empty(), "A 被香爐後的 B 阻擋應收到 sync 糾正");
+    let a_last = a_syncs.last().unwrap();
+    assert!(
+        a_last.2 >= -0.90,
+        "A 絕不可穿透至香爐障礙物內部 (z 應 >= -0.90)，實際為 {}",
+        a_last.2
+    );
 }
