@@ -53,6 +53,14 @@ describe('Vehicles 子系統', () => {
     expect(vehicles.riding).toBeNull()
   })
 
+  it('時段結束：伺服器廣播 driver 為 null 的 car 時，本機騎乘狀態清除且車仍在（之後淡出）', () => {
+    vehicles.onCar({ c: 5, kind: 1, driver: 'me', x: 0, z: 0, heading: 0, fadeAt: null })
+    expect(vehicles.riding).toBe(5)
+    vehicles.onCar({ c: 5, kind: 1, driver: null, x: 0, z: 0, heading: 0, fadeAt: Date.now() + 15000 })
+    expect(vehicles.riding).toBeNull()
+    expect(vehicles.riderCar('me')).toBeNull()
+  })
+
   it('carGone 移除車並在 riding 相同時清除騎乘', () => {
     vehicles.onCar({ c: 4, kind: 0, driver: 'me', x: 0, z: 0, heading: 0, fadeAt: null })
     expect(vehicles.riding).toBe(4)

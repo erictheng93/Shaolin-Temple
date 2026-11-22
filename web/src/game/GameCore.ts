@@ -23,7 +23,7 @@ import { IncenseSystem } from './render/IncenseSystem'
 import { HALL_ENV, OUTDOOR_ENV, SceneRenderer } from './render/SceneRenderer'
 import { buildTempleScene, type TempleScene } from './render/TempleScene'
 import { CarFleet } from './render/CarFleet'
-import { BOOTH_NPC } from './world/vehicles'
+import { BOOTH_NPC, sessionState } from './world/vehicles'
 import { Vehicles, type RideUi } from './vehicles/Vehicles'
 import { VehicleAudio } from './vehicles/sfx'
 import { handleKnock, type KnockFlight } from './vehicles/knock'
@@ -76,6 +76,7 @@ const SERVER_ERRORS = new Map<string, MessageKey>([
   ['booth_crowded', 'server.boothCrowded'],
   ['claim_cooldown', 'server.claimCooldown'],
   ['dismount_first', 'server.dismountFirst'],
+  ['session_closed', 'server.sessionClosed'],
 ])
 
 /** 動作 ack 失敗的提示：timeout（本機逾時）有專屬訊息，其餘（unknown_action、unsupported_data…）通用訊息附上原始 code。 */
@@ -464,7 +465,17 @@ export class GameCore {
       this.setClaimOpen(!this.claimUi.open)
       return
     }
+    // 時段關閉：旁邊有空車也不能上（領車視窗照常開，裡面顯示倒數，按「抽一台」時才提示）
+    if (!ride.riding && ride.nearCar && this.sessionClosed()) {
+      this.toast('server.sessionClosed')
+      return
+    }
     this.vehicles.toggleRide(local.x, local.z)
+  }
+
+  /** 廟會時段是否關閉：離線或尚未收到伺服器時間時視為開放。 */
+  private sessionClosed(): boolean {
+    return this.net.enabled && this.selfId !== null && !sessionState(performance.now() + this.serverOffset).open
   }
 
   /** 開關領車視窗。 */
@@ -476,6 +487,10 @@ export class GameCore {
   /** 在領車視窗裡按「抽一台」：車種由伺服器隨機分配。 */
   claimCar(): void {
     if (this.claimUi.pending) return
+    if (this.sessionClosed()) {
+      this.toast('server.sessionClosed')
+      return
+    }
     this.claimUi = { open: true, pending: true, result: null, error: null }
     this.vehicles.claim()
     this.pushUi(true)
@@ -1327,7 +1342,11 @@ export class GameCore {
     // 走離 NPC 就關掉領車視窗（剛抽到車、正在看結果時不關）。
     if (this.claimUi.open && !curRide.booth && this.claimUi.result === null) this.claimUi = { open: false, pending: false, result: null, error: null }
     curRide.claim = this.claimUi
-    const curRideKey = `${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}:${this.claimUi.open}:${this.claimUi.pending}:${this.claimUi.result}:${this.claimUi.error}`
+    if (curZone === 'courtyard' && this.net.enabled && this.selfId !== null) {
+      const ss = sessionState(now + this.serverOffset)
+      curRide.session = { open: ss.open, secs: Math.ceil(ss.msToChange / 1000) }
+    }
+    const curRideKey = `${curRide.session ? `${curRide.session.open}/${curRide.session.secs}` : ''}:${curRide.riding}:${curRide.nearCar}:${curRide.booth ? curRide.booth.left.join(',') : ''}:${this.claimUi.open}:${this.claimUi.pending}:${this.claimUi.result}:${this.claimUi.error}`
 
     let dirty = force
     if (!dirty) {

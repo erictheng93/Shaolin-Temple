@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from 'vue'
 import type { RideUi } from '../game/vehicles/Vehicles'
-import { CAR_KINDS } from '../game/world/vehicles'
+import { CAR_KINDS, formatCountdown, sessionBlocks } from '../game/world/vehicles'
 import { t, type MessageKey } from '../i18n'
 
 const props = defineProps<{ ride: RideUi }>()
@@ -17,6 +17,13 @@ const claim = computed(() => props.ride.claim ?? { open: false, pending: false, 
 const won = computed(() => (claim.value.result === null ? null : (CAR_KINDS[claim.value.result] ?? null)))
 /** 右側按鈕：騎乘中是下車，旁邊有空車是上車，在領車 NPC 前是「領車」。 */
 const mode = computed(() => (props.ride.riding ? 'dismount' : props.ride.nearCar ? 'mount' : props.ride.booth ? 'talk' : null))
+/** 時段關閉：上車與領車按鈕變暗（按下由 GameCore 以提示說明），下車不受影響。 */
+const blocked = computed(() => sessionBlocks(mode.value, props.ride.session))
+const sessionText = computed(() => {
+  const s = props.ride.session
+  if (!s) return null
+  return t(s.open ? 'ride.session.open' : 'ride.session.closed', { time: formatCountdown(s.secs) })
+})
 const LABEL = { dismount: 'ride.dismount', mount: 'ride.mount', talk: 'ride.talk' } as const
 const ICON = { dismount: '🚪', mount: '🏎️', talk: '🎟️' } as const
 
@@ -34,7 +41,8 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
 
 <template>
   <!-- 右側欄、說話按鈕上方：上車／下車／領車，鍵盤是 E -->
-  <button v-if="mode" type="button" class="ride-btn" :class="mode" :aria-label="t(LABEL[mode])" @click="emit('toggle')">
+  <p v-if="sessionText" class="session-pill" :class="{ closed: !ride.session?.open }" role="status">{{ sessionText }}</p>
+  <button v-if="mode" type="button" class="ride-btn" :class="[mode, { blocked }]" :aria-disabled="blocked" :aria-label="t(LABEL[mode])" @click="emit('toggle')">
     <span class="ride-icon" aria-hidden="true">{{ ICON[mode] }}</span>
     <span class="ride-label">{{ t(LABEL[mode]) }}</span>
     <span class="key-hint" aria-hidden="true">E</span>
@@ -62,6 +70,7 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
       </template>
 
       <template v-else>
+        <p v-if="ride.session && !ride.session.open" class="session-note">{{ sessionText }}</p>
         <p class="bubble" :class="{ warn: claim.error }">{{ claim.error ? t(claim.error as MessageKey) : t('ride.modal.greet') }}</p>
         <ul class="odds">
           <li v-for="(kind, i) in CAR_KINDS" :key="kind.id" :class="[kind.rarity, { out: (ride.booth?.left[i] ?? 0) <= 0 }]">
@@ -70,7 +79,7 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
             <span class="odds-rarity">{{ t(RARITY_KEYS[kind.rarity]) }}</span>
           </li>
         </ul>
-        <button type="button" class="go" :disabled="claim.pending" @click="emit('claim')">
+        <button type="button" class="go" :class="{ blocked }" :disabled="claim.pending" :aria-disabled="blocked" @click="emit('claim')">
           {{ t(claim.pending ? 'ride.modal.drawing' : 'ride.modal.draw') }}
         </button>
         <p class="hint">{{ t('ride.modal.hint') }}</p>
@@ -111,6 +120,27 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
   border: 1px solid var(--line);
   color: var(--ink-soft);
 }
+.ride-btn.blocked, .go.blocked { opacity: 0.5; filter: grayscale(0.6); }
+/* 廟會倒數：右側欄、上車按鈕正上方的紙卡小標籤（不碰頂部列、左上聊天紀錄與左下搖桿） */
+.session-pill {
+  position: absolute;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 192px);
+  max-width: min(260px, calc(100% - 24px));
+  margin: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 2px solid #5a3b25;
+  background: #f7efdc;
+  color: #5a3b25;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+  z-index: 10;
+}
+.session-pill.closed { background: #ffe9df; }
+.session-note { margin: 0 0 6px; font-size: 0.85rem; font-weight: 700; }
 @media (pointer: coarse) {
   .key-hint { display: none; }
 }
