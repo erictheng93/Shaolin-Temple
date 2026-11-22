@@ -155,6 +155,7 @@ const zhHant = {
   'ride.session.closed': '廟會 {time} 後開始',
   'ride.session.open': '廟會進行中，剩 {time}',
   'ride.modal.close': '關閉',
+  'ride.rotateHint': '橫向拿手機，開車更順手',
 
   'perf.label': '效能資訊',
   'perf.position': '座標',

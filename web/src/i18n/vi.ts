@@ -152,6 +152,7 @@ const vi: Record<MessageKey, string> = {
   'ride.session.closed': 'Hội chùa mở sau {time}',
   'ride.session.open': 'Hội chùa đang diễn ra, còn {time}',
   'ride.modal.close': 'Đóng',
+  'ride.rotateHint': 'Xoay ngang điện thoại để lái dễ hơn',
 
   'perf.label': 'Thông tin hiệu năng',
   'perf.position': 'Tọa độ',
