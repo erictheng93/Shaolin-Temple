@@ -209,7 +209,7 @@ export function facadeToHall(x: number, y: number, z: number): [number, number, 
  * 殿內景貼圖（public/backdrops/hall_interior.ktx2）的版本：重新擷取後要加一（理由同 DOORWAY_VIEW_VERSION）。
  * 改了殿內的樣子、神像、INTERIOR_FLOOR_VIEW／INTERIOR_BACK_VIEW 或代理房間都要重新擷取。
  */
-export const INTERIOR_VIEW_VERSION = '1'
+export const INTERIOR_VIEW_VERSION = '2'
 
 /**
  * 殿內景分兩層、兩個擷取視點（庭院座標）：

@@ -223,7 +223,7 @@ redirect URI 固定是 `<AUTH_PUBLIC_URL>/auth/<provider>/callback`，必須與�
 
 ## 回滾
 
-映像以 commit SHA 為標籤保存在 GHCR。回滾做法：在 Dokploy 的 Environment 把 `IMAGE_TAG` 改成先前的好 SHA，重新 Deploy（只需拉取映像，約數十秒）。前端與伺服器共用同一個 `IMAGE_TAG`，協定版本（目前 3）不會不一致；不要讓兩者用不同 SHA，否則版本不符會看到 `unsupported_version` 的「重新整理」提示。注意前端映像的 `VITE_WS_URL` 是建置當時的變數值。Dokploy 另有 Rollbacks 功能，**未查證**是否適用於 compose 服務。
+映像以 commit SHA 為標籤保存在 GHCR。回滾做法：在 Dokploy 的 Environment 把 `IMAGE_TAG` 改成先前的好 SHA，重新 Deploy（只需拉取映像，約數十秒）。前端與伺服器共用同一個 `IMAGE_TAG`，協定版本（目前 5）不會不一致；不要讓兩者用不同 SHA，否則版本不符會看到 `unsupported_version` 的「重新整理」提示。特別是協定 v4 → v5 新增了碰碰車二進位幀（0x04）與車輛控制訊息，前後端不相容，部署與回滾時必須前後端容器一併更新。注意前端映像的 `VITE_WS_URL` 是建置當時的變數值。Dokploy 另有 Rollbacks 功能，**未查證**是否適用於 compose 服務。
 
 ## 已知未決事項
 

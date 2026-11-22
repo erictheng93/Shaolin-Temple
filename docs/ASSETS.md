@@ -28,6 +28,7 @@
 以下都是專案自己產生，沒有第三方授權：
 
 - 小沙彌模型 `web/public/models/monk.glb` 與 `monk-lod.glb`：由 `web/scripts/build-avatar.mjs` 產生（`npm run build:avatar`）。
+- 碰碰車模型 `web/public/models/cars.glb`：由 `web/scripts/build-cars.mjs` 程式化幾何產生（`npm run build:cars`），包含 4 款車身與輪子（檔口建築由 `TempleScene.ts` 程式化幾何建構），無外部模型或第三方素材。
 - 庭院烘焙貼圖 `web/assets/lightmaps/` 與 `web/public/lightmaps/`：由 `npm run bake:lightmaps` 以庭院的程序化幾何烘焙。
 - 殿門外景 `web/assets/backdrops/hall_doorway.png` 與 `web/public/backdrops/hall_doorway.ktx2`：由 `npm run capture:doorway` 從遊戲自己的庭院場景擷取（場景中的第三方貼圖是上方 Poly Haven 的 CC0 貼圖），再以 `build-textures.mjs backdrops` 編碼。
 - 殿內景（從庭院看進殿門）`web/assets/backdrops/hall_interior.png` 與 `web/public/backdrops/hall_interior.ktx2`：由 `npm run capture:doorway` 從遊戲自己的殿內場景擷取，畫面中有三尊神像（來源、授權與署名見下方「殿內神像」；觀音與媽祖是 CC BY 4.0，署名已列在設定面板的「素材來源」，這張截圖屬於同一件作品在遊戲中的呈現），再以 `build-textures.mjs backdrops` 編碼。
