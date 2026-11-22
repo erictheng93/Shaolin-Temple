@@ -79,6 +79,7 @@ const en: Record<MessageKey, string> = {
   'server.boothCrowded': 'Booth is crowded, please wait a moment',
   'server.claimCooldown': 'Car claimed recently, please wait a moment',
   'server.dismountFirst': 'Please dismount before entering the hall',
+  'server.sessionClosed': 'The temple fair is closed; cars are unavailable',
   'server.error': 'Something went wrong on the server. Please try again later.',
 
   'chat.label': 'Chat',
@@ -148,6 +149,8 @@ const en: Record<MessageKey, string> = {
   'ride.modal.result': 'Congratulations, you drew:',
   'ride.modal.go': 'Let’s go!',
   'ride.modal.hint': 'Cars are assigned at random; you cannot choose',
+  'ride.session.closed': 'Temple fair starts in {time}',
+  'ride.session.open': 'Temple fair open, {time} left',
   'ride.modal.close': 'Close',
 
   'perf.label': 'Performance',

@@ -82,6 +82,7 @@ const zhHant = {
   'server.boothCrowded': '檔口前太擠，等一下再領',
   'server.claimCooldown': '剛領過車，稍後再領',
   'server.dismountFirst': '下車才能進殿',
+  'server.sessionClosed': '廟會尚未開始，暫停領車與上車',
   'server.error': '伺服器發生問題，請稍後再試',
 
   'chat.label': '聊天',
@@ -151,6 +152,8 @@ const zhHant = {
   'ride.modal.result': '恭喜施主，抽到了：',
   'ride.modal.go': '出發！',
   'ride.modal.hint': '車種隨機分配，不能自己挑',
+  'ride.session.closed': '廟會 {time} 後開始',
+  'ride.session.open': '廟會進行中，剩 {time}',
   'ride.modal.close': '關閉',
 
   'perf.label': '效能資訊',

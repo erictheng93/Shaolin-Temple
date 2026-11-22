@@ -63,7 +63,10 @@ export interface VehicleParams {
     rect: Rect
     counter: { x: number; z: number }
     bays: ReadonlyArray<{ x: number; z: number; heading: number }>
+    zone: Rect
   }
+  /** 廟會時段：伺服器時間 (serverMs − offsetMs) mod periodMs < openMs 時開放領車與上車。 */
+  session: { periodMs: number; openMs: number; offsetMs: number }
 }
 
 export const VEHICLES: VehicleParams = VEHICLES_JSON as unknown as VehicleParams
@@ -180,3 +183,21 @@ export function nearBooth(x: number, z: number): boolean {
 
 /** 領車 NPC：站在檔口櫃台後、面朝東。y 是腳底高度（墊一張凳子，胸口以上露出櫃台）。衣裝是行腳僧（戴斗笠，好認）。 */
 export const BOOTH_NPC = { x: -13.45, y: 0.75, z: 9.25, heading: Math.PI / 2, outfit: 6 }
+
+/** 廟會時段狀態：open 是現在是否開放，msToChange 是距離下一次開／關還有幾毫秒（永遠 > 0）。 */
+export function sessionState(serverMs: number): { open: boolean; msToChange: number } {
+  const { periodMs, openMs, offsetMs } = VEHICLES.session
+  const phase = (((serverMs - offsetMs) % periodMs) + periodMs) % periodMs
+  return phase < openMs ? { open: true, msToChange: openMs - phase } : { open: false, msToChange: periodMs - phase }
+}
+
+/** 時段關閉時，上車與領車被擋下（下車永遠可以）。session 為 undefined（離線、非庭院）不擋。 */
+export function sessionBlocks(mode: 'dismount' | 'mount' | 'talk' | null, session: { open: boolean } | undefined): boolean {
+  return mode !== null && mode !== 'dismount' && session !== undefined && !session.open
+}
+
+/** 倒數秒數顯示成 mm:ss（超過一小時仍以分鐘計）。 */
+export function formatCountdown(secs: number): string {
+  const s = Math.max(0, Math.floor(secs))
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}

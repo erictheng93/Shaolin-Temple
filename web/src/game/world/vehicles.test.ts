@@ -6,6 +6,9 @@ import {
   knockLanding,
   nearBooth,
   nearestEmptyCar,
+  sessionBlocks,
+  sessionState,
+  formatCountdown,
   stockLeft,
   VEHICLES,
   type CarView,
@@ -109,5 +112,39 @@ describe('vehicles', () => {
     expect(nearBooth(counter.x, counter.z)).toBe(true)
     expect(nearBooth(counter.x + 1.0, counter.z)).toBe(true)
     expect(nearBooth(counter.x + 3.0, counter.z)).toBe(false)
+  })
+})
+
+describe('廟會時段', () => {
+  it('邊界：0 與 1_799_999 開放；1_800_000 與 3_599_999 關閉；3_600_000 又開放', () => {
+    expect(sessionState(0).open).toBe(true)
+    expect(sessionState(1_799_999).open).toBe(true)
+    expect(sessionState(1_800_000).open).toBe(false)
+    expect(sessionState(3_599_999).open).toBe(false)
+    expect(sessionState(3_600_000).open).toBe(true)
+  })
+
+  it('msToChange 是距離下一次開／關的毫秒數', () => {
+    expect(sessionState(0).msToChange).toBe(1_800_000)
+    expect(sessionState(1_799_999).msToChange).toBe(1)
+    expect(sessionState(1_800_000).msToChange).toBe(1_800_000)
+    expect(sessionState(3_599_999).msToChange).toBe(1)
+    expect(sessionState(3_600_000 * 5 + 600_000).msToChange).toBe(1_200_000)
+  })
+
+  it('時段關閉時擋上車與領車，下車與開放時不擋', () => {
+    const closed = { open: false }
+    expect(sessionBlocks('mount', closed)).toBe(true)
+    expect(sessionBlocks('talk', closed)).toBe(true)
+    expect(sessionBlocks('dismount', closed)).toBe(false)
+    expect(sessionBlocks('mount', { open: true })).toBe(false)
+    expect(sessionBlocks('mount', undefined)).toBe(false)
+    expect(sessionBlocks(null, closed)).toBe(false)
+  })
+
+  it('formatCountdown 顯示 mm:ss', () => {
+    expect(formatCountdown(0)).toBe('00:00')
+    expect(formatCountdown(65)).toBe('01:05')
+    expect(formatCountdown(1800)).toBe('30:00')
   })
 })
