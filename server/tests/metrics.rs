@@ -88,6 +88,10 @@ async fn open_without_token_and_names_present() {
         "temple_tick_seconds_sum ",
         "temple_tick_seconds_count ",
         "temple_tick_seconds_max ",
+        "temple_physics_step_seconds_bucket{le=\"+Inf\"}",
+        "temple_physics_step_seconds_sum ",
+        "temple_physics_step_seconds_count ",
+        "temple_physics_step_seconds_max ",
     ] {
         assert!(body.contains(name), "missing {name}\n{body}");
     }
@@ -106,7 +110,7 @@ async fn counters_follow_connections_and_messages() {
             .headers_mut()
             .insert("origin", "http://localhost:5173".parse().unwrap());
         let (mut ws, _) = connect_async(request).await.unwrap();
-        let hello = format!(r#"{{"t":"hello","v":4,"name":"m{i}"}}"#);
+        let hello = format!(r#"{{"t":"hello","v":5,"name":"m{i}"}}"#);
         ws.send(Message::Text(hello.into())).await.unwrap();
         let welcome = timeout(Duration::from_secs(5), ws.next())
             .await

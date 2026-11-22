@@ -1,4 +1,5 @@
 import { Emitter } from '../core/Emitter'
+import { quantizeDrive } from '../vehicles/drive'
 import { backoffDelay } from './backoff'
 import { OutboundQueue } from './OutboundQueue'
 import {
@@ -244,6 +245,53 @@ export class NetworkClient {
     return this.sendNow({ t: 'chat', text: clean }) ? 'sent' : 'offline'
   }
 
+  private driveSeq = 0
+  private lastDriveAt = -Infinity
+  private lastDriveDir = -1
+  private lastDriveMag = -1
+
+  /** 向領車 NPC 抽一台碰碰車；車種由伺服器隨機分配。 */
+  sendClaim(): void {
+    if (!this.enabled || this.status !== 'online') return
+    this.sendNow({ t: 'claim' })
+  }
+
+  /** 上下車（car 為車編號，null 為下車）。 */
+  sendRide(car: number | null): void {
+    if (!this.enabled || this.status !== 'online') return
+    this.sendNow({ t: 'ride', car })
+  }
+
+  /**
+   * 駕駛輸入。dir 弧度、mag 0..1。
+   * 送出前量化成 0..255；回傳用掉的 seq（被節流時為 null）；自帶 15 Hz 節流與 500 ms 心跳。
+   */
+  sendDrive(dir: number, mag: number): number | null {
+    if (!this.enabled || this.status !== 'online') return null
+    const now = performance.now()
+
+    const { dir: qDir, mag: qMag } = quantizeDrive(dir, mag)
+
+    const changed = qDir !== this.lastDriveDir || qMag !== this.lastDriveMag
+    // 沒變化時也要定期重送：伺服器超過 inputTimeoutMs（500）沒收到就把輸入歸零。
+    // 間隔要明顯短於逾時，否則每次重送都剛好晚一點到，車每半秒掉一下油門。
+    const minInterval = changed ? 1000 / 15 : 200
+
+    if (this.lastDriveAt > -Infinity && now - this.lastDriveAt < minInterval) {
+      return null
+    }
+
+    const seq = this.driveSeq
+    this.driveSeq = (this.driveSeq + 1) & 0xffff
+
+    this.lastDriveAt = now
+    this.lastDriveDir = qDir
+    this.lastDriveMag = qMag
+
+    this.sendNow({ t: 'drive', seq, dir: qDir, mag: qMag })
+    return seq
+  }
+
   /**
    * 更換衣裝。記住目前衣裝（之後每次 hello 都帶，含重連）；已連線時送出 outfit 訊息。
    * 超過限速時只保留最新的選擇、不排隊，額度恢復後補送；斷線時不送（重連的 hello 會帶）。
@@ -380,6 +428,8 @@ export class NetworkClient {
         // hello 送出後、welcome 之前改了名：hello 帶的是舊名字，被清掉的 rename 要補送。
         if (this.opts.name !== this.helloName) this.queue.push({ t: 'rename', name: this.opts.name })
         this.welcomed = true
+        // 馬上量一次來回延遲，不等第一次心跳（20 秒後）：開車的預測要用它估計伺服器狀態晚了多久。
+        this.sendNow({ t: 'ping', ts: performance.now() })
         if (this.helloHadSession && msg.auth === 'guest') {
           this.session = undefined
           this.events.emit('sessionExpired', undefined)

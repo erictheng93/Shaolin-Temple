@@ -1,6 +1,15 @@
 //! 車輛物理（碰碰車）：以 rapier3d 在伺服器權威模擬。
 //!
-//! 目前只確認引擎已接上；車輛世界與規則見 docs/superpowers/plans/2026-11-21-bumper-cars.md。
+//! 車輛世界與規則見 docs/superpowers/plans/2026-11-21-bumper-cars.md。
+
+pub mod drive;
+pub mod knock;
+pub mod params;
+pub mod world;
+pub use drive::*;
+pub use knock::*;
+pub use params::*;
+pub use world::*;
 
 #[cfg(test)]
 mod tests {

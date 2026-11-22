@@ -72,7 +72,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          context: server
+          context: .
+          file: server/Dockerfile
           push: true
           tags: |
             ghcr.io/${{ env.OWNER }}/temple-server:${{ github.sha }}
@@ -84,7 +85,8 @@ jobs:
       - if: env.VITE_WS_URL != ''
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          context: web
+          context: .
+          file: web/Dockerfile
           push: true
           build-args: |
             VITE_WS_URL=${{ env.VITE_WS_URL }}

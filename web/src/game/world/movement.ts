@@ -1,4 +1,5 @@
 import type { Rect } from './layout'
+import { CAR_PARAMS } from './vehicles'
 
 export interface MoverState {
   x: number
@@ -18,6 +19,7 @@ export interface MoveConfig {
   speed: number
   bounds: Rect
   obstacles: ReadonlyArray<Rect>
+  slowZones?: () => Iterable<{ x: number; z: number; heading: number }>
 }
 
 const ARRIVE_EPSILON = 0.05
@@ -66,7 +68,16 @@ export function stepMover(state: MoverState, input: MoveInput, dt: number, cfg: 
 
   // 方向輸入長度 <= 1（搖桿半推）時按比例減速，> 1（鍵盤對角）時正規化為全速；尋路目標一律全速。
   const scale = usingKeys ? Math.min(1, len) : 1
-  const step = Math.min(cfg.speed * scale * dt, usingKeys ? Infinity : len)
+  let speed = cfg.speed
+  if (cfg.slowZones) {
+    for (const zone of cfg.slowZones()) {
+      if (Math.hypot(state.x - zone.x, state.z - zone.z) <= CAR_PARAMS.radius) {
+        speed *= 0.4
+        break
+      }
+    }
+  }
+  const step = Math.min(speed * scale * dt, usingKeys ? Infinity : len)
   const nx = state.x + (dx / len) * step
   const nz = state.z + (dz / len) * step
   const p = resolveCollisions(nx, nz, cfg)

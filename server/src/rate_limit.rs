@@ -19,9 +19,11 @@ const CHAT_PER_SEC: f64 = 0.5;
 /// 更換衣裝：與聊天相同的規則（突發 3 則，每 2 秒補 1 則），計數各自獨立。
 const OUTFIT_BURST: f64 = 3.0;
 const OUTFIT_PER_SEC: f64 = 0.5;
+/// 駕駛輸入：突發 5 則，每秒補充 20 則。
+const DRIVE_BURST: f64 = 5.0;
+const DRIVE_PER_SEC: f64 = 20.0;
 /// 兩次丟棄相隔不超過這段時間，才算「連續」超出。
 const STREAK_GAP: Duration = Duration::from_secs(1);
-/// 連續超出多久就關閉連線。
 pub const DEFAULT_CLOSE_AFTER: Duration = Duration::from_secs(5);
 
 struct Bucket {
@@ -64,6 +66,7 @@ pub struct RateLimiter {
     action: Bucket,
     chat: Bucket,
     outfit: Bucket,
+    drive: Bucket,
     close_after: Duration,
     /// 目前這一段連續超出的起點與最近一次丟棄的時間。
     streak: Option<(Instant, Instant)>,
@@ -78,6 +81,7 @@ impl RateLimiter {
             action: Bucket::new(ACTION_BURST, ACTION_PER_SEC, now),
             chat: Bucket::new(CHAT_BURST, CHAT_PER_SEC, now),
             outfit: Bucket::new(OUTFIT_BURST, OUTFIT_PER_SEC, now),
+            drive: Bucket::new(DRIVE_BURST, DRIVE_PER_SEC, now),
             close_after,
             streak: None,
             dropped: 0,
@@ -87,7 +91,10 @@ impl RateLimiter {
     pub fn admit(&mut self, message: &ClientMessage, now: Instant) -> Verdict {
         let mut specific = match message {
             ClientMessage::Move { .. } | ClientMessage::Stop { .. } => Some(&mut self.position),
-            ClientMessage::Action { .. } => Some(&mut self.action),
+            ClientMessage::Action { .. } | ClientMessage::Claim | ClientMessage::Ride { .. } => {
+                Some(&mut self.action)
+            }
+            ClientMessage::Drive { .. } => Some(&mut self.drive),
             ClientMessage::Chat { .. } => Some(&mut self.chat),
             ClientMessage::Outfit { .. } => Some(&mut self.outfit),
             _ => None,
@@ -271,5 +278,42 @@ mod tests {
                 assert_ne!(limiter.admit(&act(), at), Verdict::Close, "burst {burst}");
             }
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drive_burst_five_then_twenty_per_second() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
+        let drive = ClientMessage::Drive {
+            seq: 1,
+            dir: 0,
+            mag: 255,
+        };
+        let passed = (0..10)
+            .filter(|_| limiter.admit(&drive, t0) == Verdict::Pass)
+            .count();
+        assert_eq!(passed, 5);
+        // 50 ms 補 1 則（20/s = 每 50ms 一則）
+        assert_eq!(
+            limiter.admit(&drive, t0 + Duration::from_millis(50)),
+            Verdict::Pass
+        );
+        assert_eq!(
+            limiter.admit(&drive, t0 + Duration::from_millis(50)),
+            Verdict::Drop
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn claim_and_ride_share_action_bucket() {
+        let t0 = Instant::now();
+        let mut limiter = RateLimiter::new(t0, DEFAULT_CLOSE_AFTER);
+        let claim = ClientMessage::Claim;
+        let ride = ClientMessage::Ride { car: Some(1) };
+        assert_eq!(limiter.admit(&claim, t0), Verdict::Pass);
+        assert_eq!(limiter.admit(&ride, t0), Verdict::Pass);
+        assert_eq!(limiter.admit(&claim, t0), Verdict::Pass);
+        // Action 突發上限 3 則，第 4 則被丟棄
+        assert_eq!(limiter.admit(&ride, t0), Verdict::Drop);
     }
 }
