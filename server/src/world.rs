@@ -297,6 +297,11 @@ pub fn action_rooted_in(id: &str, zone_id: &str) -> bool {
     }
 }
 
+/// action 幀是否送給同房所有場景（全寺都聽得見）：只有在庭院敲鐘；其他動作或場景只送同場景。
+pub fn action_heard_everywhere(id: &str, zone_id: &str) -> bool {
+    id == "bell" && zone_id == "courtyard"
+}
+
 /// 移動速度（公尺／秒），與前端 `MOVE_SPEED` 相同。
 pub const MOVE_SPEED: f64 = 3.2;
 

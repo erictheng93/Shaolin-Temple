@@ -1039,19 +1039,23 @@ impl Room {
                     } else {
                         p.rooted_action = None;
                     }
-                    started = Some((p.n, code, started_at, p.zone.id));
+                    let everywhere = world::action_heard_everywhere(id, p.zone.id);
+                    started = Some((p.n, code, started_at, p.zone.id, everywhere));
                 }
                 ack
             }
         };
         self.send_to(&who.id, ack, now);
-        if let Some((n, code, started_at, zone)) = started {
+        if let Some((n, code, started_at, zone, everywhere)) = started {
             let message = ServerMessage::Action {
                 n,
                 code,
                 started_at,
             };
-            self.broadcast(message, now, |q| q.zone.id == zone && q.id != who.id);
+            // 庭院的鐘聲全寺都聽得見：送給所有場景；其他動作只送同場景。
+            self.broadcast(message, now, |q| {
+                (everywhere || q.zone.id == zone) && q.id != who.id
+            });
         }
     }
 

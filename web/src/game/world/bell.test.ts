@@ -8,7 +8,9 @@ import {
   BELL_STATIONS,
   STRIKER,
   STRIKER_CONTACT,
+  BELL_HALL_GAIN,
   bellGain,
+  bellHallGain,
   bellQuietLeft,
   pickBellStation,
   strikerAngle,
@@ -107,5 +109,12 @@ describe('多人輪流敲的聲音規則', () => {
     const near = bellGain(3, -Infinity, 10_000)
     expect(bellGain(3, 10_000 - BELL_MERGE_MS + 1, 10_000)).toBeCloseTo(near * 0.35)
     expect(bellGain(3, 10_000 - BELL_MERGE_MS, 10_000)).toBe(near)
+  })
+
+  it('殿內聽者：固定音量，不看距離；2 秒內的第二聲同樣壓低', () => {
+    expect(bellHallGain(-Infinity, 10_000)).toBe(BELL_HALL_GAIN)
+    expect(BELL_HALL_GAIN).toBeLessThan(bellGain(3, -Infinity, 0))
+    expect(bellHallGain(10_000 - BELL_MERGE_MS + 1, 10_000)).toBeCloseTo(BELL_HALL_GAIN * 0.35)
+    expect(bellHallGain(10_000 - BELL_MERGE_MS, 10_000)).toBe(BELL_HALL_GAIN)
   })
 })

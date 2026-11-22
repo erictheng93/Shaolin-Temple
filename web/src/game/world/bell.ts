@@ -84,6 +84,8 @@ export const BELL_COOLDOWN_MS = 10_000
  * 撞到的時刻在按下後至少 BELL_HIT_MS，所以實際兩聲的間隔至少約 6.75 秒，前一聲的基音已衰減到約 1/8。
  */
 export const BELL_QUIET_MS = 5_000
+/** 聽者在殿內：隔著殿牆聽到的固定音量（殿內座標與庭院不同，不依距離算）。 */
+export const BELL_HALL_GAIN = 0.45
 /** 兩人幾乎同時敲（網路延遲內都通過了上面的檢查）：與前一聲相隔不到 2 秒的鐘聲只以 0.35 倍音量播放。 */
 export const BELL_MERGE_MS = 2_000
 const BELL_MERGE_GAIN = 0.35
@@ -100,4 +102,9 @@ export function bellQuietLeft(lastHitAt: number, now: number): number {
 export function bellGain(listenerDistance: number, prevHitAt: number, hitAt: number): number {
   const distance = Math.min(1, Math.max(0.3, 1 - listenerDistance / 45))
   return hitAt - prevHitAt < BELL_MERGE_MS ? distance * BELL_MERGE_GAIN : distance
+}
+
+/** 聽者在殿內時一聲鐘的音量：固定 BELL_HALL_GAIN，合併規則與 bellGain 相同。 */
+export function bellHallGain(prevHitAt: number, hitAt: number): number {
+  return hitAt - prevHitAt < BELL_MERGE_MS ? BELL_HALL_GAIN * BELL_MERGE_GAIN : BELL_HALL_GAIN
 }

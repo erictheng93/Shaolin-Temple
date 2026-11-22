@@ -483,6 +483,42 @@ async fn moves_and_actions_stay_in_zone_but_zone_join_leave_reach_everyone() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn courtyard_bell_reaches_every_zone_but_other_actions_stay_in_zone() {
+    let room = spawn_room(RoomConfig::new(50));
+    let mut ringer = connect(&room).await;
+    let mut yard = connect(&room).await;
+    let mut hall = connect(&room).await;
+    hall.enter_hall().await;
+    ringer.drain();
+    yard.drain();
+    // 庭院敲鐘：殿內與庭院的其他人都收到 action 幀，本人只收到 ack
+    ringer.action("r1", "bell", true).await;
+    sleep(TICK).await;
+    let bell = world::action_code("bell").unwrap();
+    for c in [&mut hall, &mut yard] {
+        let got = c.drain();
+        assert_eq!(kinds(&got), ["action"]);
+        assert!(matches!(
+            got[0],
+            ServerMessage::Action { n, code, .. } if n == ringer.n && code == bell
+        ));
+    }
+    assert_eq!(kinds(&ringer.drain()), ["ack"]);
+    // 庭院合十：殿內收不到，庭院的人照常收到
+    ringer.action("r2", "bow", true).await;
+    sleep(TICK).await;
+    assert!(hall.drain().is_empty());
+    assert_eq!(kinds(&yard.drain()), ["action"]);
+    assert_eq!(kinds(&ringer.drain()), ["ack"]);
+    // 殿內送出 bell（不合法的位置）：不全房廣播，庭院收不到
+    hall.action("r1", "bell", true).await;
+    sleep(TICK).await;
+    assert!(ringer.drain().is_empty());
+    assert!(yard.drain().is_empty());
+    assert_eq!(kinds(&hall.drain()), ["ack"]);
+}
+
+#[tokio::test(start_paused = true)]
 async fn zone_change_broadcasts_zone_then_syncs_the_switcher() {
     let room = spawn_room(RoomConfig::new(50));
     let mut yard = connect(&room).await;
