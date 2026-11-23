@@ -41,11 +41,42 @@ const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 /// callback 參數上限：`code`／`state` 太長直接視為失敗，不轉送給提供者。
 const MAX_PARAM_BYTES: usize = 2048;
 const FLOW_COOKIE: &str = "temple_auth";
-/// 同時進行中的 token endpoint 請求上限（整台伺服器）。合法的 cookie＋state 在 10 分鐘內可以帶亂數 code
-/// 重複打 callback，每次都會以我方憑證向提供者發請求；限制併發避免被拿來放大流量或耗盡連線。
-/// 正常登入一次只佔一個名額約數百毫秒，8 個名額足夠同時有數十人登入；超過的立即以 `auth_error=failed` 結束。
-/// 反向代理另應對 `/auth` 加頻率限制（docs/DEPLOY.md）。
+/// 同時進行中的 token endpoint 請求上限（整台伺服器）：每次換權杖都以我方憑證向提供者發請求，
+/// 限制併發避免被拿來放大流量或耗盡連線。正常登入一次只佔一個名額約數百毫秒。
+/// 每個登入流程只能換一次（[`USED_FLOWS_CAP`]），但 `/start` 不花對外請求、隨時可以拿新流程，
+/// 所以每個來源的次數仍要靠反向代理對 `/auth` 加頻率限制（docs/DEPLOY.md）。
 pub const MAX_CONCURRENT_EXCHANGES: usize = 8;
+/// 拿不到名額時最多等多久（之後以 `auth_error=failed` 結束）。假的 code 在提供者那裡很快就失敗、名額很快釋放，
+/// 稍等一下合法的登入通常就排得到；不無限等，避免請求堆在伺服器上。
+pub const EXCHANGE_WAIT: Duration = Duration::from_secs(2);
+/// 記住已用過的登入流程（`r`）的筆數上限。滿了淘汰最舊的：只有洪水攻擊時才會滿，而攻擊者本來就能隨時拿新流程，
+/// 被淘汰的那幾筆能重放並不會多給他什麼；反過來「滿了就拒絕」會讓他塞滿紀錄、擋掉所有人登入。
+pub const USED_FLOWS_CAP: usize = 16 * 1024;
+
+/// 已用過的登入流程，到期（Unix 秒）後移除。讓同一組 cookie＋state 只能換一次權杖。
+#[derive(Default)]
+struct UsedFlows {
+    set: std::collections::HashSet<String>,
+    /// 依記下的順序；到期時間大致遞增（流程的有效期間固定），從前面清就夠。
+    order: std::collections::VecDeque<(String, u64)>,
+}
+impl UsedFlows {
+    /// 第一次用回 true 並記下；用過的回 false。
+    fn first_use(&mut self, r: &str, exp: u64, now: u64) -> bool {
+        while let Some((old, e)) = self.order.front() {
+            if *e > now && self.order.len() < USED_FLOWS_CAP {
+                break;
+            }
+            self.set.remove(old);
+            self.order.pop_front();
+        }
+        if !self.set.insert(r.to_owned()) {
+            return false;
+        }
+        self.order.push_back((r.to_owned(), exp));
+        true
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
@@ -206,6 +237,7 @@ pub struct Auth {
     secure_cookie: bool,
     /// token endpoint 請求的併發名額（[`MAX_CONCURRENT_EXCHANGES`]）。
     exchange_slots: tokio::sync::Semaphore,
+    used_flows: std::sync::Mutex<UsedFlows>,
 }
 impl Auth {
     pub fn new(config: AuthConfig) -> Result<Self, String> {
@@ -226,6 +258,7 @@ impl Auth {
             http,
             secure_cookie,
             exchange_slots: tokio::sync::Semaphore::new(MAX_CONCURRENT_EXCHANGES),
+            used_flows: Default::default(),
         })
     }
     fn provider(&self, name: &str) -> Option<&ProviderConfig> {
@@ -463,8 +496,17 @@ pub async fn callback(
     let Some(redirect_uri) = auth.redirect_uri(p) else {
         return fail("failed", "AUTH_PUBLIC_URL missing");
     };
-    // 拿不到名額就不等待、直接失敗（等待會讓大量請求堆在伺服器上）。名額在換完權杖後釋放。
-    let Ok(slot) = auth.exchange_slots.try_acquire() else {
+    // 每個流程只能換一次：重放的 cookie＋state（不論帶什麼 code）在佔名額、向提供者發請求之前就結束。
+    let first = auth
+        .used_flows
+        .lock()
+        .is_ok_and(|mut used| used.first_use(&cookie.r, cookie.e, now));
+    if !first {
+        return fail("failed", "login flow already used");
+    }
+    // 名額滿時最多等 EXCHANGE_WAIT；名額在換完權杖後釋放。
+    let Ok(Ok(slot)) = tokio::time::timeout(EXCHANGE_WAIT, auth.exchange_slots.acquire()).await
+    else {
         return fail("failed", "too many concurrent token exchanges");
     };
     let exchanged = exchange(&auth.http, p, &redirect_uri, code, &cookie.v).await;
@@ -631,6 +673,22 @@ mod tests {
     const NOW: u64 = 1_794_787_200;
     fn signer() -> Signer {
         Signer::new(b"0123456789abcdef0123456789abcdef".to_vec())
+    }
+
+    #[test]
+    fn used_flows_are_single_use_expire_and_evict_the_oldest_when_full() {
+        let mut used = UsedFlows::default();
+        assert!(used.first_use("a", 100, 0));
+        assert!(!used.first_use("a", 100, 50), "replay within the lifetime");
+        // 到期後清掉（同一個 r 之後也不會再出現：簽章裡的到期時間已過，callback 前面就擋下）
+        assert!(used.first_use("b", 300, 100));
+        assert!(!used.set.contains("a"));
+        // 滿了淘汰最舊的，不拒絕新的流程
+        for i in 0..USED_FLOWS_CAP {
+            assert!(used.first_use(&format!("f{i}"), 1000, 200));
+        }
+        assert_eq!(used.order.len(), USED_FLOWS_CAP);
+        assert!(!used.set.contains("b") && used.set.contains("f0"));
     }
 
     #[test]

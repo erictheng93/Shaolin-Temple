@@ -184,7 +184,7 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
 
 `/auth` 路徑也要轉給 `server`（Domains 分頁多一筆 Path `/auth`，見部署步驟 6），否則 `/auth/google/start` 會被前端的 SPA 回退吃掉。登入結束時伺服器 302 回 `<前端 origin>/#session=…`，前端與 server 不同網域也可以（權杖在網址 fragment，不靠 cookie；`/auth/providers` 對 `ALLOWED_ORIGINS` 內的來源回 CORS 標頭）。
 
-建議在反向代理（Traefik 的 RateLimit middleware 或 Cloudflare 的 Rate limiting rules）對 `/auth` 加每個 IP 的頻率限制（例如每分鐘 30 次）：伺服器本身只限制同時進行的換權杖請求（8 個），不限制每個來源的次數。**未實測。**
+建議在反向代理（Traefik 的 RateLimit middleware 或 Cloudflare 的 Rate limiting rules）對 `/auth` 加每個 IP 的頻率限制（例如每分鐘 30 次）：伺服器本身只限制同時進行的換權杖請求（8 個，滿了最多排隊 2 秒）、每個登入流程只能換一次，不限制每個來源的次數（伺服器看到的位址是代理的）。**未實測。**
 
 ### redirect URI（在提供者的主控台登記）
 

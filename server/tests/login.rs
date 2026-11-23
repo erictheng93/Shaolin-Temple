@@ -68,6 +68,9 @@ struct Fake {
     /// 收到的 token 請求數與每次回應前的延遲（測試併發上限用）。
     requests: usize,
     delay: Duration,
+    /// 同時進行中的 token 請求數與它的最大值。
+    in_flight: usize,
+    max_in_flight: usize,
 }
 type FakeState = Arc<Mutex<Fake>>;
 
@@ -78,10 +81,13 @@ async fn token_endpoint(
     let delay = {
         let mut fake = fake.lock().unwrap();
         fake.requests += 1;
+        fake.in_flight += 1;
+        fake.max_in_flight = fake.max_in_flight.max(fake.in_flight);
         fake.delay
     };
     sleep(delay).await;
     let mut fake = fake.lock().unwrap();
+    fake.in_flight -= 1;
     fake.last_form = Some(form.clone());
     let Some((challenge, nonce)) = form.get("code").and_then(|c| fake.pending.remove(c)) else {
         return (StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#).into_response();
@@ -849,11 +855,10 @@ async fn resuming_with_a_new_name_adopts_and_broadcasts_it() {
 // ---- 稽核後修正 ----
 
 #[tokio::test]
-async fn token_exchanges_are_capped_and_the_rest_fail_fast() {
-    use temple_server::auth::MAX_CONCURRENT_EXCHANGES;
+async fn a_login_flow_exchanges_only_once_and_replays_fail_without_the_provider() {
     let world = world(&[ProviderKind::Google]).await;
     world.fake.lock().unwrap().delay = Duration::from_millis(800);
-    // 同一組合法的 cookie＋state 帶 20 個不同的 code 同時打 callback
+    // 同一組合法的 cookie＋state 帶 20 個不同的 code 同時打 callback（issue #31 的重放）
     let started = world.start("google").await;
     let total = 20;
     for i in 0..total {
@@ -877,21 +882,78 @@ async fn token_exchanges_are_capped_and_the_rest_fail_fast() {
         .filter(|(l, _)| l.contains("#session="))
         .count();
     let rejected: Vec<_> = results.iter().filter(|(l, _)| *l == failed).collect();
-    assert_eq!(ok + rejected.len(), total);
-    let requests = world.fake.lock().unwrap().requests;
-    assert!(
-        requests <= MAX_CONCURRENT_EXCHANGES,
-        "{requests} token requests"
+    assert_eq!((ok, rejected.len()), (1, total - 1));
+    assert_eq!(
+        world.fake.lock().unwrap().requests,
+        1,
+        "replays never reach the provider"
     );
-    assert_eq!(ok, requests, "every request that got a slot succeeded");
-    assert!(rejected.len() >= total - MAX_CONCURRENT_EXCHANGES);
-    // 被拒的不等待提供者（遠少於 800 ms 的延遲）
+    // 重放的不佔名額也不等待提供者（遠少於 800 ms 的延遲）
     assert!(
         rejected
             .iter()
             .all(|(_, t)| *t < Duration::from_millis(600)),
         "{rejected:?}"
     );
+}
+
+#[tokio::test]
+async fn token_exchanges_are_capped_and_queued_briefly() {
+    use temple_server::auth::{EXCHANGE_WAIT, MAX_CONCURRENT_EXCHANGES};
+    let world = world(&[ProviderKind::Google]).await;
+    // 20 個各自獨立的流程同時回來：同時進行的交換不超過上限，其餘排隊，在等待時間內都換得到。
+    world.fake.lock().unwrap().delay = Duration::from_millis(500);
+    let total = 20;
+    let mut flows = Vec::new();
+    for i in 0..total {
+        let started = world.start("google").await;
+        world.approve(&started, &format!("q{i}"));
+        flows.push((
+            format!("code=q{i}&state={}", started.params["state"]),
+            started.cookie,
+        ));
+    }
+    let calls = flows.iter().map(|(params, cookie)| async {
+        let response = world.callback("google", params, Some(cookie)).await;
+        header(&response, "location")
+    });
+    let results = futures_util::future::join_all(calls).await;
+    assert!(
+        results.iter().all(|l| l.contains("#session=")),
+        "{results:?}"
+    );
+    let max = world.fake.lock().unwrap().max_in_flight;
+    assert!(
+        max <= MAX_CONCURRENT_EXCHANGES,
+        "{max} concurrent token requests"
+    );
+
+    // 名額被慢的請求佔滿超過等待時間：多出來的那一個約在 EXCHANGE_WAIT 後失敗，不無限等。
+    world.fake.lock().unwrap().delay = EXCHANGE_WAIT + Duration::from_secs(1);
+    let mut flows = Vec::new();
+    for i in 0..=MAX_CONCURRENT_EXCHANGES {
+        let started = world.start("google").await;
+        world.approve(&started, &format!("s{i}"));
+        flows.push((
+            format!("code=s{i}&state={}", started.params["state"]),
+            started.cookie,
+        ));
+    }
+    let begin = Instant::now();
+    let calls = flows.iter().map(|(params, cookie)| async {
+        let response = world.callback("google", params, Some(cookie)).await;
+        (header(&response, "location"), begin.elapsed())
+    });
+    let results = futures_util::future::join_all(calls).await;
+    let failed = format!("{ORIGIN}/#auth_error=failed");
+    let rejected: Vec<_> = results.iter().filter(|(l, _)| *l == failed).collect();
+    assert_eq!(rejected.len(), 1, "{results:?}");
+    let waited = rejected[0].1;
+    assert!(
+        waited >= EXCHANGE_WAIT && waited < EXCHANGE_WAIT + Duration::from_millis(800),
+        "{waited:?}"
+    );
+
     // 名額釋放後又可以登入
     world.fake.lock().unwrap().delay = Duration::ZERO;
     let location = world.login("google", Plan::good("after")).await;
