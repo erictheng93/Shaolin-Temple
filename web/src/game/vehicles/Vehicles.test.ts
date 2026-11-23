@@ -74,7 +74,7 @@ describe('Vehicles 子系統', () => {
     const calls = mockFleet.sync.mock.calls
     return calls[calls.length - 1]![0][0]
   }
-  const moving = (x: number, vx: number) => ({ c: 0, occupied: true, bumped: false, x, z: 0, heading: Math.PI / 2, vx, vz: 0, w: 0 })
+  const moving = (x: number, vx: number) => ({ c: 0, occupied: true, bump: 0 as const, x, z: 0, heading: Math.PI / 2, vx, vz: 0, w: 0 })
 
   it('別人的車依伺服器給的速度推算到現在', () => {
     vehicles.onCar({ c: 0, kind: 0, driver: 'other', x: 0, z: 0, heading: Math.PI / 2, fadeAt: null })
@@ -114,7 +114,7 @@ describe('Vehicles 子系統', () => {
   it('新狀態與畫面有落差時滑過去，不會跳', () => {
     vehicles.onCar({ c: 0, kind: 0, driver: null, x: 0, z: 9, heading: 0, fadeAt: null })
     vehicles.update(1000, 1000, 0)
-    vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 2, z: 9, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
+    vehicles.onCars(1, [{ c: 0, occupied: false, bump: 0 as const, x: 2, z: 9, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
 
     vehicles.update(1016, 1016, 0.016)
     expect(lastShown().x).toBeGreaterThan(0)
@@ -125,10 +125,10 @@ describe('Vehicles 子系統', () => {
 
   it('超過 5 公尺直接套用', () => {
     vehicles.onCar({ c: 0, kind: 0, driver: null, x: 0, z: 0, heading: 0, fadeAt: null })
-    vehicles.onCars(0, [{ c: 0, occupied: false, bumped: false, x: 0, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
+    vehicles.onCars(0, [{ c: 0, occupied: false, bump: 0 as const, x: 0, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1000)
 
     // 突變 10 公尺 (> 5m SNAP)
-    vehicles.onCars(1, [{ c: 0, occupied: false, bumped: false, x: 10, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1100)
+    vehicles.onCars(1, [{ c: 0, occupied: false, bump: 0 as const, x: 10, z: 0, heading: 0, vx: 0, vz: 0, w: 0 }], 1100)
     vehicles.update(1100, 1100, 0.05)
 
     expect(lastShown().x).toBe(10)

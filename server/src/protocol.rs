@@ -7,9 +7,10 @@ pub const MAX_MESSAGE_BYTES: usize = 16 * 1024;
 /// 協定版本。2（T8）：`moves`／`sync` 改為二進位幀（見 [`encode_batch`]）；
 /// 3：下行的 `action` 也改為二進位幀（見 [`encode_action`]）；
 /// 4：登入與改名（`hello.session`、`welcome.auth`、上行 `rename`、下行 `name`）；
-/// 5：庭院碰碰車（上行 `claim`、`ride`、`drive`；下行 `car`、`carGone`、`knock` 與二進位 `cars` 幀 [`encode_cars`]）。
+/// 5：庭院碰碰車（上行 `claim`、`ride`、`drive`；下行 `car`、`carGone`、`knock` 與二進位 `cars` 幀 [`encode_cars`]）；
+/// 6：`cars` 幀旗標的 bit 5–6 由單一 bumped 位元改為 2 位元的撞擊種類 `bump`（[`BUMP_WALL`] 等），bit 7 保留。
 /// `hello.v` 不同時回 `unsupported_version` 並關閉，前端據此提示重新整理。
-pub const PROTOCOL_VERSION: f64 = 5.0;
+pub const PROTOCOL_VERSION: f64 = 6.0;
 /// 客戶端字串欄位上限（UTF-8 bytes）。超過時整則視為無效訊息。
 /// reqId 會被快取做去重（T4），沒有上限時每條連線最壞可佔約 1 MB。
 pub const MAX_REQ_ID_BYTES: usize = 128;
@@ -96,7 +97,7 @@ pub enum ClientMessage {
     },
 }
 
-/// 碰碰車種類數量（4 款）。由固定資料 `tests/protocol-v5.json` 的 `kindCount` 鎖住。
+/// 碰碰車種類數量（4 款）。由固定資料 `tests/protocol-v6.json` 的 `kindCount` 鎖住。
 pub const KIND_COUNT: u8 = 4;
 /// 房間內碰碰車數量上限（16 台）。
 pub const MAX_CARS: usize = 16;
@@ -104,10 +105,18 @@ pub const MAX_CARS: usize = 16;
 pub const FRAME_CARS: u8 = 0x04;
 /// 每台車的二進位 bytes。
 pub const CAR_ENTRY_BYTES: usize = 12;
+/// `cars` 幀的撞擊種類（旗標 bit 5–6）：這個廣播間隔內沒撞到東西。
+pub const BUMP_NONE: u8 = 0;
+/// 撞到建築與其他靜態物（主殿、鐘亭、檔口、香爐、石燈籠、四面邊界牆）。
+pub const BUMP_WALL: u8 = 1;
+/// 撞到樹（`world::Zone::trees`）。
+pub const BUMP_TREE: u8 = 2;
+/// 撞到另一台車（兩台都標）。
+pub const BUMP_CAR: u8 = 3;
 
 /// 衣裝數量：編號 `0..OUTFIT_COUNT`，新增衣裝只能加在尾端。外觀由客戶端決定，伺服器只驗證範圍、保存、轉送。
 /// 上行（`hello`、`outfit`）維持嚴格驗證；前端的下行驗證較寬鬆（0～255），舊分頁把不認得的編號顯示為預設衣裝。
-/// 與前端 `protocol.ts` 的 `OUTFIT_COUNT` 相同，由固定資料 `tests/protocol-v5.json` 的 `outfitCount` 鎖住。
+/// 與前端 `protocol.ts` 的 `OUTFIT_COUNT` 相同，由固定資料 `tests/protocol-v6.json` 的 `outfitCount` 鎖住。
 pub const OUTFIT_COUNT: u8 = 8;
 
 /// 衣裝編號驗證：必須是 `0..OUTFIT_COUNT` 內的整數（JSON 數字），否則回 `None`。
@@ -194,7 +203,8 @@ pub struct CarSnapshot {
 pub struct CarState {
     pub c: u8,
     pub occupied: bool,
-    pub bumped: bool,
+    /// 撞擊種類 [`BUMP_NONE`]／[`BUMP_WALL`]／[`BUMP_TREE`]／[`BUMP_CAR`]（0..=3）。
+    pub bump: u8,
     pub x: f64,
     pub z: f64,
     pub heading: f64,
@@ -208,7 +218,7 @@ impl From<crate::vehicles::world::CarState> for CarState {
         Self {
             c: s.c,
             occupied: s.occupied,
-            bumped: s.bumped,
+            bump: s.bump,
             x: s.x as f64,
             z: s.z as f64,
             heading: s.heading as f64,
@@ -441,7 +451,7 @@ impl ServerMessage {
 // | 3 | i16 | z，公分，同上 |
 // | 5 | u8 | heading，q = round(heading × 128 / π) mod 256；解碼 (q ≤ 128 ? q : q − 256) × π / 128，範圍 (−π, π] |
 //
-// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v5.json 的 binary 測試向量驗證一致。
+// 前端實作在 web/src/game/net/binaryFrame.ts；兩邊以 server/tests/protocol-v6.json 的 binary 測試向量驗證一致。
 
 /// 幀型：`moves`（增量）。
 pub const FRAME_MOVES: u8 = 0x01;
@@ -646,13 +656,13 @@ pub fn unwrap_started_at(low: u32, reference: f64) -> f64 {
     (reference + i64::from(delta)) as f64
 }
 
-// ---- cars 二進位幀（協定版本 5 起）----
+// ---- cars 二進位幀（協定版本 5 起；版本 6 起旗標帶撞擊種類）----
 //
 // 幀 = 1 byte 幀型 (0x04) + 2 bytes ack (u16 little-endian) + N 筆 × 12 bytes，0 ≤ N ≤ MAX_CARS。
 //
 // | 位移 | 型別 | 內容 |
 // | --- | --- | --- |
-// | 0 | u8 | bit 0～3: 車輛編號 c (0..15); bit 4: occupied (1=有人); bit 5: bumped (1=剛碰撞); bits 6～7: 保留為 0 |
+// | 0 | u8 | bit 0～3: 車輛編號 c (0..15); bit 4: occupied (1=有人); bits 5～6: bump = (flag >> 5) & 3（0=沒撞, 1=wall, 2=tree, 3=car）; bit 7: 保留為 0（不為 0 時整則拒絕） |
 // | 1 | i16 | x，公分（四捨五入，.5 遠離零），限 ±MAX_COORD_CM |
 // | 3 | i16 | z，公分，同上 |
 // | 5 | i16 | heading，round(heading * 32768 / π) 轉為 signed i16（π -> -32768），解碼 q * π / 32768 ∈ [-π, π) |
@@ -689,7 +699,7 @@ pub fn quantize_angvel(w: f64) -> i8 {
     val.clamp(-127.0, 127.0) as i8
 }
 
-/// 編碼一則 `cars` 幀。車輛數超過 `MAX_CARS` 或車輛編號超過 15 時回 `None`。
+/// 編碼一則 `cars` 幀。車輛數超過 `MAX_CARS`、車輛編號超過 15 或 `bump` 超過 3 時回 `None`。
 pub fn encode_cars(ack: u16, cars: &[CarState]) -> Option<Vec<u8>> {
     if cars.len() > MAX_CARS {
         return None;
@@ -698,12 +708,10 @@ pub fn encode_cars(ack: u16, cars: &[CarState]) -> Option<Vec<u8>> {
     out.push(FRAME_CARS);
     out.extend_from_slice(&ack.to_le_bytes());
     for car in cars {
-        if car.c as usize >= MAX_CARS {
+        if car.c as usize >= MAX_CARS || car.bump > BUMP_CAR {
             return None;
         }
-        let flags = (car.c & 0x0F)
-            | (if car.occupied { 0x10 } else { 0 })
-            | (if car.bumped { 0x20 } else { 0 });
+        let flags = (car.c & 0x0F) | (if car.occupied { 0x10 } else { 0 }) | (car.bump << 5);
         out.push(flags);
         out.extend_from_slice(&quantize_coord(car.x).to_le_bytes());
         out.extend_from_slice(&quantize_coord(car.z).to_le_bytes());
@@ -733,7 +741,7 @@ pub fn decode_cars(bytes: &[u8]) -> Option<(u16, Vec<CarState>)> {
     let mut cars = Vec::with_capacity(count);
     for chunk in body.chunks_exact(CAR_ENTRY_BYTES) {
         let flags = chunk[0];
-        if (flags & 0xC0) != 0 {
+        if (flags & 0x80) != 0 {
             return None;
         }
         let c = flags & 0x0F;
@@ -742,7 +750,7 @@ pub fn decode_cars(bytes: &[u8]) -> Option<(u16, Vec<CarState>)> {
         }
         seen_c |= 1 << c;
         let occupied = (flags & 0x10) != 0;
-        let bumped = (flags & 0x20) != 0;
+        let bump = (flags >> 5) & 0x03;
         let hx = i16::from_le_bytes([chunk[1], chunk[2]]);
         let hz = i16::from_le_bytes([chunk[3], chunk[4]]);
         if hx.unsigned_abs() > MAX_COORD_CM.unsigned_abs()
@@ -760,7 +768,7 @@ pub fn decode_cars(bytes: &[u8]) -> Option<(u16, Vec<CarState>)> {
         cars.push(CarState {
             c,
             occupied,
-            bumped,
+            bump,
             x: f64::from(hx) / 100.0,
             z: f64::from(hz) / 100.0,
             heading: dequantize_heading_i16(q_h),
@@ -855,7 +863,7 @@ mod tests {
                 .map(|n| format!(r#","resumeToken":"{}""#, "t".repeat(n)))
                 .unwrap_or_default();
             parse(format!(
-                r#"{{"t":"hello","v":5,"name":"{}"{token}}}"#,
+                r#"{{"t":"hello","v":6,"name":"{}"{token}}}"#,
                 "n".repeat(name)
             ))
         };
@@ -864,7 +872,7 @@ mod tests {
         assert!(!hello(MAX_RAW_NAME_BYTES + 1, None).within_limits());
         let session = |n: usize| {
             parse(format!(
-                r#"{{"t":"hello","v":5,"name":"a","session":"{}"}}"#,
+                r#"{{"t":"hello","v":6,"name":"a","session":"{}"}}"#,
                 "s".repeat(n)
             ))
         };

@@ -1,5 +1,5 @@
 import { envelope, smooth, type ClipFn } from '../../anim/AnimationSystem'
-import { synthesizeIncenseOffering, synthesizeQing } from '../../audio/AudioManager'
+import { synthesizeBow, synthesizeIncenseOffering, synthesizeQing } from '../../audio/AudioManager'
 import { FACE_SMILE, PIVOT_HEIGHT, PROP_INCENSE } from '../../render/AvatarFactory'
 import { censerForPosition, pickCenserSpot, pickCushion } from '../../world/worship'
 import { t } from '../../../i18n'
@@ -7,7 +7,7 @@ import type { GameplayModule } from '../types'
 import { installBell } from './bell'
 import { installChant } from './chant'
 
-/** 合十：引磬敲在彎腰到底的那一刻（秒；bow 片段的 envelope 預設在 30% 進度到底）。 */
+/** 合十：彎腰時衣袖窸窣，輕輕的一聲引磬落在彎腰到底的那一刻（秒；bow 片段的 envelope 預設在 30% 進度到底）。 */
 const BOW_MS = 2200
 const BOW_STRIKE = (0.3 * BOW_MS) / 1000
 
@@ -80,7 +80,7 @@ export const worshipModule: GameplayModule = {
       api.animations.registerClip('prostrate', prostrateClip),
       api.animations.registerClip('incense', incenseClip),
       api.audio.defineSfx('daqing', (ctx) => synthesizeIncenseOffering(ctx, 0)),
-      api.audio.defineSfx('qing1', (ctx) => synthesizeQing(ctx, [BOW_STRIKE])),
+      api.audio.defineSfx('bow', (ctx) => synthesizeBow(ctx, BOW_STRIKE)),
       api.audio.defineSfx('qing3',(ctx) => synthesizeQing(ctx, PROSTRATE_BOWS.map((b) => b.down), PROSTRATE_BOWS.map((b) => b.up))),
       api.audio.defineSfx('incense', (ctx) => synthesizeIncenseOffering(ctx, (INCENSE_MS * PLANT_AT) / 1000)),
       api.actions.register({
@@ -91,7 +91,7 @@ export const worshipModule: GameplayModule = {
         animation: 'bow',
         durationMs: BOW_MS,
         locksMovement: true,
-        sound: 'qing1',
+        sound: 'bow',
         onConfirmed: counted,
       }),
       api.actions.register({

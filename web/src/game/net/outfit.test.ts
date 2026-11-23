@@ -1,4 +1,4 @@
-import fixtures from '../../../../server/tests/protocol-v5.json'
+import fixtures from '../../../../server/tests/protocol-v6.json'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NetworkClient } from './NetworkClient'
 import { DEFAULT_OUTFIT, normalizeOutfit } from '../world/outfits'

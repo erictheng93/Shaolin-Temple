@@ -1,9 +1,9 @@
 /**
- * 前端與 Rust 伺服器之間的訊息格式（協定版本 5）。
+ * 前端與 Rust 伺服器之間的訊息格式（協定版本 6）。
  *
  * 位置廣播 moves／sync 與動作廣播 action 是 WebSocket 二進位幀（格式與位元組配置見 binaryFrame.ts），
  * 其餘訊息與所有上行都是 JSON 文字。編碼集中在 encode()/decode()；decode() 依收到的是字串或 ArrayBuffer 分流並驗證。
- * 與 Rust 伺服器共用固定資料 server/tests/protocol-v5.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
+ * 與 Rust 伺服器共用固定資料 server/tests/protocol-v6.json；增修規格見 docs/BACKEND_TASKS.md「協定增修」與 T8。
  *
  * 版本：前端與伺服器的協定版本不同時，前端在 hello 時收到 error unsupported_version，
  * 不再重連並提示重新整理，不會出現「連上了但訊息解不開」的靜默故障。
@@ -46,7 +46,7 @@ import {
 
 export { MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, MAX_CARS, type MoveTuple, type CarWireState }
 
-export const PROTOCOL_VERSION = 5
+export const PROTOCOL_VERSION = 6
 /** 單則訊息上限（bytes）。超過即丟棄，伺服器端也應設相同上限。 */
 export const MAX_MESSAGE_BYTES = 16 * 1024
 /**

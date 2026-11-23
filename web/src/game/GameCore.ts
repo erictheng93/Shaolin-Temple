@@ -1276,8 +1276,8 @@ export class GameCore {
       case 'cars':
         this.vehicles.onCars(m.ack, m.cars, performance.now())
         for (const c of m.cars) {
-          if (c.bumped) {
-            this.vehicleAudio.playBump(c.x, c.z, this.players.local.mover.x, this.players.local.mover.z)
+          if (c.bump !== 0) {
+            this.vehicleAudio.playBump(c, this.players.local.mover.x, this.players.local.mover.z, performance.now())
           }
         }
         this.wake()

@@ -56,6 +56,9 @@ const square = (x: number, z: number, half: number): Rect => ({
   maxZ: z + half,
 })
 
+/** 樹的碰撞方塊（SOLIDS 內的同一批物件；車輛模擬以參照辨識哪些是樹）。 */
+export const TREE_SOLIDS: ReadonlyArray<Rect> = TREES.map((t) => square(t.x, t.z, 0.5 * t.scale))
+
 /** 庭院建築與障礙物的原始邊界（未加上角色半徑）。 */
 export const SOLIDS: ReadonlyArray<Rect> = [
   HALL,
@@ -63,7 +66,7 @@ export const SOLIDS: ReadonlyArray<Rect> = [
   BOOTH,
   square(CENSER.x, CENSER.z, CENSER.radius),
   ...LANTERNS.map((l) => square(l.x, l.z, 0.35)),
-  ...TREES.map((t) => square(t.x, t.z, 0.5 * t.scale)),
+  ...TREE_SOLIDS,
 ]
 
 /** 碰撞用的障礙物（已含角色半徑的餘量）。 */

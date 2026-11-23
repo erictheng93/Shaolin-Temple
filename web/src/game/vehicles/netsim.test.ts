@@ -8,7 +8,7 @@ import { createSimWorld, type CarState, type SimWorld } from './simCore'
 import { dequantizeDrive, quantizeDrive, type DriveInput } from './drive'
 import type { CarFleet, CarInstance } from '../render/CarFleet'
 import { VEHICLES } from '../world/vehicles'
-import { SOLIDS, WORLD_BOUNDS } from '../world/layout'
+import { SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../world/layout'
 
 const RESEND_MS = 200
 const STEP_MS = 1000 / VEHICLES.physics.hz
@@ -66,7 +66,7 @@ function run(sc: Scenario): { frames: Frame[]; vehicles: Vehicles; corrections: 
   const start = sc.start ?? { x: 0, z: 0, heading: 0 }
 
   // ---- 伺服器 ----
-  const server: SimWorld = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES)
+  const server: SimWorld = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS)
   server.spawn(0, start.x, start.z, start.heading)
   server.setOccupied(0, true)
   if (sc.other) {
@@ -109,7 +109,7 @@ function run(sc: Scenario): { frames: Frame[]; vehicles: Vehicles; corrections: 
       return seq
     },
   }
-  const sim = new VehicleSim(createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES))
+  const sim = new VehicleSim(createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS))
   const vehicles = new Vehicles({
     fleet: fleet as unknown as CarFleet,
     net: net as never,

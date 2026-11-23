@@ -22,11 +22,11 @@ import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
 import { TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
 import { OBSTACLES } from '../src/game/world/layout.ts'
 import { VEHICLES, sessionState } from '../src/game/world/vehicles.ts'
-import { SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
+import { SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
 import { ACTION_CODES, MAX_CARS, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch, encodeCars } from '../src/game/net/binaryFrame.ts'
 
-const PROTOCOL_VERSION = 5 // 與 src/game/net/protocol.ts 一致
+const PROTOCOL_VERSION = 6 // 與 src/game/net/protocol.ts 一致
 const PROVIDERS = ['google', 'line']
 /** 改名頻率上限：與正式伺服器相同，約每 2 秒 1 次（超過的直接忽略）。 */
 const RENAME_MIN_INTERVAL_MS = 2000
@@ -182,7 +182,8 @@ const tuple = (p) => [p.n, r2(p.x), r2(p.z), r2(p.heading), p.moving ? 1 : 0]
 let nextId = 1
 
 await RAPIER.init()
-const sim = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES)
+const sim = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS)
+const pendingBump = new Map() // c -> { bump, force }，自上次廣播以來力最大的碰撞
 const cars = new Map() // c -> { c, kind, driver, emptySince, fadeAt, lastInputAt, lastActiveDrive }
 
 const carSnapshot = (c) => {
@@ -471,7 +472,11 @@ const physicsStep = () => {
       }
     }
   }
-  sim.step()
+  // 廣播（15 Hz）比物理步（30 Hz）稀疏：把每步的碰撞累積成「這個廣播間隔內力最大者」，廣播後清除
+  for (const b of sim.step()) {
+    const prev = pendingBump.get(b.c)
+    if (!prev || b.force > prev.force) pendingBump.set(b.c, { bump: b.bump, force: b.force })
+  }
 
   // 撞飛檢測：在庭院且未騎乘的玩家若被高速車輛撞擊
   for (const car of cars.values()) {
@@ -532,10 +537,12 @@ const physicsStep = () => {
 }
 const broadcastCars = () => {
   const allCars = sim.cars()
+  const wireCars = allCars.map((s) => ({ ...s, bump: pendingBump.get(s.c)?.bump ?? 0 }))
+  pendingBump.clear()
   if (!allCars.length) return
   for (const to of players.values()) {
     if (to.ws && to.ws.readyState === 1 && to.zone === 'courtyard') {
-      const frame = encodeCars(to.lastDriveSeq ?? 0, allCars)
+      const frame = encodeCars(to.lastDriveSeq ?? 0, wireCars)
       if (frame) to.ws.send(frame)
     }
   }

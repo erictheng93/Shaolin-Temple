@@ -1,7 +1,7 @@
 /**
  * 伺服器下行的二進位幀（協定版本 4；v4 未改變二進位幀）：moves／sync（0x01／0x02，自 v2 起）與 action（0x03，v3 起）。
  * 前端解碼、mock 伺服器編碼都用這一份實作；Rust 端在 server/src/protocol.rs（encode_batch／decode_batch、
- * encode_action／decode_action），兩邊以 server/tests/protocol-v5.json 的 binary 測試向量驗證一致。
+ * encode_action／decode_action），兩邊以 server/tests/protocol-v6.json 的 binary 測試向量驗證一致。
  *
  * 這個檔案不 import 任何東西、只用可被移除的型別語法，讓 `node scripts/mock-server.mjs` 能直接載入
  * （Node 22.18 起內建 TypeScript 型別移除）。
@@ -165,17 +165,24 @@ export function unwrapStartedAt(low: number, reference: number): number {
   return ref + d
 }
 
-// ---- cars（協定版本 5）----
+// ---- cars（協定版本 6）----
 
 export const FRAME_CARS = 0x04
 export const CAR_ENTRY_BYTES = 12
 export const MAX_CARS = 16
 export const MAX_VEL_CM_S = 3000
 
+/** 碰撞種類（旗標 byte 的 bit 5–6）：0 沒撞、1 建築與其他靜態物、2 樹、3 另一台車。 */
+export const BUMP_NONE = 0
+export const BUMP_WALL = 1
+export const BUMP_TREE = 2
+export const BUMP_CAR = 3
+export type Bump = 0 | 1 | 2 | 3
+
 export interface CarWireState {
   c: number
   occupied: boolean
-  bumped: boolean
+  bump: Bump
   x: number
   z: number
   heading: number
@@ -220,7 +227,8 @@ export function encodeCars(ack: number, cars: readonly CarWireState[]): Uint8Arr
     if (!Number.isInteger(car.c) || car.c < 0 || car.c >= MAX_CARS) return null
     let flag = car.c & 0x0f
     if (car.occupied) flag |= 0x10
-    if (car.bumped) flag |= 0x20
+    if (!Number.isInteger(car.bump) || car.bump < 0 || car.bump > 3) return null
+    flag |= car.bump << 5
     view.setUint8(o, flag)
     view.setInt16(o + 1, quantizeCoord(car.x), true)
     view.setInt16(o + 3, quantizeCoord(car.z), true)
@@ -248,12 +256,12 @@ export function decodeCars(data: ArrayBuffer | ArrayBufferView): { ack: number; 
   let seenC = 0
   for (let i = 0, o = 3; i < count; i++, o += CAR_ENTRY_BYTES) {
     const flag = view.getUint8(o)
-    if ((flag & 0xc0) !== 0) return null
+    if ((flag & 0x80) !== 0) return null
     const c = flag & 0x0f
     if ((seenC & (1 << c)) !== 0) return null
     seenC |= 1 << c
     const occupied = (flag & 0x10) !== 0
-    const bumped = (flag & 0x20) !== 0
+    const bump = ((flag >> 5) & 0x03) as Bump
     const x = view.getInt16(o + 1, true)
     const z = view.getInt16(o + 3, true)
     if (Math.abs(x) > MAX_COORD_CM || Math.abs(z) > MAX_COORD_CM) return null
@@ -265,7 +273,7 @@ export function decodeCars(data: ArrayBuffer | ArrayBufferView): { ack: number; 
     cars[i] = {
       c,
       occupied,
-      bumped,
+      bump,
       x: x / 100,
       z: z / 100,
       heading,

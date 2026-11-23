@@ -1,11 +1,19 @@
 //! 碰碰車物理世界：封裝 Rapier3D 物理管線、車輛、障礙物與步行者。
 
+use crate::protocol::{BUMP_CAR, BUMP_NONE, BUMP_TREE, BUMP_WALL};
 use crate::vehicles::drive::{CarMotion, DriveInput, drive, wrap_angle};
 use crate::vehicles::params::{Params, params};
 use crate::world::Zone;
 use rapier3d::prelude::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+// 碰撞體的 user_data 標記撞到它時的撞擊種類（`cars` 幀的 bump）。
+// 靜態物是 BUMP_WALL 或 BUMP_TREE；步行者是 BUMP_NONE（撞人由 knock 表示，不設 bump）；
+// 車由 collider_to_car 辨識（BUMP_CAR）。
+const USER_DATA_WALL: u128 = BUMP_WALL as u128;
+const USER_DATA_TREE: u128 = BUMP_TREE as u128;
+const USER_DATA_WALKER: u128 = BUMP_NONE as u128;
 
 const GROUP_STATIC: Group = Group::GROUP_1;
 const GROUP_CAR: Group = Group::GROUP_2;
@@ -39,7 +47,8 @@ fn static_groups() -> InteractionGroups {
 pub struct CarState {
     pub c: u8,
     pub occupied: bool,
-    pub bumped: bool,
+    /// 上次 [`VehicleWorld::clear_bumped`] 以來接觸力最大的那次撞擊的種類（`BUMP_*`，0 = 沒撞）。
+    pub bump: u8,
     pub x: f32,
     pub z: f32,
     pub heading: f32,
@@ -48,9 +57,30 @@ pub struct CarState {
     pub w: f32,
 }
 
+/// 一次撞擊：撞擊種類與接觸力（total force magnitude）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bump {
+    pub kind: u8,
+    pub force: f32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct StepReport {
-    pub bumped: Vec<u8>,
+    /// 這一步每台車接觸力最大的撞擊（索引是車號；只含超過門檻的接觸）。
+    pub bumps: [Option<Bump>; 16],
+}
+
+impl StepReport {
+    pub fn bump(&self, c: u8) -> Option<Bump> {
+        self.bumps.get(c as usize).copied().flatten()
+    }
+}
+
+/// 同一車號保留接觸力較大的撞擊。
+fn keep_stronger(slot: &mut Option<Bump>, bump: Bump) {
+    if slot.is_none_or(|old| bump.force > old.force) {
+        *slot = Some(bump);
+    }
 }
 
 struct CarSlot {
@@ -78,7 +108,8 @@ pub struct VehicleWorld {
     cars: [Option<CarSlot>; 16],
     collider_to_car: HashMap<ColliderHandle, u8>,
     walkers: HashMap<u8, RigidBodyHandle>,
-    last_bumped: Vec<u8>,
+    /// 上次 clear_bumped 以來每台車接觸力最大的撞擊（可能跨好幾個物理步）。
+    last_bumps: [Option<Bump>; 16],
 }
 
 impl VehicleWorld {
@@ -102,14 +133,20 @@ impl VehicleWorld {
         // 靜態邊界與障礙物（固定在同一個 static 剛體上）
         let ground_handle = bodies.insert(RigidBodyBuilder::fixed());
 
-        // 1. zone.solids
+        // 1. zone.solids（樹以 zone.trees 標記，其餘當牆）
         for rect in zone.solids {
             let cx = ((rect.min_x + rect.max_x) * 0.5) as f32;
             let cz = ((rect.min_z + rect.max_z) * 0.5) as f32;
             let hx = ((rect.max_x - rect.min_x) * 0.5) as f32;
             let hz = ((rect.max_z - rect.min_z) * 0.5) as f32;
+            let user_data = if zone.trees.contains(rect) {
+                USER_DATA_TREE
+            } else {
+                USER_DATA_WALL
+            };
             let col = ColliderBuilder::cuboid(hx, 1.0, hz)
                 .translation(Vector::new(cx, 0.0, cz))
+                .user_data(user_data)
                 .collision_groups(static_groups())
                 .restitution(p.car.restitution)
                 .friction(p.car.friction)
@@ -129,6 +166,7 @@ impl VehicleWorld {
         let bhz = (bz1 - bz0) * 0.5;
         let booth_col = ColliderBuilder::cuboid(bhx, 1.0, bhz)
             .translation(Vector::new(bcx, 0.0, bcz))
+            .user_data(USER_DATA_WALL)
             .collision_groups(static_groups())
             .restitution(p.car.restitution)
             .friction(p.car.friction)
@@ -177,6 +215,7 @@ impl VehicleWorld {
         for (center, wall_hx, wall_hz) in walls {
             let wall_col = ColliderBuilder::cuboid(wall_hx, 1.0, wall_hz)
                 .translation(center)
+                .user_data(USER_DATA_WALL)
                 .collision_groups(static_groups())
                 .restitution(p.car.restitution)
                 .friction(p.car.friction)
@@ -202,7 +241,7 @@ impl VehicleWorld {
             cars: Default::default(),
             collider_to_car: HashMap::new(),
             walkers: HashMap::new(),
-            last_bumped: Vec::new(),
+            last_bumps: [None; 16],
         }
     }
 
@@ -296,6 +335,7 @@ impl VehicleWorld {
                         .build();
                     let body_handle = self.bodies.insert(rb);
                     let col = ColliderBuilder::ball(0.35)
+                        .user_data(USER_DATA_WALKER)
                         .collision_groups(walker_groups())
                         .build();
                     self.colliders
@@ -365,7 +405,39 @@ impl VehicleWorld {
         struct ContactRecorder<'a> {
             collider_to_car: &'a HashMap<ColliderHandle, u8>,
             threshold: f32,
-            bumped: Mutex<Vec<u8>>,
+            bumps: Mutex<[Option<Bump>; 16]>,
+        }
+
+        impl ContactRecorder<'_> {
+            /// `me` 撞到 `other` 時記下的種類；`other` 是步行者（或沒有標記）時不算撞擊。
+            fn kind_against(&self, colliders: &ColliderSet, other: ColliderHandle) -> u8 {
+                if self.collider_to_car.contains_key(&other) {
+                    return BUMP_CAR;
+                }
+                match colliders.get(other).map(|c| c.user_data) {
+                    Some(USER_DATA_WALL) => BUMP_WALL,
+                    Some(USER_DATA_TREE) => BUMP_TREE,
+                    _ => BUMP_NONE,
+                }
+            }
+
+            fn record(
+                &self,
+                colliders: &ColliderSet,
+                me: ColliderHandle,
+                other: ColliderHandle,
+                force: f32,
+            ) {
+                let Some(&c) = self.collider_to_car.get(&me) else {
+                    return;
+                };
+                let kind = self.kind_against(colliders, other);
+                if kind == BUMP_NONE {
+                    return;
+                }
+                let mut bumps = self.bumps.lock().unwrap();
+                keep_stronger(&mut bumps[c as usize], Bump { kind, force });
+            }
         }
 
         impl<'a> EventHandler for ContactRecorder<'a> {
@@ -382,22 +454,14 @@ impl VehicleWorld {
                 &self,
                 _dt: f32,
                 _bodies: &RigidBodySet,
-                _colliders: &ColliderSet,
+                colliders: &ColliderSet,
                 contact_pair: &ContactPair,
                 total_force_magnitude: f32,
             ) {
                 if total_force_magnitude >= self.threshold {
-                    let mut b = self.bumped.lock().unwrap();
-                    if let Some(&c) = self.collider_to_car.get(&contact_pair.collider1)
-                        && !b.contains(&c)
-                    {
-                        b.push(c);
-                    }
-                    if let Some(&c) = self.collider_to_car.get(&contact_pair.collider2)
-                        && !b.contains(&c)
-                    {
-                        b.push(c);
-                    }
+                    let (a, b) = (contact_pair.collider1, contact_pair.collider2);
+                    self.record(colliders, a, b, total_force_magnitude);
+                    self.record(colliders, b, a, total_force_magnitude);
                 }
             }
 
@@ -412,7 +476,7 @@ impl VehicleWorld {
         let recorder = ContactRecorder {
             collider_to_car: &self.collider_to_car,
             threshold: self.params.car.mass * 3.0,
-            bumped: Mutex::new(Vec::new()),
+            bumps: Mutex::new([None; 16]),
         };
 
         // 3. 物理步進
@@ -432,17 +496,25 @@ impl VehicleWorld {
             &recorder,
         );
 
-        let bumped = recorder.bumped.into_inner().unwrap();
-        for &c in &bumped {
-            if !self.last_bumped.contains(&c) {
-                self.last_bumped.push(c);
-            }
-        }
-        StepReport { bumped }
+        let report = StepReport {
+            bumps: recorder.bumps.into_inner().unwrap(),
+        };
+        self.accumulate(&report);
+        report
     }
 
+    /// 把一步的撞擊併入這個廣播間隔的累積：每台車只留接觸力最大的那次。
+    fn accumulate(&mut self, report: &StepReport) {
+        for (slot, bump) in self.last_bumps.iter_mut().zip(report.bumps) {
+            if let Some(bump) = bump {
+                keep_stronger(slot, bump);
+            }
+        }
+    }
+
+    /// 廣播 `cars` 幀之後呼叫：清掉累積的撞擊，下一個間隔重新取最大者。
     pub fn clear_bumped(&mut self) {
-        self.last_bumped.clear();
+        self.last_bumps = [None; 16];
     }
 
     pub fn car(&self, c: u8) -> Option<CarState> {
@@ -457,7 +529,7 @@ impl VehicleWorld {
         Some(CarState {
             c,
             occupied: slot.occupied,
-            bumped: self.last_bumped.contains(&c),
+            bump: self.last_bumps[c as usize].map_or(BUMP_NONE, |b| b.kind),
             x: p.x,
             z: p.z,
             heading,
@@ -571,20 +643,132 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hitting_a_wall_reports_a_bump() {
-        let mut world = VehicleWorld::new(&COURTYARD);
-        let c = world.spawn(0.0, 2.0, PI).unwrap();
-        world.set_input(c, DriveInput { dir: PI, mag: 1.0 });
-        let mut bumped_seen = false;
+    /// 全速開到第一次超過門檻的撞擊為止，回傳那一步記下的種類與累積後 `car()` 回報的種類。
+    fn first_bump(world: &mut VehicleWorld, c: u8, dir: f32) -> (u8, u8) {
+        world.set_input(c, DriveInput { dir, mag: 1.0 });
         for _ in 0..300 {
             let report = world.step();
-            if report.bumped.contains(&c) {
-                bumped_seen = true;
-                break;
+            if let Some(bump) = report.bump(c) {
+                return (bump.kind, world.car(c).unwrap().bump);
             }
         }
-        assert!(bumped_seen, "hitting a wall must report a bump event");
+        panic!("car {c} never bumped into anything");
+    }
+
+    #[test]
+    fn hitting_a_wall_reports_a_bump() {
+        // 往 -z 撞香爐（中心 0, -1.5），香爐屬於「牆」類
+        let mut world = VehicleWorld::new(&COURTYARD);
+        let c = world.spawn(0.0, 2.0, PI).unwrap();
+        assert_eq!(world.car(c).unwrap().bump, BUMP_NONE);
+        assert_eq!(first_bump(&mut world, c, PI), (BUMP_WALL, BUMP_WALL));
+    }
+
+    #[test]
+    fn hitting_the_boundary_wall_reports_wall() {
+        // 往 +x 撞東側邊界牆（x = 19），路上沒有其他障礙物
+        let mut world = VehicleWorld::new(&COURTYARD);
+        let c = world.spawn(12.0, 8.0, FRAC_PI_2).unwrap();
+        assert_eq!(first_bump(&mut world, c, FRAC_PI_2), (BUMP_WALL, BUMP_WALL));
+    }
+
+    #[test]
+    fn hitting_a_tree_reports_tree() {
+        // 往 -z 撞樹（中心 -15, -4，半寬 0.5）
+        let mut world = VehicleWorld::new(&COURTYARD);
+        let c = world.spawn(-15.0, 1.0, PI).unwrap();
+        assert_eq!(first_bump(&mut world, c, PI), (BUMP_TREE, BUMP_TREE));
+    }
+
+    #[test]
+    fn two_cars_colliding_both_report_car() {
+        let mut world = VehicleWorld::new(&COURTYARD);
+        let a = world.spawn(0.0, 7.0, 0.0).unwrap();
+        let b = world.spawn(0.0, 13.0, PI).unwrap();
+        world.set_occupied(a, true);
+        world.set_occupied(b, true);
+        world.set_input(a, DriveInput { dir: 0.0, mag: 1.0 });
+        world.set_input(b, DriveInput { dir: PI, mag: 1.0 });
+        for _ in 0..300 {
+            let report = world.step();
+            if report.bump(a).is_some() || report.bump(b).is_some() {
+                assert_eq!(report.bump(a).map(|x| x.kind), Some(BUMP_CAR));
+                assert_eq!(report.bump(b).map(|x| x.kind), Some(BUMP_CAR));
+                assert_eq!(world.car(a).unwrap().bump, BUMP_CAR);
+                assert_eq!(world.car(b).unwrap().bump, BUMP_CAR);
+                world.clear_bumped();
+                assert_eq!(world.car(a).unwrap().bump, BUMP_NONE);
+                assert_eq!(world.car(b).unwrap().bump, BUMP_NONE);
+                return;
+            }
+        }
+        panic!("cars never collided");
+    }
+
+    #[test]
+    fn strongest_contact_in_an_interval_wins() {
+        let mut world = VehicleWorld::new(&COURTYARD);
+        let c = world.spawn(0.0, 8.0, 0.0).unwrap();
+        let step = |kind, force| {
+            let mut report = StepReport::default();
+            report.bumps[c as usize] = Some(Bump { kind, force });
+            report
+        };
+        // 同一步內：力較大的取代較小的，較小的不取代較大的
+        let mut slot = None;
+        keep_stronger(
+            &mut slot,
+            Bump {
+                kind: BUMP_WALL,
+                force: 100.0,
+            },
+        );
+        keep_stronger(
+            &mut slot,
+            Bump {
+                kind: BUMP_CAR,
+                force: 300.0,
+            },
+        );
+        keep_stronger(
+            &mut slot,
+            Bump {
+                kind: BUMP_TREE,
+                force: 200.0,
+            },
+        );
+        assert_eq!(slot.map(|b| b.kind), Some(BUMP_CAR));
+
+        // 跨物理步（同一個廣播間隔）：取最大者，與先後無關
+        world.accumulate(&step(BUMP_WALL, 100.0));
+        world.accumulate(&step(BUMP_TREE, 500.0));
+        world.accumulate(&step(BUMP_CAR, 200.0));
+        world.accumulate(&StepReport::default());
+        assert_eq!(world.car(c).unwrap().bump, BUMP_TREE);
+
+        // 廣播後清除，下一個間隔重新計算
+        world.clear_bumped();
+        assert_eq!(world.car(c).unwrap().bump, BUMP_NONE);
+        world.accumulate(&step(BUMP_WALL, 50.0));
+        assert_eq!(world.car(c).unwrap().bump, BUMP_WALL);
+    }
+
+    #[test]
+    fn walker_contact_does_not_set_bump() {
+        // 步行者快速撞上空車（空車與步行者有碰撞），不算 bump：撞人由 knock 表示
+        let mut world = VehicleWorld::new(&COURTYARD);
+        let c = world.spawn(0.0, 8.0, 0.0).unwrap();
+        for step in 0..=40 {
+            let z = 5.0 + step as f32 * 0.2;
+            world.set_walker(1, Some((0.0, z)));
+            let report = world.step();
+            assert_eq!(report.bump(c), None, "step {step}");
+            assert_eq!(world.car(c).unwrap().bump, BUMP_NONE, "step {step}");
+        }
+        assert!(
+            world.car(c).unwrap().z > 8.5,
+            "the walker must actually push the car"
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ import RAPIER from '@dimforge/rapier3d-compat'
 import { createSimWorld } from './simCore'
 import { wrapAngle } from './drive'
 import { VEHICLES } from '../world/vehicles'
-import { SOLIDS, WORLD_BOUNDS } from '../world/layout'
+import { SOLIDS, TREE_SOLIDS, TREES, WORLD_BOUNDS } from '../world/layout'
 
 interface DriveScriptFixture {
   start: { x: number; z: number; heading: number }
@@ -69,6 +69,56 @@ describe('simCore (碰碰車模擬核心)', () => {
     expect(state).not.toBeNull()
     // 邊界在 19，車體半寬半長約 0.75，車身不得穿過東牆
     expect(state!.x).toBeLessThan(WORLD_BOUNDS.maxX)
+    sim.free()
+  })
+
+  /** 跑到第一次有碰撞為止，回傳該步每台車的碰撞種類（c → bump）；60 步內沒撞到回傳空 Map。 */
+  function runUntilBump(sim: ReturnType<typeof createSimWorld>, inputs: Record<number, { dir: number; mag: number }>): Map<number, number> {
+    for (let i = 0; i < 90; i++) {
+      for (const [c, input] of Object.entries(inputs)) sim.setInput(Number(c), input)
+      const hits = sim.step()
+      if (hits.length > 0) {
+        for (const h of hits) expect(sim.state(h.c)!.bump).toBe(h.bump)
+        return new Map(hits.map((h) => [h.c, h.bump]))
+      }
+    }
+    return new Map()
+  }
+
+  it('車撞樹回報 2（bump）', () => {
+    const sim = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS)
+    const tree = TREES[1]! // (-15, -4)，四周空曠
+    sim.spawn(0, tree.x + 5, tree.z, -Math.PI / 2)
+    sim.setOccupied(0, true)
+    expect(runUntilBump(sim, { 0: { dir: -Math.PI / 2, mag: 1 } }).get(0)).toBe(2)
+    sim.free()
+  })
+
+  it('沒告知哪些是樹時，樹算 wall（1）；撞邊界牆也是 1', () => {
+    const noTrees = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES)
+    const tree = TREES[1]!
+    noTrees.spawn(0, tree.x + 5, tree.z, -Math.PI / 2)
+    noTrees.setOccupied(0, true)
+    expect(runUntilBump(noTrees, { 0: { dir: -Math.PI / 2, mag: 1 } }).get(0)).toBe(1)
+    noTrees.free()
+
+    const sim = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS)
+    sim.spawn(1, 17, 0, Math.PI / 2)
+    sim.setOccupied(1, true)
+    expect(runUntilBump(sim, { 1: { dir: Math.PI / 2, mag: 1 } }).get(1)).toBe(1)
+    sim.free()
+  })
+
+  it('兩車互撞都回報 3', () => {
+    const sim = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS)
+    // 庭院中段空曠處面對面對衝
+    sim.spawn(0, -3, 12, Math.PI / 2)
+    sim.spawn(1, 3, 12, -Math.PI / 2)
+    sim.setOccupied(0, true)
+    sim.setOccupied(1, true)
+    const hit = runUntilBump(sim, { 0: { dir: Math.PI / 2, mag: 1 }, 1: { dir: -Math.PI / 2, mag: 1 } })
+    expect(hit.get(0)).toBe(3)
+    expect(hit.get(1)).toBe(3)
     sim.free()
   })
 

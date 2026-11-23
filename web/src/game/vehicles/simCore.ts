@@ -1,5 +1,6 @@
 // 碰碰車前端／mock 共用物理模擬核心（封裝 Rapier3D，只 import 型別與 drive.ts，帶副檔名供 Node 直接載入）。
 
+import { BUMP_CAR, BUMP_TREE, BUMP_WALL, type Bump } from '../net/binaryFrame.ts'
 import { drive, wrapAngle, type CarMotion, type CarParams, type DriveInput } from './drive.ts'
 
 export type RapierModule = typeof import('@dimforge/rapier3d-compat').default
@@ -23,7 +24,8 @@ export interface VehicleParams {
 export interface CarState {
   c: number
   occupied: boolean
-  bumped: boolean
+  /** 上一個物理步的碰撞種類（0 沒撞；同一步多個接觸取力最大者）。 */
+  bump: Bump
   x: number
   z: number
   heading: number
@@ -47,7 +49,8 @@ export interface SimWorld {
   setInput(c: number, input: DriveInput | null): void
   setState(c: number, s: CarMotion & { x: number; z: number }): void
   setKinematic(c: number, kinematic: boolean): void
-  step(): number[]
+  /** 步進一步；回傳這一步超過門檻的接觸（每台車一筆，力最大者），供呼叫端跨步累積。 */
+  step(): Array<{ c: number; bump: Bump; force: number }>
   state(c: number): CarState | null
   cars(): CarState[]
   anyAwake(): boolean
@@ -73,6 +76,8 @@ export function createSimWorld(
   solids: ReadonlyArray<Rect>,
   bounds: Rect,
   p: VehicleParams,
+  /** solids 裡哪些是樹（以物件參照辨識）；其餘靜態物與邊界牆都算 wall。 */
+  treeSolids: ReadonlyArray<Rect> = [],
 ): SimWorld {
   let freed = false
 
@@ -85,12 +90,15 @@ export function createSimWorld(
   const world = new RAPIER.World({ x: 0, y: 0, z: 0 })
   world.timestep = 1.0 / 30.0
 
+  /** 靜態碰撞體 handle → 種類。 */
+  const staticKind = new Map<number, Bump>()
   let eventQueue: InstanceType<typeof RAPIER.EventQueue>
   try {
     eventQueue = new RAPIER.EventQueue(true)
 
     // 靜態邊界與障礙物（固定在同一個 static 剛體上）
     const groundHandle = world.createRigidBody(RAPIER.RigidBodyDesc.fixed())
+    const trees = new Set<Rect>(treeSolids)
 
     // 1. zone.solids
     const hasBooth = solids.some(
@@ -113,7 +121,8 @@ export function createSimWorld(
         .setRestitution(p.car.restitution)
         .setFriction(p.car.friction)
         .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-      world.createCollider(colDesc, groundHandle)
+      const col = world.createCollider(colDesc, groundHandle)
+      staticKind.set(col.handle, trees.has(rect) ? BUMP_TREE : BUMP_WALL)
     }
 
     // 2. 四面邊界牆
@@ -145,7 +154,7 @@ export function createSimWorld(
         .setRestitution(p.car.restitution)
         .setFriction(p.car.friction)
         .setActiveEvents(RAPIER.ActiveEvents.CONTACT_FORCE_EVENTS)
-      world.createCollider(wallCol, groundHandle)
+      staticKind.set(world.createCollider(wallCol, groundHandle).handle, BUMP_WALL)
     }
   } catch (err) {
     world.free()
@@ -163,7 +172,7 @@ export function createSimWorld(
 
   const cars = new Map<number, InternalCar>()
   const colliderToCar = new Map<number, number>()
-  let lastBumped: number[] = []
+  let lastBumped = new Map<number, Bump>()
 
   function spawn(c: number, x: number, z: number, heading: number): void {
     assertNotFreed()
@@ -246,7 +255,7 @@ export function createSimWorld(
     )
   }
 
-  function step(): number[] {
+  function step(): Array<{ c: number; bump: Bump; force: number }> {
     assertNotFreed()
     const dt = world.timestep
 
@@ -291,20 +300,30 @@ export function createSimWorld(
     world.step(eventQueue)
 
     // 3. 接觸力事件捕獲
-    const bumped = new Set<number>()
+    const best = new Map<number, { bump: Bump; force: number }>()
     const threshold = p.car.mass * 3.0
+    const note = (c: number, bump: Bump, force: number): void => {
+      const prev = best.get(c)
+      if (!prev || force > prev.force) best.set(c, { bump, force })
+    }
     eventQueue.drainContactForceEvents((event) => {
       const force = event.totalForceMagnitude()
-      if (force >= threshold) {
-        const c1 = colliderToCar.get(event.collider1())
-        if (c1 !== undefined) bumped.add(c1)
-        const c2 = colliderToCar.get(event.collider2())
-        if (c2 !== undefined) bumped.add(c2)
-      }
+      if (force < threshold) return
+      const h1 = event.collider1()
+      const h2 = event.collider2()
+      const c1 = colliderToCar.get(h1)
+      const c2 = colliderToCar.get(h2)
+      if (c1 !== undefined) note(c1, c2 !== undefined ? BUMP_CAR : (staticKind.get(h2) ?? BUMP_WALL), force)
+      if (c2 !== undefined) note(c2, c1 !== undefined ? BUMP_CAR : (staticKind.get(h1) ?? BUMP_WALL), force)
     })
 
-    lastBumped = Array.from(bumped)
-    return lastBumped
+    lastBumped = new Map()
+    const result: Array<{ c: number; bump: Bump; force: number }> = []
+    for (const [c, b] of best) {
+      lastBumped.set(c, b.bump)
+      result.push({ c, bump: b.bump, force: b.force })
+    }
+    return result
   }
 
   function state(c: number): CarState | null {
@@ -322,7 +341,7 @@ export function createSimWorld(
     return {
       c,
       occupied: car.occupied,
-      bumped: lastBumped.includes(c),
+      bump: lastBumped.get(c) ?? 0,
       x: pos.x,
       z: pos.z,
       heading,
@@ -357,6 +376,7 @@ export function createSimWorld(
     world.free()
     cars.clear()
     colliderToCar.clear()
+    staticKind.clear()
   }
 
   return {

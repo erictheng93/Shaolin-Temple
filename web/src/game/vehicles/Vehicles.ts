@@ -61,7 +61,7 @@ const MAX_EXTRAPOLATE_SEC = 0.25
 const OFFSET_DECAY = 10
 
 function restState(c: { c: number; driver: string | null; x: number; z: number; heading: number }): CarState {
-  return { c: c.c, occupied: c.driver !== null, bumped: false, x: c.x, z: c.z, heading: c.heading, vx: 0, vz: 0, w: 0 }
+  return { c: c.c, occupied: c.driver !== null, bump: 0, x: c.x, z: c.z, heading: c.heading, vx: 0, vz: 0, w: 0 }
 }
 
 function getNetworkConnection(): { saveData?: boolean; effectiveType?: string } | undefined {

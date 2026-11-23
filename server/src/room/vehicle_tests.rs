@@ -1935,7 +1935,7 @@ fn players_inside_the_game_zone_are_not_knocked() {
     assert!(room.players[&inner.id].knocked_until.is_none());
 }
 
-// 撞擊發生在不廣播的物理步（奇數步）時，下一則 cars 幀仍帶 bumped，廣播後清除。
+// 撞擊發生在不廣播的物理步（奇數步）時，下一則 cars 幀仍帶 bump（撞車 = 3），廣播後清除。
 #[test]
 fn a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame() {
     let every = u64::from(params().physics.broadcast_every_steps);
@@ -1961,8 +1961,10 @@ fn a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame() {
         seq += 1;
         room.drive(&rider, seq, DIR_EAST, 255, now);
         room.physics_step(now);
-        // 廣播步會清除 bumped，所以非廣播步之後看到的 bumped 一定來自這一步。
-        if !room.physics_steps.is_multiple_of(every) && room.vehicles.car(c).unwrap().bumped {
+        // 廣播步會清除 bump，所以非廣播步之後看到的 bump 一定來自這一步。
+        if !room.physics_steps.is_multiple_of(every)
+            && room.vehicles.car(c).unwrap().bump != crate::protocol::BUMP_NONE
+        {
             bump_step = Some(i);
             break;
         }
@@ -1983,12 +1985,13 @@ fn a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame() {
         })
         .expect("broadcast step sends a cars frame");
     let state = frame.iter().find(|s| s.c == c).expect("rider's car");
-    assert!(
-        state.bumped,
-        "the bump from the previous step must be reported"
+    assert_eq!(
+        state.bump,
+        crate::protocol::BUMP_CAR,
+        "the bump from the previous step must be reported as a car bump"
     );
 
-    // 已廣播過就清除：再兩步後的幀不帶 bumped
+    // 已廣播過就清除：再兩步後的幀不帶 bump
     for j in 2..=3 {
         room.physics_step(t0 + Duration::from_millis(33 * (i + j)));
     }
@@ -1999,7 +2002,10 @@ fn a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame() {
         })
         .last()
         .expect("next cars frame");
-    assert!(!frame.iter().find(|s| s.c == c).unwrap().bumped);
+    assert_eq!(
+        frame.iter().find(|s| s.c == c).unwrap().bump,
+        crate::protocol::BUMP_NONE
+    );
 }
 
 fn physics_step_count(metrics: &Metrics) -> u64 {
