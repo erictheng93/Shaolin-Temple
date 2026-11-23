@@ -509,9 +509,9 @@ v5 的 `cars` 幀每台車只有一個 `bumped` 位元，不說撞到什麼。v6
 
 - 上行 `{ t:'fair', open: boolean }`（`open` 缺少或不是布林＝無效訊息）。限速與 `outfit` 共用額度。
 - 房間記住 `fair_override = Some(open)`，之後 `session_is_open` 不看時鐘（也蓋過 `VEHICLE_SESSION=always`），直到房間結束或伺服器重啟；沒有「回到依時鐘」的指令。
-- 下行 `{ t:'fair', open }` 廣播給同房所有人（含本人、不分場景）；有手動狀態時，新進與恢復的連線在 `welcome` 之後補收一則。沒收過的客戶端依時鐘。
+- 下行 `{ t:'fair', open }` 廣播給同房所有人（含本人、不分場景）；有手動狀態、或伺服器設定為永遠開放（`VEHICLE_SESSION=always`，補 `open: true`；mock 的 `MOCK_SESSION=always` 相同）時，新進與恢復的連線在 `welcome` 之後補收一則。沒收過的客戶端依時鐘。手動關閉時，下車與淡出在處理 `fair` 的當下執行（`set_fair` 呼叫 `check_session`），不等下一個 tick。
 - 手動關閉沿用時段結束的處理（下一個 tick 的 `check_session`：騎士下車、每台車開始淡出）。
-- 測試：`fair_override_closes_and_reopens_the_session_for_everyone`；固定資料 `protocol-v5.json` 有效與無效的 `fair`。前端按鈕在庭院的廟會倒數標籤上方（`ui/RidePanel.vue`），mock 伺服器同規則。
+- 測試：`fair_override_closes_and_reopens_the_session_for_everyone`、`fair_reopen_claim_close_between_ticks_still_fades_the_car`、`always_open_session_sends_fair_open_after_welcome`；固定資料 `protocol-v5.json` 有效與無效的 `fair`。前端按鈕在庭院的廟會倒數標籤上方（`ui/RidePanel.vue`），mock 伺服器同規則。
 
 ### 玩家硬碰撞與每 tick 分離（2026-11-21，後端：Task 1～3）
 

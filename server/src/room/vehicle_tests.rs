@@ -2191,3 +2191,26 @@ async fn fair_reopen_claim_close_between_ticks_still_fades_the_car() {
         "car claimed during the reopen must fade on close: {msgs:?}"
     );
 }
+
+// 永遠開放的伺服器（VEHICLE_SESSION=always）在 welcome 之後補送 fair(true)：前端依本機時鐘判斷時段，
+// 否則每小時後半會自己擋下領車與上車。依時鐘的伺服器沒被手動開關過時不送。
+#[tokio::test(start_paused = true)]
+async fn always_open_session_sends_fair_open_after_welcome() {
+    let has_fair = |msgs: &[ServerMessage]| {
+        msgs.iter()
+            .any(|m| matches!(m, ServerMessage::Fair { open: true }))
+    };
+    let always = spawn_room(RoomConfig {
+        session_clock: SessionClock::AlwaysOpen,
+        ..RoomConfig::new(50)
+    });
+    let mut a = connect(&always).await;
+    assert!(has_fair(&a.drain()));
+    let clock = spawn_room(cfg());
+    let mut b = connect(&clock).await;
+    assert!(
+        !b.drain()
+            .iter()
+            .any(|m| matches!(m, ServerMessage::Fair { .. }))
+    );
+}

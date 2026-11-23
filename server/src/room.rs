@@ -795,8 +795,10 @@ impl Room {
         if link.tx.try_send(self.welcome(p)).is_err() {
             return false;
         }
-        // 廟會被手動開關過：新進與恢復的連線補上目前狀態（沒有就依時鐘，不送）。
-        match self.fair_override {
+        // 廟會被手動開關過，或設定為永遠開放：新進與恢復的連線補上目前狀態（沒有就依時鐘，不送）。
+        // 前端依本機時鐘判斷時段，不補送的話永遠開放的伺服器在每小時後半會被前端自己擋下領車與上車。
+        let always = self.config.session_clock == SessionClock::AlwaysOpen;
+        match self.fair_override.or(always.then_some(true)) {
             Some(open) => link.tx.try_send(ServerMessage::Fair { open }).is_ok(),
             None => true,
         }
