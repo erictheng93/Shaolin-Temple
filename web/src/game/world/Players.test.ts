@@ -255,3 +255,15 @@ describe('Players 騎車', () => {
     expect(r.x).toBe(-1.1)
   })
 })
+
+describe('Players 釋放', () => {
+  it('dispose 釋放 NPC（名牌貼圖與材質不在共用 tracker）並清空清單', () => {
+    const p = makePlayers()
+    p.addNpc({ name: '知客', outfit: 0, zone: 'courtyard', x: 0, y: 0, z: 0, heading: 0 })
+    const npcs = (p as unknown as { npcs: Array<{ avatar: { dispose(): void } }> }).npcs
+    const spy = vi.spyOn(npcs[0]!.avatar, 'dispose')
+    p.dispose()
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(npcs).toHaveLength(0)
+  })
+})
