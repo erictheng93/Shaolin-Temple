@@ -233,3 +233,25 @@ describe('Players 衣裝', () => {
     expect(p.remotes.get('b')?.outfit).toBe(3)
   })
 })
+
+describe('Players 騎車', () => {
+  it('下車的 car 與下一筆 moves 同一幀到達：保留落點，不被拉回車上', () => {
+    const anim = {
+      apply() {},
+      isActive: () => false,
+      play(s: { clip: string | null }, clip: string) {
+        s.clip = clip
+      },
+    }
+    const p = new Players({ add() {} } as never, anim as never, 50)
+    const r = p.upsert(snap('b', 7), 0)
+    p.update(100, 0.1, 0.1, () => ({ x: 0, z: 0, heading: 0 }))
+    expect(r.anim.clip).toBe('ride')
+    p.setRemoteTargetByN(7, -1.1, 0, 0, false, 150)
+    p.update(200, 0.1, 0.2, () => null)
+    expect(r.anim.clip).toBe(null)
+    expect(r.to.x).toBe(-1.1)
+    p.update(2000, 0.1, 2, () => null)
+    expect(r.x).toBe(-1.1)
+  })
+})

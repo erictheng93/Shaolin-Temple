@@ -804,16 +804,8 @@ export class GameCore {
       const dirX = Math.cos(yaw) * k.x + Math.sin(yaw) * k.y
       const dirZ = -Math.sin(yaw) * k.x + Math.cos(yaw) * k.y
       this.vehicles.setStick(dirX, dirZ)
-      // 先推進物理再讀騎士位置，騎士與車身才是同一個時間點。
+      // 騎士放上車的位置在 vehicles.update() 之後（沒有預測時車要到那裡才更新到這一幀）。
       this.vehicles.advance(dt, now)
-
-      const rider = this.vehicles.riderCar(this.selfId ?? '')
-      if (rider) {
-        local.mover.x = rider.x
-        local.mover.z = rider.z
-        local.mover.heading = rider.heading
-        local.mover.target = null
-      }
       moving = false
       local.anim.moving = false
       if (local.anim.clip !== 'ride' && local.anim.clip !== 'knocked') {
@@ -915,6 +907,13 @@ export class GameCore {
     // 車先算好這一幀的位置，騎在上面的人（players.update 會讀 riderCar）才不會比車晚一幀。
     const serverNow = now + this.serverOffset
     const vehiclesActive = this.vehicles.update(now, serverNow, dt)
+    const rider = riding ? this.vehicles.riderCar(this.selfId ?? '') : null
+    if (rider) {
+      local.mover.x = rider.x
+      local.mover.z = rider.z
+      local.mover.heading = rider.heading
+      local.mover.target = null
+    }
     const playersActive = this.players.update(now, dt, t, (id) => this.vehicles.riderCar(id))
     this.incense.update(now, t)
     const striking = this.zone === 'courtyard' && this.striker.update(now)

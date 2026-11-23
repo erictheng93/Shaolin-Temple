@@ -290,6 +290,9 @@ export class NetworkClient {
     if (this.lastDriveAt > -Infinity && now - this.lastDriveAt < minInterval) {
       return null
     }
+    // 上行壅塞：和 flush() 一樣暫緩，不讓過期的輸入堆在瀏覽器緩衝區。呼叫端每幀都帶最新輸入來，
+    // 這裡不記任何狀態，所以緩衝區消化後送出的就是當下最新的那一筆。
+    if (this.ws && this.ws.bufferedAmount > this.opts.maxBufferedBytes) return null
 
     const seq = this.driveSeq
     this.driveSeq = (this.driveSeq + 1) & 0xffff

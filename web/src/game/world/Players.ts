@@ -313,10 +313,8 @@ export class Players {
           this.anim.play(r.anim, 'ride', now, Infinity)
         }
       } else {
-        if (r.anim.clip === 'ride') {
-          r.anim.clip = null
-          this.snapTo(r, r.x, r.z, r.heading, now)
-        }
+        // 只清騎乘動畫：騎車時每幀 snapTo 到車上，端點已是車的位置；同一批收到的下車落點（pushSample）不可蓋掉。
+        if (r.anim.clip === 'ride') r.anim.clip = null
         // 看門狗：移動中卻太久沒收到位置（對方切到背景、封包遺失），視為已停止。
         if (r.serverMoving && now - r.lastMoveAt > REMOTE_MOVE_TIMEOUT_MS) r.serverMoving = false
         this.place(r, now)

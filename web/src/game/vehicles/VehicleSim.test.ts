@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import RAPIER from '@dimforge/rapier3d-compat'
-import { DISPLAY_LEAD, VehicleSim, isSeqLe } from './VehicleSim'
+import { DISPLAY_LEAD, VehicleSim, isSeqLe, keepOutside } from './VehicleSim'
 import { createSimWorld, type CarState } from './simCore'
 import { VEHICLES } from '../world/vehicles'
 import { SOLIDS, WORLD_BOUNDS } from '../world/layout'
@@ -421,3 +421,19 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
   })
 })
 
+
+describe('keepOutside', () => {
+  it('斜向經過石燈籠角落：包圍盒重疊但車身沒碰到，不推', () => {
+    // 燈籠在 (-4, 3)；車頭朝 π/4 時車身的 AABB 兩軸都和它重疊，但沿車頭方向是分開的
+    const pose = { x: -2.9, z: 4.1, heading: Math.PI / 4 }
+    keepOutside(pose, { x: -2.9, z: 4.1 })
+    expect(pose).toEqual({ x: -2.9, z: 4.1, heading: Math.PI / 4 })
+  })
+
+  it('旋轉的車身真的壓進燈籠：推回 ref 那一側', () => {
+    const pose = { x: -3.2, z: 3, heading: Math.PI / 4 }
+    keepOutside(pose, { x: -2, z: 3 })
+    expect(pose.x).toBeGreaterThan(-3.2)
+    expect(pose.z).toBe(3)
+  })
+})
