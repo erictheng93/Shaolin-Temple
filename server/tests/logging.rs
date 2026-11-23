@@ -48,6 +48,7 @@ async fn debug_logs_never_contain_the_query_string_or_secrets() {
                 issuers: vec!["https://issuer.example".into()],
             },
         }],
+        client_ip_header: None,
     })
     .unwrap();
     let options = ServerOptions {

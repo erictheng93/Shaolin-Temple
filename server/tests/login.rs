@@ -140,6 +140,9 @@ struct World {
 
 /// 啟動假提供者與遊戲伺服器。`kinds` 是要啟用的提供者。
 async fn world(kinds: &[ProviderKind]) -> World {
+    world_with(kinds, None).await
+}
+async fn world_with(kinds: &[ProviderKind], client_ip_header: Option<&str>) -> World {
     let fake = FakeState::default();
     let provider = serve(
         tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
@@ -167,6 +170,8 @@ async fn world(kinds: &[ProviderKind]) -> World {
         session_secret: SECRET.to_vec(),
         public_url: Some(public_url),
         providers,
+        client_ip_header: client_ip_header
+            .map(|h| axum::http::HeaderName::from_bytes(h.as_bytes()).unwrap()),
     })
     .unwrap();
     let options = ServerOptions {
@@ -1004,4 +1009,47 @@ async fn repeated_resumes_with_new_names_cannot_bypass_the_rename_limit() {
     // rename 與恢復共用額度：此時 rename 也被擋
     send(&mut a, rename("再洗")).await;
     assert!(names(&mut b, Duration::from_millis(300)).await.is_empty());
+}
+
+#[tokio::test]
+async fn auth_requests_are_rate_limited_per_client_ip_when_the_header_is_configured() {
+    use temple_server::auth::AUTH_IP_BURST;
+    let world = world_with(&[ProviderKind::Google], Some("x-real-ip")).await;
+    let start = |ip: &'static str| {
+        let request = world
+            .http
+            .get(format!(
+                "{}/auth/google/start?origin={ORIGIN}",
+                world.server.base
+            ))
+            .header("x-real-ip", ip);
+        async move { request.send().await.unwrap().status() }
+    };
+    for _ in 0..AUTH_IP_BURST as usize {
+        assert_eq!(start("198.51.100.1").await, 302);
+    }
+    assert_eq!(start("198.51.100.1").await, 429);
+    // callback 同一份額度
+    let callback = world
+        .http
+        .get(format!(
+            "{}/auth/google/callback?code=x&state=y",
+            world.server.base
+        ))
+        .header("x-real-ip", "198.51.100.1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(callback.status(), 429);
+    assert_eq!(start("198.51.100.2").await, 302, "other clients unaffected");
+
+    // 沒設定 CLIENT_IP_HEADER：不限速（交給反向代理）
+    let open = world_with(&[ProviderKind::Google], None).await;
+    for _ in 0..AUTH_IP_BURST as usize + 5 {
+        let status = open
+            .get(&format!("/auth/google/start?origin={ORIGIN}"), None)
+            .await
+            .status();
+        assert_eq!(status, 302);
+    }
 }

@@ -10,7 +10,8 @@
 //!    以 code＋verifier 向 token endpoint 換 ID token，檢查 `iss`／`aud`／`exp`／`nonce`；
 //!    簽發 session 權杖，302 回 `<origin>/#session=…&provider=…`。失敗一律 302 回 `#auth_error=cancelled|failed`。
 //!
-//! 伺服器不存任何登入狀態：流程狀態在 cookie／state（10 分鐘過期），登入狀態在 session 權杖（30 天）。
+//! 流程狀態在 cookie／state（10 分鐘過期），登入狀態在 session 權杖（30 天）。伺服器只在記憶體裡記
+//! 「哪些流程已經換過權杖」（每個流程只能換一次），以及設定 `CLIENT_IP_HEADER` 時每個來源的請求額度；重啟即清空。
 
 use crate::protocol::AuthKind;
 use axum::{
@@ -152,6 +153,84 @@ pub struct AuthConfig {
     /// 伺服器對外的 scheme＋主機（`AUTH_PUBLIC_URL`，已正規化、無結尾斜線）；有提供者時必填。
     pub public_url: Option<String>,
     pub providers: Vec<ProviderConfig>,
+    /// `CLIENT_IP_HEADER`：反向代理寫入用戶端位址的標頭（例如 `X-Real-Ip`、`CF-Connecting-IP`）。
+    /// 設定時 `/auth/{provider}/start`／`callback` 依它做每個來源的限速；`None` 不限速（交給代理）。
+    pub client_ip_header: Option<axum::http::HeaderName>,
+}
+
+/// 每個來源對 `/auth/{provider}/start`／`callback` 的額度：突發 [`AUTH_IP_BURST`] 次、每 3 秒補 1 次。
+/// 一次登入是 start＋callback 兩個請求，重試幾次也用不完；同一個 NAT 後面的多人（學校、公司）也夠用。
+pub const AUTH_IP_BURST: f64 = 20.0;
+pub const AUTH_IP_PER_SEC: f64 = 1.0 / 3.0;
+/// 同時追蹤的來源上限。超過時先清掉額度已補滿的；仍然滿就不追蹤新來源（放行）。
+const AUTH_IP_TRACKED: usize = 64 * 1024;
+
+/// 每個來源一個權杖桶。來源取自代理寫入的標頭，IPv6 以 /64 為單位（一般使用者一次拿到一整段 /64，
+/// 逐一換位址不能繞過）。標頭缺少或解析不出位址的請求共用一個桶：代理沒照設定寫標頭時，登入會明顯變慢而被發現，
+/// 而不是被繞過。
+struct IpLimiter {
+    header: axum::http::HeaderName,
+    buckets:
+        std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, (f64, std::time::Instant)>>,
+    warned_missing: std::sync::atomic::AtomicBool,
+}
+impl IpLimiter {
+    fn new(header: axum::http::HeaderName) -> Self {
+        Self {
+            header,
+            buckets: Default::default(),
+            warned_missing: Default::default(),
+        }
+    }
+    fn key(&self, headers: &HeaderMap) -> std::net::IpAddr {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        let ip = headers
+            .get(&self.header)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .and_then(|v| v.trim().parse::<IpAddr>().ok());
+        match ip {
+            Some(IpAddr::V6(v6)) => {
+                let s = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+            Some(v4) => v4,
+            None => {
+                if !self
+                    .warned_missing
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    tracing::warn!(header = %self.header, "CLIENT_IP_HEADER missing or invalid on an /auth request; check the reverse proxy");
+                }
+                IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            }
+        }
+    }
+    /// 有額度就扣一次並回 true。
+    fn allow(&self, headers: &HeaderMap, now: std::time::Instant) -> bool {
+        let key = self.key(headers);
+        let Ok(mut buckets) = self.buckets.lock() else {
+            return false;
+        };
+        let refill = |(tokens, at): (f64, std::time::Instant)| {
+            (tokens + now.saturating_duration_since(at).as_secs_f64() * AUTH_IP_PER_SEC)
+                .min(AUTH_IP_BURST)
+        };
+        if !buckets.contains_key(&key) && buckets.len() >= AUTH_IP_TRACKED {
+            buckets.retain(|_, b| refill(*b) < AUTH_IP_BURST);
+            if buckets.len() >= AUTH_IP_TRACKED {
+                // ponytail: 一分鐘內超過 6.5 萬個不同來源（大型殭屍網路）時不追蹤新來源，仍有換權杖的併發上限擋著
+                return true;
+            }
+        }
+        let tokens = buckets.get(&key).map_or(AUTH_IP_BURST, |b| refill(*b));
+        if tokens < 1.0 {
+            buckets.insert(key, (tokens, now));
+            return false;
+        }
+        buckets.insert(key, (tokens - 1.0, now));
+        true
+    }
 }
 
 /// HMAC-SHA256 簽章。每種用途（session 權杖、流程 cookie、state）在 MAC 輸入前加上不同的前綴，
@@ -238,6 +317,7 @@ pub struct Auth {
     /// token endpoint 請求的併發名額（[`MAX_CONCURRENT_EXCHANGES`]）。
     exchange_slots: tokio::sync::Semaphore,
     used_flows: std::sync::Mutex<UsedFlows>,
+    ip_limiter: Option<IpLimiter>,
 }
 impl Auth {
     pub fn new(config: AuthConfig) -> Result<Self, String> {
@@ -259,7 +339,14 @@ impl Auth {
             secure_cookie,
             exchange_slots: tokio::sync::Semaphore::new(MAX_CONCURRENT_EXCHANGES),
             used_flows: Default::default(),
+            ip_limiter: config.client_ip_header.map(IpLimiter::new),
         })
+    }
+    /// 每個來源的限速（`CLIENT_IP_HEADER` 沒設定時一律放行）。
+    fn over_limit(&self, headers: &HeaderMap) -> bool {
+        self.ip_limiter
+            .as_ref()
+            .is_some_and(|l| !l.allow(headers, std::time::Instant::now()))
     }
     fn provider(&self, name: &str) -> Option<&ProviderConfig> {
         let kind = ProviderKind::parse(name)?;
@@ -357,11 +444,15 @@ pub struct StartQuery {
 pub async fn start(
     State(state): State<crate::AppState>,
     Path(provider): Path<String>,
+    headers: HeaderMap,
     Query(query): Query<StartQuery>,
 ) -> Response {
     let Some(auth) = state.auth.as_deref() else {
         return plain(StatusCode::NOT_FOUND, "unknown provider");
     };
+    if auth.over_limit(&headers) {
+        return plain(StatusCode::TOO_MANY_REQUESTS, "too many requests");
+    }
     let Some(p) = auth.provider(&provider) else {
         return plain(StatusCode::NOT_FOUND, "unknown provider");
     };
@@ -441,6 +532,9 @@ pub async fn callback(
     let Some(auth) = state.auth.as_deref() else {
         return plain(StatusCode::NOT_FOUND, "unknown provider");
     };
+    if auth.over_limit(&headers) {
+        return plain(StatusCode::TOO_MANY_REQUESTS, "too many requests");
+    }
     let Some(p) = auth.provider(&provider) else {
         return plain(StatusCode::NOT_FOUND, "unknown provider");
     };
@@ -673,6 +767,49 @@ mod tests {
     const NOW: u64 = 1_794_787_200;
     fn signer() -> Signer {
         Signer::new(b"0123456789abcdef0123456789abcdef".to_vec())
+    }
+
+    #[test]
+    fn ip_limiter_buckets_per_source_ipv6_per_64_and_missing_headers_share_one() {
+        let limiter = IpLimiter::new(axum::http::HeaderName::from_static("x-real-ip"));
+        let from = |ip: Option<&str>| {
+            let mut h = HeaderMap::new();
+            if let Some(ip) = ip {
+                h.insert("x-real-ip", HeaderValue::from_str(ip).unwrap());
+            }
+            h
+        };
+        let t0 = std::time::Instant::now();
+        let a = from(Some("203.0.113.7"));
+        for _ in 0..AUTH_IP_BURST as usize {
+            assert!(limiter.allow(&a, t0));
+        }
+        assert!(!limiter.allow(&a, t0), "burst used up");
+        assert!(
+            limiter.allow(&from(Some("203.0.113.8")), t0),
+            "other sources unaffected"
+        );
+        // 第一個值（X-Forwarded-For 式的清單）才是用戶端
+        assert!(!limiter.allow(&from(Some("203.0.113.7, 10.0.0.1")), t0));
+        // 3 秒補 1 次
+        assert!(limiter.allow(&a, t0 + Duration::from_secs(3)));
+        assert!(!limiter.allow(&a, t0 + Duration::from_secs(3)));
+        // IPv6 同一段 /64 共用
+        for i in 0..AUTH_IP_BURST as usize {
+            assert!(limiter.allow(&from(Some(&format!("2001:db8:1:2::{i:x}"))), t0));
+        }
+        assert!(!limiter.allow(&from(Some("2001:db8:1:2:ffff::1")), t0));
+        assert!(limiter.allow(&from(Some("2001:db8:1:3::1")), t0));
+        // 缺標頭或不是位址：共用一個桶，不會因為每次都不同而被繞過
+        for i in 0..AUTH_IP_BURST as usize {
+            let junk = if i % 2 == 0 {
+                from(None)
+            } else {
+                from(Some(&format!("junk{i}")))
+            };
+            assert!(limiter.allow(&junk, t0));
+        }
+        assert!(!limiter.allow(&from(None), t0));
     }
 
     #[test]

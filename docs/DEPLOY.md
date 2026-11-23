@@ -175,6 +175,7 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
 | `AUTH_PUBLIC_URL` | 瀏覽器連到 server 的 scheme＋主機，不含路徑，例如 `https://game.example.com`。用來組 redirect URI；https 時流程 cookie 加 `Secure`。 |
 | `GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET` | Google OAuth 用戶端，要成對設定。 |
 | `LINE_CHANNEL_ID`／`LINE_CHANNEL_SECRET` | LINE Login channel，要成對設定。 |
+| `CLIENT_IP_HEADER` | 選填。反向代理寫入用戶端位址的標頭名稱，設定後 `/auth/{provider}/start`、`callback` 依它做每個來源的限速（見下方「每個來源的頻率限制」）。**只能填代理一定會覆寫的標頭**，填錯（用戶端能自己帶的標頭）等於可被繞過。不是合法的標頭名稱時啟動失敗。 |
 
 某個提供者的 id 與 secret 只設一個、或設了提供者卻缺 `SESSION_SECRET`／`AUTH_PUBLIC_URL`，伺服器啟動失敗並印出缺少的變數。
 
@@ -184,7 +185,23 @@ npx wrangler pages deploy dist --project-name shaolin-temple --branch main
 
 `/auth` 路徑也要轉給 `server`（Domains 分頁多一筆 Path `/auth`，見部署步驟 6），否則 `/auth/google/start` 會被前端的 SPA 回退吃掉。登入結束時伺服器 302 回 `<前端 origin>/#session=…`，前端與 server 不同網域也可以（權杖在網址 fragment，不靠 cookie；`/auth/providers` 對 `ALLOWED_ORIGINS` 內的來源回 CORS 標頭）。
 
-建議在反向代理（Traefik 的 RateLimit middleware 或 Cloudflare 的 Rate limiting rules）對 `/auth` 加每個 IP 的頻率限制（例如每分鐘 30 次）：伺服器本身只限制同時進行的換權杖請求（8 個，滿了最多排隊 2 秒）、每個登入流程只能換一次，不限制每個來源的次數（伺服器看到的位址是代理的）。**未實測。**
+### 每個來源的頻率限制（issue #31）
+
+伺服器本身一律限制同時進行的換權杖請求（8 個，滿了最多排隊 2 秒），且每個登入流程只能換一次。但 `/start` 隨時能拿新流程，所以**正式開放登入前，每個來源的次數一定要限制**，兩種做法擇一或並用：
+
+1. **伺服器內建（`CLIENT_IP_HEADER`）**：每個來源突發 20 次、每 3 秒補 1 次（start＋callback 合計；一次登入用 2 次），IPv6 以 /64 為一個來源；超過回 429。伺服器在代理後面，看到的連線位址都是代理的，所以要告訴它哪個標頭是代理寫的：
+
+   | 部署 | `CLIENT_IP_HEADER` | 前提（不成立時標頭可被偽造） |
+   | --- | --- | --- |
+   | Dokploy（Traefik），DNS 灰雲 | `X-Real-Ip` | Traefik 的 entryPoint 沒有 `forwardedHeaders.insecure: true`、`trustedIPs` 不含公網範圍：此時 Traefik 會刪掉用戶端帶來的 `X-Real-Ip` 等標頭，再以實際連線位址重設（Traefik 原始碼 `pkg/middlewares/forwardedheaders`）。Dokploy 的預設值沒查到官方文件，**部署時要檢查 `/etc/dokploy/traefik/traefik.yml`**。`server` 容器只 `expose`、不對外開埠（compose 已是如此）。 |
+   | Dokploy，Cloudflare 橘雲 | `CF-Connecting-IP` | 主機防火牆的 80／443 只允許 [Cloudflare 的 IP 範圍](https://www.cloudflare.com/ips/)，否則任何人直接連主機 IP 就能自帶這個標頭。不能用 `X-Real-Ip`：Traefik 看到的是 Cloudflare 節點，所有人會擠在少數幾個來源。 |
+   | POC（Cloudflare Tunnel） | `CF-Connecting-IP` | 只有 Tunnel 連得到伺服器：伺服器綁 `0.0.0.0`，開發機的防火牆要擋掉區網連 8080／8081 的連線。 |
+
+   標頭缺少或不是位址的請求共用一個桶：代理沒照設定寫標頭時，登入會明顯變慢並在日誌留一則警告，而不是被繞過。
+2. **反向代理**：Traefik 的 RateLimit middleware，或 Cloudflare 的 Rate limiting rules，對 `/auth/` 每個 IP 限制。**未實測。**
+
+上線前的驗證：同一台機器連打 `curl -s -o /dev/null -w "%{http_code}
+" "https://<server>/auth/google/start?origin=<ALLOWED_ORIGINS 之一>"` 25 次，前 20 次 302、之後 429；另一台機器（或手機網路）仍是 302；自帶 `-H "X-Real-Ip: 1.2.3.4"`（或 `CF-Connecting-IP`）連打，仍在第 21 次被擋（證明標頭被代理覆寫，不是用戶端說了算）。
 
 ### redirect URI（在提供者的主控台登記）
 

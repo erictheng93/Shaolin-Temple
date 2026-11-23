@@ -96,6 +96,7 @@ impl Config {
 /// - `SESSION_SECRET`：簽章 session 權杖與登入流程的金鑰，至少 32 bytes；設了但太短啟動失敗。
 /// - `AUTH_PUBLIC_URL`：伺服器對外的 scheme＋主機，`redirect_uri` = `<AUTH_PUBLIC_URL>/auth/<provider>/callback`。
 /// - `GOOGLE_CLIENT_ID`／`GOOGLE_CLIENT_SECRET`、`LINE_CHANNEL_ID`／`LINE_CHANNEL_SECRET`。
+/// - `CLIENT_IP_HEADER`：反向代理寫入用戶端位址的標頭；設定時 `/auth` 依它做每個來源的限速（不是合法標頭名稱時啟動失敗）。
 ///
 /// 提供者只設了 id 或 secret 其中一個、或設了提供者卻缺 `SESSION_SECRET`／`AUTH_PUBLIC_URL`，都啟動失敗並說明缺什麼。
 fn parse_auth(
@@ -159,10 +160,17 @@ fn parse_auth(
             endpoints,
         });
     }
+    let client_ip_header = get("CLIENT_IP_HEADER")?
+        .map(|v| {
+            axum::http::HeaderName::from_bytes(v.trim().as_bytes())
+                .map_err(|_| format!("CLIENT_IP_HEADER is not a valid header name: {v}"))
+        })
+        .transpose()?;
     Ok(secret.map(|secret| AuthConfig {
         session_secret: secret.into_bytes(),
         public_url,
         providers,
+        client_ip_header,
     }))
 }
 
@@ -224,6 +232,7 @@ mod tests {
             ("ALLOWED_ORIGINS", "https://example.com/path"),
             ("RUST_LOG", "[broken"),
             ("VEHICLE_SESSION", "sometimes"),
+            ("CLIENT_IP_HEADER", "not a header"),
         ] {
             assert!(
                 Config::parse(|k| Ok((k == key).then(|| value.into()))).is_err(),
@@ -334,6 +343,32 @@ mod tests {
         assert_eq!(
             config.allowed_origins,
             ["http://localhost:5173", "https://a.example"]
+        );
+    }
+
+    #[test]
+    fn client_ip_header_is_optional_and_parsed_as_a_header_name() {
+        let secret = "s".repeat(MIN_SECRET_BYTES);
+        let with = |header: Option<&str>| {
+            let secret = secret.clone();
+            let header = header.map(str::to_owned);
+            Config::parse(move |k| {
+                Ok(match k {
+                    "SESSION_SECRET" => Some(secret.clone()),
+                    "CLIENT_IP_HEADER" => header.clone(),
+                    _ => None,
+                })
+            })
+            .unwrap()
+            .auth
+            .unwrap()
+            .client_ip_header
+        };
+        assert_eq!(with(None), None);
+        assert_eq!(with(Some("")), None);
+        assert_eq!(
+            with(Some(" CF-Connecting-IP ")).unwrap(),
+            "cf-connecting-ip"
         );
     }
 }
