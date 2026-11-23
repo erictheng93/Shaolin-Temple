@@ -83,6 +83,7 @@ const zhHant = {
   'server.claimCooldown': '剛領過車，稍後再領',
   'server.dismountFirst': '下車才能進殿',
   'server.sessionClosed': '廟會尚未開始，暫停領車與上車',
+  'server.rateLimited': '操作太頻繁，請稍後再試',
   'server.error': '伺服器發生問題，請稍後再試',
 
   'chat.label': '聊天',

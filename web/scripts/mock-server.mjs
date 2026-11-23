@@ -848,10 +848,12 @@ wss.on('connection', (ws) => {
         if (typeof m.text === 'string' && m.text.length <= 512 && takeChatToken(me)) broadcastChat(me, m.text)
         break
       case 'fair':
-        // 關閉時的下車與淡出由 physicsStep 的「開放 → 關閉」偵測處理
+        // 當下就做「開放 → 關閉」偵測：只靠 physicsStep 取樣會漏掉兩步之間的「開 → 領車 → 關」
         if (typeof m.open !== 'boolean' || !takeToken(me, 'fair')) break
         fairOverride = m.open
         broadcast({ t: 'fair', open: fairOverride })
+        if (sessionWasOpen && !fairOverride) closeSession()
+        sessionWasOpen = fairOverride
         break
       case 'outfit':
         if (!takeToken(me, 'outfit') || !validOutfit(m.outfit) || m.outfit === me.outfit) break

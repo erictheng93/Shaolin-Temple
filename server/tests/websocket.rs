@@ -356,3 +356,22 @@ async fn trailing_slash_origin_setting_still_accepts_browser_origin() {
     let mut ws = connect(&server).await; // 瀏覽器送的是沒有結尾斜線的 Origin
     text(&mut ws, HELLO).await;
 }
+
+#[tokio::test]
+async fn rate_limited_claim_gets_an_explicit_error() {
+    let server = server().await;
+    let mut ws = connect(&server).await;
+    text(&mut ws, HELLO).await;
+    // action 額度突發 3：第 4 則 claim 被限速，前端的抽車視窗只等 car 或 error，必須收到明確的錯誤。
+    for _ in 0..4 {
+        text(&mut ws, r#"{"t":"claim"}"#).await;
+    }
+    loop {
+        if next_text(&mut ws)
+            .await
+            .contains(r#""code":"rate_limited""#)
+        {
+            break;
+        }
+    }
+}
