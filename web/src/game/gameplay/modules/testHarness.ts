@@ -21,6 +21,7 @@ export function setup() {
   const positions = new Map<string, { x: number; z: number; zone: string }>()
   const played: Array<{ name: string; gain?: number; rate?: number; at?: number; lowpass?: number; t: number }> = []
   const swings: number[] = []
+  const swingStrengths: number[] = []
   const strikes: number[] = []
   const clock = { offset: 0 }
   const api: GameplayApi = {
@@ -39,7 +40,10 @@ export function setup() {
     events,
     setStat: (key, _label, value) => (value === null ? stats.delete(key) : stats.set(key, value)),
     scene: {
-      swingBell: () => swings.push(performance.now()),
+      swingBell: (strength = 1) => {
+        swings.push(performance.now())
+        swingStrengths.push(strength)
+      },
       strikeBell: (startedAt) => strikes.push(startedAt),
       offerIncense: (id) => offered.push(id),
     },
@@ -51,7 +55,7 @@ export function setup() {
     playerPosition: (id) => positions.get(id) ?? null,
   }
   const uninstall = worshipModule.install(api)
-  return { anim, actions, events, sfx, stats, offered, positions, played, swings, strikes, clock, uninstall }
+  return { anim, actions, events, sfx, stats, offered, positions, played, swings, swingStrengths, strikes, clock, uninstall }
 }
 
 export const pose = (anim: AnimationSystem, clip: string, duration: number, p: number) => {

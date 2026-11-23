@@ -61,7 +61,7 @@ const en: Record<MessageKey, string> = {
   'reason.censersTaken': 'Every place at the incense burners is taken. Please wait a moment.',
   'reason.bellInCourtyard': 'The bell is in the courtyard. Please step outside to ring it.',
   'reason.bellTaken': 'Every place at the bell is taken. Please wait a moment.',
-  'reason.bellRinging': 'The bell is still resonating. Please wait about {seconds} s.',
+  'action.waiting': 'In position, waiting: {action}',
 
   'move.unreachable': 'You can’t get there. Please try another spot.',
   'move.blocked': 'The way was blocked.',

@@ -61,7 +61,7 @@ const ja: Record<MessageKey, string> = {
   'reason.censersTaken': '香炉の前はふさがっています。少しお待ちください',
   'reason.bellInCourtyard': '鐘楼は境内にあります。本堂を出てから鐘をついてください',
   'reason.bellTaken': '鐘楼の前はふさがっています。少しお待ちください',
-  'reason.bellRinging': '鐘の余韻が残っています。{seconds}秒ほどお待ちください',
+  'action.waiting': '位置につきました。{action}を待っています',
 
   'move.unreachable': 'そこへは行けません。別の場所をお試しください',
   'move.blocked': '道がふさがっていて、たどり着けませんでした',

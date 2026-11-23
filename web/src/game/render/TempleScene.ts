@@ -633,8 +633,8 @@ export interface TempleScene {
   walkSurface: THREE.Object3D
   /** 環境動畫（燈籠、香煙、樹冠、落葉、晾衣、鐘擺）。t 為秒。 */
   update(t: number, dt: number): void
-  /** 觸發鐘的擺動。 */
-  swingBell(): void
+  /** 觸發鐘的擺動；strength 是強度倍率（預設 1，合力敲鐘時略大）。 */
+  swingBell(strength?: number): void
   /** 是否有需要持續重繪的短暫動態（例如鐘擺尚未停止）。 */
   hasTransientMotion(): boolean
 }
@@ -845,8 +845,8 @@ export function buildTempleScene(
         bellPivot.rotation.x = bellAngle
       }
     },
-    swingBell() {
-      bellVel += 1.2
+    swingBell(strength = 1) {
+      bellVel += 1.2 * strength
     },
     hasTransientMotion() {
       return bellAngle !== 0 || bellVel !== 0

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { BELL_MS, BELL_STATIONS, STRIKER, strikerAngle } from '../world/bell'
+import { BELL_JOIN_MS, BELL_MS, BELL_STATIONS, STRIKER, strikerAngle } from '../world/bell'
 import type { ResourceTracker } from './ResourceTracker'
 
 /** 兩條吊繩在圓木上的位置（沿 z，相對圓木中心）。 */
@@ -48,8 +48,12 @@ export class BellStriker {
     this.mesh.visible = v
   }
 
-  /** 開始一次撞鐘（startedAt 為動作開始的 performance.now 毫秒）。同時有兩人敲時以較晚開始的為準。 */
+  /**
+   * 開始一次撞鐘（startedAt 為動作開始的 performance.now 毫秒）。與目前時間軸相差 BELL_JOIN_MS 內是同一聲（合力敲鐘的加入者），
+   * 不重來也不跳動；更遠的才是另一聲，以較晚開始的為準（晚到的較舊一聲不把撞木拉回去）。
+   */
   strike(startedAt: number): void {
+    if (Math.abs(startedAt - this.startedAt) <= BELL_JOIN_MS) return
     this.startedAt = Math.max(this.startedAt, startedAt)
   }
 

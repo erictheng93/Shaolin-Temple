@@ -80,12 +80,26 @@ export function strikerAngle(ms: number): number {
 /** 個人冷卻：同一個人兩次敲鐘至少間隔 10 秒。 */
 export const BELL_COOLDOWN_MS = 10_000
 /**
- * 鐘聲未歇：任何人撞到鐘之後 5 秒內（或已有人正在敲、還沒撞到），按敲鐘會提示稍候，不出發。
- * 撞到的時刻在按下後至少 BELL_HIT_MS，所以實際兩聲的間隔至少約 6.75 秒，前一聲的基音已衰減到約 1/8。
+ * 鐘聲未歇：任何人撞到鐘之後 5 秒內（或已有人正在敲、還沒撞到），按敲鐘會先走到空站位就位等候，靜默期一結束才開始。
+ * 撞到的時刻在開始後 BELL_HIT_MS，所以實際兩聲的間隔至少約 6.75 秒，前一聲的基音已衰減到約 1/8。
  */
 export const BELL_QUIET_MS = 5_000
-/** 聽者在殿內：隔著殿牆聽到的固定音量（殿內座標與庭院不同，不依距離算）。 */
-export const BELL_HALL_GAIN = 0.45
+/**
+ * 合力敲鐘：一聲鐘由第一個開始的 bell 動作開啟（開始時間 t0），之後開始時間與 t0 相差不超過這麼久的 bell 動作
+ * 都算加入同一聲（一起拉同一根撞木），不另外響、不重啟撞木、不另外擺鐘。
+ */
+export const BELL_JOIN_MS = 700
+/** 一聲最多幾人一起拉（三條拉繩）。 */
+export const BELL_CREW_MAX = BELL_STATIONS.length
+/**
+ * 依一起拉的人數（1～3）的音量倍率。最大為 1：鐘的音檔峰值 0.8，靠近鐘時距離倍率約 0.93，
+ * 再乘超過 1 的倍率在音效與總音量都開到最大時會削波（音訊鏈沒有壓縮器）。所以一人敲比以前小約 3 dB，三人與以前一人一樣大。
+ */
+export const BELL_CREW_GAIN: readonly number[] = [0.7, 0.85, 1]
+/** 依人數的鐘擺強度（swingBell 的倍率，1 為一人）。 */
+export const BELL_CREW_SWING: readonly number[] = [1, 1.1, 1.2]
+/** 聽者在殿內：隔著殿牆聽到的固定音量（殿內座標與庭院不同，不依距離算）。乘上一人的 BELL_CREW_GAIN 約為 0.45。 */
+export const BELL_HALL_GAIN = 0.64
 /** 聽者在殿內：低通濾波的截止頻率（Hz），留下低沉的嗡聲、去掉金屬的亮度，像隔著殿牆；可憑耳朵調。 */
 export const BELL_HALL_LOWPASS_HZ = 700
 /** 兩人幾乎同時敲（網路延遲內都通過了上面的檢查）：與前一聲相隔不到 2 秒的鐘聲只以 0.35 倍音量播放。 */
@@ -109,4 +123,42 @@ export function bellGain(listenerDistance: number, prevHitAt: number, hitAt: num
 /** 聽者在殿內時一聲鐘的音量：固定 BELL_HALL_GAIN，合併規則與 bellGain 相同。 */
 export function bellHallGain(prevHitAt: number, hitAt: number): number {
   return hitAt - prevHitAt < BELL_MERGE_MS ? BELL_HALL_GAIN * BELL_MERGE_GAIN : BELL_HALL_GAIN
+}
+
+/** 一起拉的人數的音量倍率（超出 1～BELL_CREW_MAX 時取最近的一端）。 */
+export function bellCrewGain(crew: number): number {
+  return BELL_CREW_GAIN[Math.min(BELL_CREW_MAX, Math.max(1, Math.round(crew))) - 1]!
+}
+
+/** 一聲鐘：開啟它的動作開始時間 t0（performance.now 毫秒）與已加入的玩家（含開啟者）。 */
+export interface BellRing {
+  t0: number
+  players: readonly string[]
+}
+
+/**
+ * 一個 bell 動作（playerId 在 startedAt 開始）屬於哪一聲：
+ * - `join`：與某一聲的 t0 相差不超過 BELL_JOIN_MS（前後皆可），加入 t0 最接近的那一聲；
+ * - `dup`：該玩家已在那一聲（重複的事件），忽略；
+ * - `open`：都不合，另開一聲（t0 = startedAt）。
+ *
+ * 一聲的 t0 一旦開啟就不再改變（撞木與排好的鐘聲不跳動）。事件不依 startedAt 順序到達時，
+ * 晚到但開始得較早的動作只要在窗口內，同樣加入既有的那一聲，不把 t0 往前移；離得更遠的另開一聲（由 bellGain 的 2 秒合併規則壓低）。
+ */
+export function bellRingSlot(
+  rings: ReadonlyArray<BellRing>,
+  playerId: string,
+  startedAt: number,
+): { kind: 'open' } | { kind: 'join'; index: number } | { kind: 'dup' } {
+  let index = -1
+  let best = Infinity
+  rings.forEach((r, i) => {
+    const d = Math.abs(startedAt - r.t0)
+    if (d <= BELL_JOIN_MS && d < best) {
+      best = d
+      index = i
+    }
+  })
+  if (index < 0) return { kind: 'open' }
+  return rings[index]!.players.includes(playerId) ? { kind: 'dup' } : { kind: 'join', index }
 }

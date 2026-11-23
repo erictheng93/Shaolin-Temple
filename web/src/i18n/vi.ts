@@ -61,7 +61,7 @@ const vi: Record<MessageKey, string> = {
   'reason.censersTaken': 'Trước lư hương đã kín chỗ. Xin chờ một lát.',
   'reason.bellInCourtyard': 'Gác chuông ở sân chùa. Xin ra khỏi chánh điện rồi thỉnh chuông.',
   'reason.bellTaken': 'Chỗ thỉnh chuông đã có người. Xin chờ một lát.',
-  'reason.bellRinging': 'Tiếng chuông còn ngân. Xin chờ khoảng {seconds} giây.',
+  'action.waiting': 'Đã vào vị trí, đang chờ: {action}',
 
   'move.unreachable': 'Không đi tới đó được. Xin thử chỗ khác.',
   'move.blocked': 'Bị chắn đường, chưa tới nơi.',

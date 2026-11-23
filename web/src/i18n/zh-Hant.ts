@@ -64,7 +64,7 @@ const zhHant = {
   'reason.censersTaken': '香爐前都有人，請稍候再試',
   'reason.bellInCourtyard': '鐘亭在庭院，出殿後再敲',
   'reason.bellTaken': '鐘亭前都有人，請稍候再試',
-  'reason.bellRinging': '鐘聲未歇，約 {seconds} 秒後再敲',
+  'action.waiting': '已就位，等候{action}…',
 
   'move.unreachable': '走不過去，請換個位置再試',
   'move.blocked': '被擋住了，沒有走到',
