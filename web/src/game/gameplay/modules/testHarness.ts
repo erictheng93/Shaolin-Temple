@@ -19,7 +19,7 @@ export function setup() {
   const stats = new Map<string, unknown>()
   const offered: string[] = []
   const positions = new Map<string, { x: number; z: number; zone: string }>()
-  const played: Array<{ name: string; gain?: number; rate?: number; at?: number; t: number }> = []
+  const played: Array<{ name: string; gain?: number; rate?: number; at?: number; lowpass?: number; t: number }> = []
   const swings: number[] = []
   const strikes: number[] = []
   const clock = { offset: 0 }

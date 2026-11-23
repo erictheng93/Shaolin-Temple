@@ -3,6 +3,7 @@ import { FACE_SMILE, PIVOT_HEIGHT } from '../../render/AvatarFactory'
 import {
   BELL_CENTER,
   BELL_COOLDOWN_MS,
+  BELL_HALL_LOWPASS_HZ,
   BELL_HIT_MS,
   BELL_MS,
   BELL_PULL_MS,
@@ -90,13 +91,15 @@ export function installBell(api: GameplayApi): () => void {
           const zone = api.playerPosition('local')?.zone
           if (zone === 'courtyard') api.scene.swingBell()
           let gain: number
+          let lowpass: number | undefined
           if (zone === 'courtyard') {
             const me = api.localPosition()
             gain = bellGain(Math.hypot(me.x - BELL_CENTER.x, me.z - BELL_CENTER.z), lastPlayedAt, hitAt)
           } else if (zone === 'hall') {
             gain = bellHallGain(lastPlayedAt, hitAt)
+            lowpass = BELL_HALL_LOWPASS_HZ
           } else return
-          api.audio.play('bell', { gain })
+          api.audio.play('bell', lowpass === undefined ? { gain } : { gain, lowpass })
           lastPlayedAt = hitAt
         },
         Math.max(0, hitAt - performance.now()),

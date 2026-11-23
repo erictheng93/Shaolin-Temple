@@ -96,7 +96,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - 遠端玩家做鎖定移動的動作期間（`RemotePlayer.lockedUntil`）不播走路、不取消動作片段，晚到的最後一筆位置只滑過去。收到不鎖定的新動作時解除鎖定；過期才到的動作仍會取代原本的片段（`hidden` 的動作此時仍通知玩法）。
 - 可提前結束的鎖定動作：動作定義的 `endAction`（例如誦經的 `chant_end`）。鎖定期間推方向鍵、搖桿、點擊地面或按任何動作時，`GameCore.interruptLocal()` 解除鎖定並執行 `endAction`（一般動作 id，經伺服器轉送，其他玩家也停止）；按同一個動作只起身。`hidden: true` 的動作不顯示在動作列。
 - 動畫片段的第三個參數是目前時間（`ClipFn(rig, p, now)`），`api.clockOffset()`（伺服器時間 − performance.now）讓片段與聲音對齊共同的節拍；`audio.play(name, { at })` 在 AudioContext 時間軸上預排聲音。
-- 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。鐘聲全寺都聽得見：殿內的玩家以固定的較小音量（`BELL_HALL_GAIN`，`bellHallGain()`，不看距離、同樣有 2 秒合併規則）聽到，鐘只在庭院才擺（殿內不更新庭院場景）。
+- 敲鐘：站位、撞木時間軸與聲音規則在 `world/bell.ts`；撞木是動態物件 `render/BellStriker.ts`（GameCore 擁有，1 個 draw call，只在庭院），不在 TempleScene 的 root、不與烘焙材質共用。鐘聲與鐘擺在撞到的那一刻（`startedAt + BELL_HIT_MS`）由各客戶端推算。鐘聲全寺都聽得見：殿內的玩家以固定的較小音量（`BELL_HALL_GAIN`，`bellHallGain()`，不看距離、同樣有 2 秒合併規則）聽到，鐘只在庭院才擺（殿內不更新庭院場景）；殿內聽到的另加低通濾波（`BELL_HALL_LOWPASS_HZ`，`play()` 的 `lowpass` 選項）像隔著牆，庭院的鐘聲不濾波。
 - 動作允許清單有兩份，同時是 `action` 幀的動作編號對照表（索引即編號）：`server/src/world.rs` 的 `ACTIONS`（負載工具直接用它）與 `web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（mock 伺服器直接用它）。兩邊測試都比對固定資料的 `binary.action.codes`，不一致就失敗。新增動作只能加在尾端（同時改兩份與產生腳本）；改順序或刪除要升協定版本。
 - 香爐裡的香與煙是動態物件 `render/IncenseSystem.ts`（GameCore 擁有，2 個 draw call，沒香時 0），不併入靜態幾何、不與庭院烘焙材質共用。
 

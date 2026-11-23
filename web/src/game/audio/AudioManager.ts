@@ -384,8 +384,9 @@ export class AudioManager {
    * 播放短音效。gain 可用於距離衰減。超過同時發聲上限或音效音量為 0 時略過。
    * at 是預定的播放時間（performance.now 毫秒）：在 AudioContext 的時間軸上排程，不受計時器誤差影響
    * （節拍類的聲音先排好接下來幾百毫秒內的拍點）；已經過去或沒給時立即播放。
+   * lowpass 是低通濾波的截止頻率（Hz），有給才在音源與音量節點之間插一個濾波器（隔牆感），沒給時節點圖不變。
    */
-  play(name: string, opts: { gain?: number; rate?: number; at?: number } = {}): void {
+  play(name: string, opts: { gain?: number; rate?: number; at?: number; lowpass?: number } = {}): void {
     const ctx = this.ctx
     const buffer = this.buffers.get(name)
     if (!ctx || !buffer || !this.sfxBus || ctx.state !== 'running' || this.voices >= MAX_VOICES) return
@@ -397,11 +398,20 @@ export class AudioManager {
     src.playbackRate.value = opts.rate ?? 1
     const g = ctx.createGain()
     g.gain.value = gain
-    src.connect(g).connect(this.sfxBus)
+    let filter: BiquadFilterNode | null = null
+    if (opts.lowpass !== undefined) {
+      filter = ctx.createBiquadFilter()
+      filter.type = 'lowpass'
+      filter.frequency.value = opts.lowpass
+      src.connect(filter).connect(g).connect(this.sfxBus)
+    } else {
+      src.connect(g).connect(this.sfxBus)
+    }
     this.voices++
     src.onended = () => {
       this.voices--
       src.disconnect()
+      filter?.disconnect()
       g.disconnect()
     }
     src.start(opts.at === undefined ? 0 : ctx.currentTime + Math.max(0, (opts.at - performance.now()) / 1000))

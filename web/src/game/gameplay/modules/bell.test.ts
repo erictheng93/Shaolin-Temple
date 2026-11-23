@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BELL_HALL_GAIN, BELL_HIT_MS, BELL_MS, BELL_PULL_MS, BELL_QUIET_MS, BELL_STATIONS } from '../../world/bell'
+import { BELL_HALL_GAIN, BELL_HALL_LOWPASS_HZ, BELL_HIT_MS, BELL_MS, BELL_PULL_MS, BELL_QUIET_MS, BELL_STATIONS } from '../../world/bell'
 import type { SpotContext } from '../../world/worship'
 import { pose, setup } from './testHarness'
 
@@ -71,6 +71,7 @@ describe('敲鐘', () => {
     expect(played.map((p) => p.name)).toEqual(['bell', 'bell'])
     expect(played[1]!.gain!).toBeCloseTo(played[0]!.gain! * 0.35)
     expect(played[0]!.gain!).toBeGreaterThan(0.3)
+    expect(played.every((p) => p.lowpass === undefined)).toBe(true)
   })
 
   it('聽者在殿內：以殿內固定音量播放（不依座標），鐘不擺（庭院場景沒在更新）；太晚收到（背景回來）不補響', () => {
@@ -80,6 +81,7 @@ describe('敲鐘', () => {
     vi.advanceTimersByTime(BELL_MS)
     expect(swings).toHaveLength(0)
     expect(played.map((p) => [p.name, p.gain])).toEqual([['bell', BELL_HALL_GAIN]])
+    expect(played[0]!.lowpass).toBe(BELL_HALL_LOWPASS_HZ)
     positions.set('local', { x: 0, z: 5, zone: 'courtyard' })
     events.emit('actionPerformed', bellEvent('p-a', performance.now() - BELL_HIT_MS - 2000))
     vi.advanceTimersByTime(BELL_MS)

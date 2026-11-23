@@ -86,6 +86,8 @@ export const BELL_COOLDOWN_MS = 10_000
 export const BELL_QUIET_MS = 5_000
 /** 聽者在殿內：隔著殿牆聽到的固定音量（殿內座標與庭院不同，不依距離算）。 */
 export const BELL_HALL_GAIN = 0.45
+/** 聽者在殿內：低通濾波的截止頻率（Hz），留下低沉的嗡聲、去掉金屬的亮度，像隔著殿牆；可憑耳朵調。 */
+export const BELL_HALL_LOWPASS_HZ = 700
 /** 兩人幾乎同時敲（網路延遲內都通過了上面的檢查）：與前一聲相隔不到 2 秒的鐘聲只以 0.35 倍音量播放。 */
 export const BELL_MERGE_MS = 2_000
 const BELL_MERGE_GAIN = 0.35
