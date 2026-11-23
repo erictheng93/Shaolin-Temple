@@ -48,6 +48,10 @@ const BOT_HOLD_S = { chant: 25, prostrate: 9, bell: 4 }
 // 機器人敲鐘時遵守與客戶端相同的「鐘聲未歇」：任何人敲鐘後 7 秒內不再敲（合力的一組算一聲，見 startBellCrew）
 const BOT_BELL_GAP_MS = 7000
 let lastBellAt = 0
+// 合力敲鐘：與「這一聲」開啟者的開始時間相差不超過此值算同一聲（抄自前端 world/bell.ts 的 BELL_JOIN_MS；該檔 import i18n，Node 載入不了）
+const BELL_JOIN_MS = 700
+// 庭院目前這一聲的開啟時刻（實際廣播的時刻）。與 lastBellAt 不同：lastBellAt 是機器人「鐘聲未歇」用，機器人整組在排程當下就更新
+let bellOpenAt = 0
 const ZONES = ['courtyard', 'hall']
 // 機器人隨機走動的範圍（未避開障礙物，僅供測試）
 const ROAM = {
@@ -145,6 +149,12 @@ const VIEW_DELAY_TICKS = 2
 const ROOT_MS = { prostrate: 6000, chant: 24000, incense: 6000, bell: 4000 }
 const collides = (p) => !p.riding && p.riding !== 0 && players.get(p.id) === p
 const rooted = (p) => (p.rootedUntil ?? 0) > Date.now()
+/** 庭院的 bell 在廣播當下呼叫：加入目前這一聲（定點結束＝開啟者開始＋時長）或另開一聲。 */
+const rootBell = (p) => {
+  const t = Date.now()
+  if (t - bellOpenAt > BELL_JOIN_MS) bellOpenAt = t
+  p.rootedUntil = bellOpenAt + ROOT_MS.bell
+}
 /** 庭院檢查邊界與障礙物；殿內只有 mock 不知道的擺設，這裡一律放行。 */
 const validAt = (zone) => (x, z) =>
   zone !== 'courtyard' ||
@@ -679,7 +689,12 @@ const tickBellCrew = () => {
     }
     m.rootedUntil = now() + ROOT_MS.bell + 400
     release(m, BOT_HOLD_S.bell + 0.4)
-    setTimeout(() => players.get(m.id) === m && broadcastAction(m, 'bell'), Math.random() * 400)
+    // 上面的 +400 只涵蓋送出前的延遲；實際送出時改以 rootBell 對齊開啟者（≤ 開啟者開始＋4000，而機器人 4.4 秒後才走）
+    setTimeout(() => {
+      if (players.get(m.id) !== m) return
+      rootBell(m)
+      broadcastAction(m, 'bell')
+    }, Math.random() * 400)
   }
 }
 
@@ -917,7 +932,8 @@ wss.on('connection', (ws) => {
         seenReq.set(m.reqId, ack)
         send(ws, ack)
         if (ack.ok && m.id === 'bell') lastBellAt = now()
-        if (ack.ok && ROOT_MS[m.id]) me.rootedUntil = now() + ROOT_MS[m.id]
+        if (ack.ok && m.id === 'bell' && me.zone === 'courtyard') rootBell(me)
+        else if (ack.ok && ROOT_MS[m.id]) me.rootedUntil = now() + ROOT_MS[m.id]
         if (ack.ok && m.id === 'chant_end') me.rootedUntil = 0
         if (ack.ok) broadcastAction(me, m.id)
         break

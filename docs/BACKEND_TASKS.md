@@ -527,6 +527,7 @@ v5 的 `cars` 幀每台車只有一個 `bumped` 位元，不說撞到什麼。v6
   - 到位寬限：已部署的客戶端先送 `action`、下一次送出佇列才送最後的 `stop`，所以動作開始後 `ROOTED_SETTLE = 500` 毫秒內的第一個 `stop`（`moving = false`），若離起點不超過 `ROOTED_SETTLE_DISTANCE = 0.6` 公尺，就把起點重新錨定到該位置並保留免推；每次動作只能重新錨定一次，移動中的位置、逾時或更遠的 `stop` 照舊解除。
   - 授予冷卻：兩次授予免推至少間隔 `ROOTED_GRANT_GAP = 2` 秒，冷卻內的定點動作照常接受與廣播，只是不授予免推，避免連送動作把寬限串成緩慢的免推步行。
   - 場景限定：只有屬於目前場景的動作才授予免推（`world::action_rooted_in`）：`prostrate`、`chant` 只在 `hall`，`bell` 只在 `courtyard`，`incense` 兩邊皆可；不符時動作仍照常接受與廣播。
+  - 合力敲鐘：房間記住「目前這一聲」的開啟時刻（`Room::bell_open`）。庭院裡被接受的 `bell` 與它相差不超過 `world::BELL_JOIN_MS = 700` 毫秒是加入（開啟時刻不變），定點結束時刻對齊開啟者（開啟時刻 + 3,400 毫秒），與前端 `bellRingSlot` 的分組與 `retimeAction` 一致；否則另開一聲（`world::bell_ring_start`）。不論是否授予免推（冷卻中、騎車中）都參與分組，因為前端只看動作事件；殿內送出的 `bell` 不參與。`action` 幀的 `startedAt` 仍是每個人自己的開始時刻。
   - 本人的位置被接受且不需校正時，清除待送的碰撞校正（`correction_pending`），避免稍後過時的 `Sync` 把行走中的玩家拉回。
 - 殿門範圍往庭院延伸 0.35 公尺，前後端的庭院入口矩形邊界都是 `-4.65`。伺服器驗證出入口的 `PORTAL_TOLERANCE = 0.5` 公尺。
 
@@ -535,7 +536,7 @@ v5 的 `cars` 幀每台車只有一個 `bumped` 位元，不說撞到什麼。v6
 | 碰撞純函式：對頭碰撞平分、rooted 不動、牆體阻擋停下、容差內不推、重合點確定性推離、每 tick 最大位移限制、rooted 雙方不推 | `src/collide.rs` 單元測試；`collide-script.json` 共用測試向量 |
 | 位置驗證與延遲補償：推動站立玩家、推動者收到 sync 且出現在 moves、定點動作不可推動、鞠躬可被推動、不穿牆推動、200ms 前離開的位置不糾正、撞飛與騎乘不參與碰撞、糾正節流限制 | `src/room/tests.rs`（`walking_into_a_standing_player_pushes_them_and_slows_the_walker`、`pushed_player_receives_a_sync_and_appears_in_moves`、`player_in_a_station_action_cannot_be_pushed`、`bowing_player_can_be_pushed`、`player_is_not_pushed_through_an_obstacle`、`moving_into_a_spot_the_other_player_left_200ms_ago_is_not_corrected`、`riders_knocked_and_grace_players_do_not_collide`、`two_players_pressing_against_each_other_get_at_most_one_sync_per_correction_gap`） |
 | 每 tick 分離與殿門範圍：同點出生自動漂移分開、殿門前人群不阻礙進殿切換、玩家可推擠穿過閒置人群線、分離絕不移動 rooted 玩家 | `src/room/tests.rs`（`players_spawned_on_the_same_point_drift_apart`、`a_crowd_standing_in_front_of_the_hall_door_does_not_stop_entry`、`a_player_can_push_through_a_line_of_idle_players`、`separation_never_moves_a_rooted_player`） |
-| 審查回歸：移動者與被推者在推擠停止後各收到一筆最新位置校正。連續小步離開定點或換場景會解除免推 | `src/room/tests.rs`（`collision_corrections_coalesce_and_flush_after_the_last_push`、`moving_away_from_a_station_action_or_changing_zones_clears_rooting`、`late_stop_after_a_station_action_re_anchors_once`、`settle_grace_expires_and_does_not_apply_to_moving_positions`、`station_actions_only_grant_rooting_after_the_grant_gap`、`rooting_is_only_granted_for_actions_of_the_current_zone`、`pushed_player_whose_own_position_is_accepted_gets_no_stale_sync`） |
+| 審查回歸：移動者與被推者在推擠停止後各收到一筆最新位置校正。連續小步離開定點或換場景會解除免推 | `src/room/tests.rs`（`collision_corrections_coalesce_and_flush_after_the_last_push`、`moving_away_from_a_station_action_or_changing_zones_clears_rooting`、`late_stop_after_a_station_action_re_anchors_once`、`settle_grace_expires_and_does_not_apply_to_moving_positions`、`station_actions_only_grant_rooting_after_the_grant_gap`、`rooting_is_only_granted_for_actions_of_the_current_zone`、`bell_joiner_within_the_window_is_rooted_until_the_opener_ends`、`bell_outside_the_window_opens_its_own_ring`、`later_joiners_align_to_the_opener_not_to_earlier_joiners`、`bell_sent_from_the_hall_does_not_touch_the_courtyard_ring`、`ungranted_bell_still_opens_a_ring`、`pushed_player_whose_own_position_is_accepted_gets_no_stale_sync`） |
 
 未做到／限制：
 - 前端已同步殿門範圍。前端硬碰撞與 mock 伺服器整合屬於 Task 4～6。

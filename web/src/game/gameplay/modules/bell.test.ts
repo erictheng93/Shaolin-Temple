@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  BELL_CENTER,
   BELL_CREW_SWING,
   BELL_HALL_GAIN,
   BELL_HALL_LOWPASS_HZ,
@@ -10,6 +11,7 @@ import {
   BELL_QUIET_MS,
   BELL_STATIONS,
   bellCrewGain,
+  bellGain,
 } from '../../world/bell'
 import type { SpotContext } from '../../world/worship'
 import { pose, setup } from './testHarness'
@@ -24,6 +26,12 @@ afterEach(() => {
 const yard = (over: Partial<SpotContext> = {}): SpotContext => ({ zone: 'courtyard', x: 12, z: 4, selfId: 'p-a', others: [], ...over })
 const bellEvent = (playerId: string, startedAt: number, local = false) =>
   ({ playerId, actionId: 'bell', local, zone: 'courtyard', startedAt, x: 12, z: -1.5 }) as const
+/** 進房快照帶進來的動作（GameCore 在 welcome 之後送的 snapshotActions）。 */
+const snapshot = (...actions: Array<[playerId: string, startedAt: number, actionId?: string]>) => ({
+  actions: actions.map(([playerId, startedAt, actionId = 'bell']) => ({ playerId, actionId, zone: 'courtyard', startedAt, x: 12, z: -1.5 })),
+})
+/** 站在 (12, -1.5) 聽一聲 crew 人的鐘（前面沒有別的鐘聲）的音量。 */
+const nearGain = (crew: number) => bellGain(Math.hypot(12 - BELL_CENTER.x, -1.5 - BELL_CENTER.z), -Infinity, 0) * bellCrewGain(crew)
 
 describe('敲鐘', () => {
   it('走到鐘亭前的空站位（避開有人的）；只在庭院', () => {
@@ -228,6 +236,105 @@ describe('敲鐘', () => {
     expect(pose(anim, 'bellStrike', BELL_MS, BELL_PULL_MS / BELL_MS).pivot.rotation.x).toBeLessThan(-0.2)
     expect(pose(anim, 'bellStrike', BELL_MS, BELL_HIT_MS / BELL_MS).pivot.rotation.x).toBeGreaterThan(0.3)
     expect(Math.abs(pose(anim, 'bellStrike', BELL_MS, 0.999).pivot.rotation.x)).toBeLessThan(0.02)
+  })
+
+  describe('進房快照裡正在敲鐘的人（snapshotActions）', () => {
+    it('兩人同一聲（亂序給入）：一聲、兩人對齊最早開始的 t0、撞木一條時間軸、撞到時響一次（兩人音量）', () => {
+      const { events, played, swings, swingStrengths, strikes, retimed, positions } = setup()
+      positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+      const t0 = performance.now() - 400
+      events.emit('snapshotActions', snapshot(['p-b', t0 + 300], ['p-a', t0]))
+      expect(strikes).toEqual([t0])
+      expect(retimed).toEqual([{ playerId: 'p-b', actionId: 'bell', startedAt: t0 }])
+      vi.advanceTimersByTime(BELL_HIT_MS - 400 - 1)
+      expect(played).toEqual([])
+      vi.advanceTimersByTime(1)
+      expect(played.map((p) => [p.name, p.t])).toEqual([['bell', t0 + BELL_HIT_MS]])
+      expect(played[0]!.gain!).toBeCloseTo(nearGain(2))
+      expect(swings).toEqual([t0 + BELL_HIT_MS])
+      expect(swingStrengths).toEqual([BELL_CREW_SWING[1]])
+      vi.advanceTimersByTime(BELL_MS)
+      expect(played).toHaveLength(1)
+    })
+
+    it('快照之後即時加入的第三人加入同一聲（三人音量）；同一個動作的即時事件晚到不重複計人、不重啟撞木', () => {
+      const { actions, events, played, strikes, retimed, positions } = setup()
+      positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+      const def = actions.get('bell')!
+      const t0 = performance.now() - 300
+      events.emit('snapshotActions', snapshot(['p-a', t0], ['p-b', t0 + 200]))
+      // 快照裡的 p-b 的即時事件晚到：仍是兩人，繩子還有空，可以加入
+      events.emit('actionPerformed', bellEvent('p-b', t0 + 200))
+      expect(def.startWait!(performance.now())).toBe(0)
+      vi.advanceTimersByTime(100)
+      events.emit('actionPerformed', bellEvent('p-c', t0 + 400))
+      // 三條繩子都有人了
+      expect(def.startWait!(performance.now())).toBeGreaterThan(0)
+      expect(strikes).toEqual([t0])
+      expect(retimed).toEqual([
+        { playerId: 'p-b', actionId: 'bell', startedAt: t0 },
+        { playerId: 'p-c', actionId: 'bell', startedAt: t0 },
+      ])
+      vi.advanceTimersByTime(BELL_MS)
+      expect(played.map((p) => [p.name, p.t])).toEqual([['bell', t0 + BELL_HIT_MS]])
+      expect(played[0]!.gain!).toBeCloseTo(nearGain(3))
+    })
+
+    it('剛開啟的一聲還能加入：剛進場按敲鐘立刻開始', () => {
+      const { actions, events } = setup()
+      events.emit('snapshotActions', snapshot(['p-a', performance.now() - 200]))
+      expect(actions.get('bell')!.startWait!(performance.now())).toBe(0)
+    })
+
+    it('快照裡的動作已經撞過很久：不響、不擺，但鐘聲未歇仍依它判斷（撞到後 5 秒內按敲鐘要等候，過了立刻開始）', () => {
+      // 撞到已 3.25 秒（超過 LATE_MS）：不補響；剛進場按敲鐘要等到撞到後 5 秒，即再等 1.75 秒
+      const a = setup()
+      a.positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+      const startedAt = performance.now() - 5000
+      a.events.emit('snapshotActions', snapshot(['p-a', startedAt]))
+      vi.advanceTimersByTime(BELL_MS)
+      expect(a.played).toEqual([])
+      expect(a.swings).toEqual([])
+      expect(a.actions.get('bell')!.startWait!(startedAt + 5000)).toBe(BELL_HIT_MS + BELL_QUIET_MS - 5000)
+      expect(a.actions.get('bell')!.startWait!(startedAt + BELL_HIT_MS + BELL_QUIET_MS)).toBe(0)
+
+      // 動作還在進行中、但撞到已超過 LATE_MS（1.5 秒）：同樣不補響，等候時間照算
+      const b = setup()
+      b.positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+      const recent = performance.now() - (BELL_HIT_MS + 1600)
+      b.events.emit('snapshotActions', snapshot(['p-a', recent]))
+      vi.advanceTimersByTime(BELL_MS)
+      expect(b.played).toEqual([])
+      expect(b.actions.get('bell')!.startWait!(recent + BELL_HIT_MS + 1600)).toBe(BELL_QUIET_MS - 1600)
+
+      // 撞到已超過 5 秒：立刻開始
+      const c = setup()
+      c.events.emit('snapshotActions', snapshot(['p-a', performance.now() - 10_000]))
+      vi.advanceTimersByTime(BELL_MS)
+      expect(c.played).toEqual([])
+      expect(c.actions.get('bell')!.startWait!(performance.now())).toBe(0)
+    })
+
+    it('聽者在殿內：快照帶進來的一聲照殿內規則（固定音量、低通、不擺鐘）', () => {
+      const { events, played, swings, positions } = setup()
+      positions.set('local', { x: 0, z: 5, zone: 'hall' })
+      events.emit('snapshotActions', snapshot(['p-a', performance.now() - 100], ['p-b', performance.now()]))
+      vi.advanceTimersByTime(BELL_MS)
+      expect(swings).toEqual([])
+      expect(played).toHaveLength(1)
+      expect(played[0]!.gain!).toBeCloseTo(BELL_HALL_GAIN * bellCrewGain(2))
+      expect(played[0]!.lowpass).toBe(BELL_HALL_LOWPASS_HZ)
+    })
+
+    it('其他模組不因快照補播聲音或補插香（參拜、上香、誦經）', () => {
+      const { events, played, offered, positions } = setup()
+      positions.set('local', { x: 0, z: 5, zone: 'hall' })
+      const now = performance.now()
+      events.emit('snapshotActions', snapshot(['p-a', now, 'bow'], ['p-b', now - 100, 'prostrate'], ['p-c', now - 50, 'incense'], ['p-d', now - 10, 'chant']))
+      vi.advanceTimersByTime(30_000)
+      expect(played).toEqual([])
+      expect(offered).toEqual([])
+    })
   })
 
   it('uninstall 後不再擺動或發聲', () => {

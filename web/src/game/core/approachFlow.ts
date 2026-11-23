@@ -10,16 +10,19 @@ export const APPROACH_ARRIVE = 0.3
  * 取消走向定點／就位等候的原因。`action`（按任何動作）與 `background`（切到背景）只取消定點上的等候，
  * 還在路上的不取消（按動作時由之後的流程重新決定；背景期間迴圈停止，回前景接著走）；其餘全部取消。
  */
-export type ApproachCancel =
-  | 'move' // 鍵盤／搖桿移動
-  | 'tap' // 點擊地面
-  | 'action' // 按任何動作（同一個動作會重新就位）
-  | 'zone' // 切換場景（過場開始與套用場景）
-  | 'background' // 切到背景
-  | 'knock' // 被車撞飛
-  | 'correction' // 伺服器位置糾正（大到要瞬移）
-  | 'ride' // 騎車中
-  | 'blocked' // 被人擋住走不動超過 1.5 秒（不提示）
+export const APPROACH_CANCELS = [
+  'move', // 鍵盤／搖桿移動
+  'tap', // 點擊地面
+  'action', // 按任何動作（同一個動作會重新就位）
+  'zone', // 切換場景（過場開始與套用場景）
+  'background', // 切到背景
+  'knock', // 被車撞飛
+  'correction', // 伺服器位置糾正（大到要瞬移）
+  'ride', // 騎車中
+  'blocked', // 被人擋住走不動超過 1.5 秒（不提示）
+] as const
+/** 新增原因只改上面的清單；gameCoreWiring.test.ts 檢查 GameCore.ts 對每一個原因都有呼叫 cancel。 */
+export type ApproachCancel = (typeof APPROACH_CANCELS)[number]
 
 /** ApproachFlow 需要的 GameCore 能力，全部是本機玩家的操作。 */
 export interface ApproachHost {

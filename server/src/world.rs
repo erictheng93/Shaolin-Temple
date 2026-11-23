@@ -12,7 +12,8 @@
 //!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。庭院的樹另列在 `COURTYARD_TREES`（`layout.ts` 的 `TREES`），
 //!   `Zone::trees` 指向它，車輛物理世界據此分辨撞到的是樹。
 
-use std::f64::consts::PI;
+use std::{f64::consts::PI, time::Duration};
+use tokio::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
@@ -307,7 +308,7 @@ pub fn action(id: &str) -> Option<&'static str> {
 /// - "chant": 24000 ms (web/src/game/gameplay/modules/chant.ts:21)
 /// - "chant_end": 800 ms (web/src/game/gameplay/modules/chant.ts:30)
 /// - "incense": 6000 ms (web/src/game/gameplay/modules/worship.ts:49)
-/// - "bell": 3400 ms (web/src/game/world/bell.ts:40)
+/// - "bell": 3400 ms (web/src/game/world/bell.ts:25，`BELL_MS`)
 pub fn action_duration_ms(id: &str) -> Option<u64> {
     match id {
         "bow" => Some(2200),
@@ -331,6 +332,20 @@ pub fn action_rooted_in(id: &str, zone_id: &str) -> bool {
     }
 }
 
+/// 合力敲鐘的加入窗口（毫秒），抄自前端 `BELL_JOIN_MS`（web/src/game/world/bell.ts:79）：
+/// 開始時間與目前這一聲的開啟時刻相差不超過這個值的 bell 動作算同一聲（前端 `bellRingSlot`），
+/// 加入者的動作時間軸對齊開啟者。
+pub const BELL_JOIN_MS: u64 = 700;
+
+/// 這次 bell 動作所屬那一聲的開啟時刻：與目前這一聲的開啟時刻 `open` 相差 ≤ `BELL_JOIN_MS` 是加入，
+/// 回傳 `open`（開啟時刻不變）；沒有前一聲或相差更多則另開一聲，回傳 `now`。定點的結束時刻以它加動作時長計算。
+pub fn bell_ring_start(open: Option<Instant>, now: Instant) -> Instant {
+    match open {
+        Some(t0) if now.saturating_duration_since(t0) <= Duration::from_millis(BELL_JOIN_MS) => t0,
+        _ => now,
+    }
+}
+
 /// action 幀是否送給同房所有場景（全寺都聽得見）：只有在庭院敲鐘；其他動作或場景只送同場景。
 pub fn action_heard_everywhere(id: &str, zone_id: &str) -> bool {
     id == "bell" && zone_id == "courtyard"
@@ -348,6 +363,22 @@ pub fn normalize_heading(heading: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bell_ring_start_joins_within_the_window_and_opens_otherwise() {
+        let t0 = Instant::now();
+        let ms = Duration::from_millis;
+        // 沒有前一聲：另開
+        assert_eq!(bell_ring_start(None, t0), t0);
+        // 剛好 700 ms 算加入，開啟時刻不變
+        assert_eq!(bell_ring_start(Some(t0), t0 + ms(700)), t0);
+        assert_eq!(bell_ring_start(Some(t0), t0), t0);
+        // 701 ms 另開
+        assert_eq!(bell_ring_start(Some(t0), t0 + ms(701)), t0 + ms(701));
+        // 前一聲很久以前：另開
+        let later = t0 + Duration::from_secs(3600);
+        assert_eq!(bell_ring_start(Some(t0), later), later);
+    }
 
     #[test]
     fn spawns_are_inside_bounds_and_do_not_retrigger_portals() {
