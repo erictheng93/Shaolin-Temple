@@ -6,10 +6,11 @@
 //!   （`COURTYARD_DOOR` 第 77 行、`HALL_DOOR` 第 84 行、`ZONES` 第 86～112 行）
 //! - 移動速度 3.2 m/s：`web/src/game/GameCore.ts` 的 `MOVE_SPEED`（第 57 行）
 //! - 動作允許清單：`web/src/game/net/binaryFrame.ts` 的 `ACTION_CODES`（同時是 action 幀的動作編號，mock 伺服器也用它；
-//!   前端玩法模組 `gameplay/modules/worship.ts`）。兩份由固定資料 `tests/protocol-v5.json` 的 `binary.action.codes` 鎖住。
+//!   前端玩法模組 `gameplay/modules/worship.ts`）。兩份由固定資料 `tests/protocol-v6.json` 的 `binary.action.codes` 鎖住。
 //!
 //! - 障礙物：`layout.ts` 的 `OBSTACLES`（主殿、鐘亭、香爐、石燈籠、樹）與 `zones.ts` 殿內的神龕、供桌、柱子，
-//!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。
+//!   同樣已含角色半徑 `PLAYER_RADIUS` 的餘量。庭院的樹另列在 `COURTYARD_TREES`（`layout.ts` 的 `TREES`），
+//!   `Zone::trees` 指向它，車輛物理世界據此分辨撞到的是樹。
 
 use std::f64::consts::PI;
 
@@ -89,6 +90,9 @@ pub struct Zone {
     pub obstacles: &'static [Rect],
     /// 未加角色半徑的原始矩形。
     pub solids: &'static [Rect],
+    /// `solids` 裡屬於樹的那些（同樣未加角色半徑，也都包含在 `solids` 裡）。
+    /// 車輛物理世界據此把碰撞分成撞樹與撞牆。
+    pub trees: &'static [Rect],
 }
 impl Zone {
     /// 從 (x0,z0) 直線走到 (x1,z1) 是否會穿過障礙物。障礙物先內縮 `OBSTACLE_TOLERANCE`，
@@ -144,7 +148,8 @@ const fn pad_rects<const N: usize>(solids: &[Rect; N]) -> [Rect; N] {
 /// 出入口範圍的容許誤差（公尺）。
 pub const PORTAL_TOLERANCE: f64 = 0.5;
 
-pub static COURTYARD_SOLIDS: [Rect; 17] = [
+/// 庭院裡樹以外的靜態物（建築、檔口、香爐、石燈籠），順序同 `layout.ts` 的 `SOLIDS` 前段。
+const COURTYARD_STRUCTURES: [Rect; 8] = [
     raw_solid(-7.5, 7.5, -18.0, -6.2),  // 主殿
     raw_solid(10.0, 14.0, -6.0, -2.0),  // 鐘亭
     raw_solid(-15.5, -12.5, 8.0, 10.5), // 碰碰車檔口
@@ -153,6 +158,11 @@ pub static COURTYARD_SOLIDS: [Rect; 17] = [
     raw_square(4.0, 3.0, 0.35),
     raw_square(-4.0, -4.0, 0.35),
     raw_square(4.0, -4.0, 0.35),
+];
+
+/// 庭院的樹（`layout.ts` 的 `TREES`，每棵是邊長 `scale` 的正方形）。`Zone::trees` 指向這份，
+/// 車輛物理世界以它辨識撞到的是樹（`cars` 幀的 bump = 2）。
+pub static COURTYARD_TREES: [Rect; 9] = [
     raw_tree(-16.0, -14.0, 1.3),
     raw_tree(-15.0, -4.0, 1.0),
     raw_tree(-17.0, 6.0, 1.2),
@@ -163,6 +173,23 @@ pub static COURTYARD_SOLIDS: [Rect; 17] = [
     raw_tree(-9.0, 16.0, 0.8),
     raw_tree(9.0, 16.5, 0.9),
 ];
+
+const fn concat_courtyard(a: &[Rect; 8], b: &[Rect; 9]) -> [Rect; 17] {
+    let mut out = [a[0]; 17];
+    let mut i = 0;
+    while i < 8 {
+        out[i] = a[i];
+        i += 1;
+    }
+    while i < 17 {
+        out[i] = b[i - 8];
+        i += 1;
+    }
+    out
+}
+
+/// 庭院全部的靜態物（樹以外的在前、樹在後，與 `layout.ts` 的 `SOLIDS` 同序）。
+pub static COURTYARD_SOLIDS: [Rect; 17] = concat_courtyard(&COURTYARD_STRUCTURES, &COURTYARD_TREES);
 pub static COURTYARD_OBSTACLES: [Rect; 17] = pad_rects(&COURTYARD_SOLIDS);
 
 pub static COURTYARD: Zone = Zone {
@@ -196,6 +223,7 @@ pub static COURTYARD: Zone = Zone {
     }],
     obstacles: &COURTYARD_OBSTACLES,
     solids: &COURTYARD_SOLIDS,
+    trees: &COURTYARD_TREES,
 };
 
 pub static HALL_SOLIDS: [Rect; 8] = [
@@ -239,6 +267,7 @@ pub static HALL: Zone = Zone {
     }],
     obstacles: &HALL_OBSTACLES,
     solids: &HALL_SOLIDS,
+    trees: &[],
 };
 
 pub static ZONES: [&Zone; 2] = [&COURTYARD, &HALL];
@@ -393,5 +422,43 @@ mod tests {
             max_z: 10.5,
         };
         assert!(COURTYARD.solids.contains(&booth));
+    }
+
+    /// 樹的數量與位置要和前端 `web/src/game/world/layout.ts` 的 `TREES` 一致（x, z, scale；
+    /// 碰撞矩形是以 (x, z) 為中心、半寬 0.5 × scale 的正方形）。
+    #[test]
+    fn courtyard_trees_match_layout() {
+        let expected: [(f64, f64, f64); 9] = [
+            (-16.0, -14.0, 1.3),
+            (-15.0, -4.0, 1.0),
+            (-17.0, 6.0, 1.2),
+            (-14.0, 14.0, 0.9),
+            (16.0, -14.0, 1.2),
+            (17.0, 5.0, 1.1),
+            (14.0, 14.0, 1.0),
+            (-9.0, 16.0, 0.8),
+            (9.0, 16.5, 0.9),
+        ];
+        assert_eq!(COURTYARD.trees.len(), expected.len());
+        for (tree, (x, z, scale)) in COURTYARD.trees.iter().zip(expected) {
+            let half = 0.5 * scale;
+            assert!(
+                (tree.min_x - (x - half)).abs() < 1e-9
+                    && (tree.max_x - (x + half)).abs() < 1e-9
+                    && (tree.min_z - (z - half)).abs() < 1e-9
+                    && (tree.max_z - (z + half)).abs() < 1e-9,
+                "tree at ({x}, {z}) scale {scale}: {tree:?}"
+            );
+            // 每棵樹也是一般的障礙物
+            assert!(COURTYARD.solids.contains(tree), "{tree:?}");
+        }
+        // 樹以外的靜態物不被當成樹：主殿、鐘亭、檔口、香爐、4 座石燈籠
+        let others: Vec<_> = COURTYARD
+            .solids
+            .iter()
+            .filter(|s| !COURTYARD.trees.contains(s))
+            .collect();
+        assert_eq!(others.len(), 8);
+        assert!(HALL.trees.is_empty());
     }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall, synthesizeIncenseOffering, synthesizeMuyu, synthesizeQing } from './AudioManager'
+import { FAR_BELL_MAX_MS, FAR_BELL_MIN_MS, nextFarBellDelayMs, runState, synthesizeBirdCall, synthesizeBow, synthesizeIncenseOffering, synthesizeMuyu, synthesizeQing } from './AudioManager'
 
 // 只實作 synthesizeBirdCall 用到的 createBuffer，node 環境沒有 Web Audio。
 const fakeCtx = (sampleRate = 8000) =>
@@ -60,6 +60,18 @@ describe('synthesizeQing', () => {
     expect(peak(damped, 0.5, 1)).toBeGreaterThan(0.1)
     expect(peak(damped, 1, 1.1)).toBeGreaterThan(0.2)
     expect(peak(damped, 1.5, 2)).toBeLessThan(0.001)
+  })
+})
+
+describe('synthesizeBow', () => {
+  it('彎腰時只有小聲的衣袖聲，磬聲落在彎到底的那一刻，比跪拜的引磬小聲', () => {
+    const sr = 8000
+    const data = synthesizeBow(fakeCtx(sr), 0.66, seeded(5)).getChannelData(0)
+    const peak = (from: number, to: number) => data.slice(from * sr, to * sr).reduce((m, v) => Math.max(m, Math.abs(v)), 0)
+    expect(peak(0.1, 0.6)).toBeGreaterThan(0)
+    expect(peak(0, 0.66)).toBeLessThan(0.15)
+    expect(peak(0.66, 0.9)).toBeCloseTo(0.4, 1)
+    expect(Math.abs(data[data.length - 1]!)).toBeLessThan(0.01)
   })
 })
 

@@ -1,7 +1,8 @@
-# 獨立的第三份實作（Python），用來產生 protocol-v5.json 的 binary 一段（二進位測試向量）。
+# 獨立的第三份實作（Python），用來產生 protocol-v6.json 的 binary 一段（二進位測試向量）。
 # 不 import 前端或 Rust 的任何程式；要增修向量時改這個腳本，執行後把輸出貼回固定資料的 "binary"。
 # 協定版本 5 新增 cars 幀（0x04），原本未知的 0x04 標籤改成 0x05。
-# 用法：python server/tests/protocol-v5-vectors.py > binary.json
+# 協定版本 6：cars 旗標的 bit 5–6 由單一撞擊位元改為 2 位元撞擊種類 bump（0 沒撞、1 wall、2 tree、3 car），bit 7 保留。
+# 用法：python server/tests/protocol-v6-vectors.py > binary.json
 import json, math, struct, sys
 PI = math.pi
 
@@ -111,7 +112,7 @@ for name, started_at, reference in edge:
     low = started_at % WRAP
     action_unwrap.append({'name': name, 'low': low, 'reference': reference, 'startedAt': unwrap(low, reference)})
 
-# ---- cars（0x04，協定版本 5）----
+# ---- cars（0x04，協定版本 5 起；旗標格式為協定版本 6）----
 def q_heading(h):
     q = int(rnd(h * 32768.0 / PI))
     return ((q + 32768) % 65536) - 32768
@@ -129,7 +130,8 @@ def enc_cars(ack, cars):
     for car in cars:
         c = car['c']
         occ = 1 if car['occupied'] else 0
-        bump = 1 if car['bumped'] else 0
+        bump = car['bump']
+        assert 0 <= bump <= 3
         flags = (c & 0x0F) | (occ << 4) | (bump << 5)
         hx = qc(car['x'])
         hz = qc(car['z'])
@@ -144,7 +146,7 @@ def dec_car(car):
     return {
         'c': car['c'],
         'occupied': car['occupied'],
-        'bumped': car['bumped'],
+        'bump': car['bump'],
         'x': qc(car['x']) / 100.0,
         'z': qc(car['z']) / 100.0,
         'heading': d_heading(q_heading(car['heading'])),
@@ -156,16 +158,16 @@ def dec_car(car):
 cars_cases = [
     ('空幀（ack = 0）', 0, []),
     ('一台車：c=3, occupied, x=1.25, z=-3, heading=π/2, vx=8, vz=-2.5, w=1.5, ack=65535', 65535, [
-        {'c': 3, 'occupied': True, 'bumped': False, 'x': 1.25, 'z': -3.0, 'heading': PI / 2.0, 'vx': 8.0, 'vz': -2.5, 'w': 1.5}
+        {'c': 3, 'occupied': True, 'bump': 0, 'x': 1.25, 'z': -3.0, 'heading': PI / 2.0, 'vx': 8.0, 'vz': -2.5, 'w': 1.5}
     ]),
-    ('朝向 π（須編成 -32768）', 100, [
-        {'c': 0, 'occupied': False, 'bumped': True, 'x': 0.0, 'z': 0.0, 'heading': PI, 'vx': 0.0, 'vz': 0.0, 'w': 0.0}
+    ('朝向 π（須編成 -32768），bump = 1（wall）', 100, [
+        {'c': 0, 'occupied': False, 'bump': 1, 'x': 0.0, 'z': 0.0, 'heading': PI, 'vx': 0.0, 'vz': 0.0, 'w': 0.0}
     ]),
-    ('16 台車（滿員狀態）', 1234, [
+    ('16 台車（滿員狀態），bump 依序為 0～3', 1234, [
         {
             'c': i,
             'occupied': (i % 2 == 1),
-            'bumped': (i % 3 == 0),
+            'bump': i % 4,
             'x': (i - 8) * 1.0,
             'z': (i - 8) * 1.0,
             'heading': (i - 8) * PI / 8.0,
@@ -175,7 +177,13 @@ cars_cases = [
         } for i in range(16)
     ]),
     ('速度與角速度夾限', 42, [
-        {'c': 7, 'occupied': True, 'bumped': False, 'x': 150.0, 'z': -200.0, 'heading': 0.0, 'vx': 50.0, 'vz': -60.0, 'w': 20.0}
+        {'c': 7, 'occupied': True, 'bump': 0, 'x': 150.0, 'z': -200.0, 'heading': 0.0, 'vx': 50.0, 'vz': -60.0, 'w': 20.0}
+    ]),
+    ('bump = 2（tree），空車', 7, [
+        {'c': 9, 'occupied': False, 'bump': 2, 'x': -15.0, 'z': -3.0, 'heading': 0.0, 'vx': 0.5, 'vz': 2.0, 'w': -0.25}
+    ]),
+    ('bump = 3（car），c = 15、occupied（旗標 0x7f）', 8, [
+        {'c': 15, 'occupied': True, 'bump': 3, 'x': 2.0, 'z': 8.0, 'heading': -PI / 2.0, 'vx': -4.0, 'vz': 0.0, 'w': 0.0}
     ]),
 ]
 
@@ -188,17 +196,17 @@ for name, ack, clist in cars_cases:
         'decoded': {'ack': ack, 'cars': [dec_car(c) for c in clist]},
     })
 
-single_car_bytes = enc_cars(0, [{'c': 0, 'occupied': False, 'bumped': False, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0}])[3:]
+single_car_bytes = enc_cars(0, [{'c': 0, 'occupied': False, 'bump': 0, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0}])[3:]
 cars_invalid = [
     {'name': '長度 4（不是 3 + 12N）', 'hex': '04000000'},
-    {'name': '17 台車（超過 16 台上限）', 'hex': enc_cars(0, [{'c': i % 16, 'occupied': False, 'bumped': False, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0} for i in range(17)]).hex()},
-    {'name': '保留位元 bit 6 為 1', 'hex': '040000' + bytes([0x40]).hex() + single_car_bytes[1:].hex()},
+    {'name': '17 台車（超過 16 台上限）', 'hex': enc_cars(0, [{'c': i % 16, 'occupied': False, 'bump': 0, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0} for i in range(17)]).hex()},
     {'name': '保留位元 bit 7 為 1', 'hex': '040000' + bytes([0x80]).hex() + single_car_bytes[1:].hex()},
+    {'name': '保留位元 bit 7 為 1（其餘旗標全滿，0xff）', 'hex': '040000' + bytes([0xFF]).hex() + single_car_bytes[1:].hex()},
     {'name': 'x 超出 ±100 公尺（10001 公分）', 'hex': '040000' + '00' + struct.pack('<hh', 10001, 0).hex() + single_car_bytes[5:].hex()},
     {'name': 'z 超出 ±100 公尺（−32768 公分）', 'hex': '040000' + '00' + struct.pack('<hh', 0, -32768).hex() + single_car_bytes[5:].hex()},
     {'name': '同一幀內 c 重複', 'hex': enc_cars(0, [
-        {'c': 2, 'occupied': False, 'bumped': False, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0},
-        {'c': 2, 'occupied': True, 'bumped': False, 'x': 1.0, 'z': 1.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0},
+        {'c': 2, 'occupied': False, 'bump': 0, 'x': 0.0, 'z': 0.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0},
+        {'c': 2, 'occupied': True, 'bump': 0, 'x': 1.0, 'z': 1.0, 'heading': 0.0, 'vx': 0.0, 'vz': 0.0, 'w': 0.0},
     ]).hex()},
 ]
 

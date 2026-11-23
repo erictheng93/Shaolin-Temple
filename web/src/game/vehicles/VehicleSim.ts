@@ -2,7 +2,7 @@ import type { CarState, SimWorld } from './simCore'
 import { createSimWorld } from './simCore'
 import { wrapAngle, type DriveInput } from './drive'
 import { VEHICLES } from '../world/vehicles'
-import { SOLIDS, WORLD_BOUNDS } from '../world/layout'
+import { SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../world/layout'
 
 /**
  * u16 環繞比較：判斷 seq 是否小於等於 ack。
@@ -129,7 +129,7 @@ export class VehicleSim {
       const mod = await import('@dimforge/rapier3d-compat')
       const RAPIER = (mod as any).default ?? mod
       await RAPIER.init()
-      const world = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES)
+      const world = createSimWorld(RAPIER, SOLIDS, WORLD_BOUNDS, VEHICLES, TREE_SOLIDS)
       return new VehicleSim(world)
     } catch (e) {
       console.warn('Failed to load Rapier physics module for VehicleSim:', e)

@@ -437,6 +437,51 @@ v4 建立在 v3 加上 `chat` 與 `outfit` 兩項增修（見上兩節）之上�
 未做到／限制：
 - **負載測試為本機迴路**：伺服器負載測試未經真實外網長距離延遲與公網丟包抖動測試。
 
+### 協定版本 6：`cars` 幀帶撞擊種類（2026-11-22）
+
+v5 的 `cars` 幀每台車只有一個 `bumped` 位元，不說撞到什麼。v6 改由伺服器說出撞到的種類，讓前端為建築、樹、車播不同的音效。舊客戶端會把新的 bit 6 當成保留位元而拒絕整則，所以升版；`hello.v` 不是 6 一律回 `unsupported_version`（訊息 `Protocol version 6 required`）。
+
+`cars` 幀（0x04）的表頭（1 byte 幀型 + 2 bytes ack，u16 little-endian）與每台車 12 bytes 的其餘欄位都不變，只改旗標 byte：
+
+| 位移 | 型別 | 內容 |
+| --- | --- | --- |
+| 0 | u8 | bit 0～3：車號 c（0..15）；bit 4：occupied；bit 5～6：`bump` = `(flag >> 5) & 0x03`；bit 7：保留，必須為 0（解碼時不為 0 就拒絕整則） |
+| 1 | i16 | x，公分（四捨五入，.5 遠離零），限 ±100 公尺 |
+| 3 | i16 | z，公分，同上 |
+| 5 | i16 | heading，`round(heading × 32768 / π)` 轉 i16（π → −32768），解碼 `q × π / 32768` ∈ [−π, π) |
+| 7 | i16 | vx，公分/秒（夾在 ±3000） |
+| 9 | i16 | vz，公分/秒（夾在 ±3000） |
+| 11 | i8 | w，單位 1/16 rad/s（夾在 ±127） |
+
+`bump`（`protocol.rs` 的 `BUMP_NONE`／`BUMP_WALL`／`BUMP_TREE`／`BUMP_CAR`）：
+
+| 值 | 意義 |
+| --- | --- |
+| 0 | 沒撞 |
+| 1 | wall：建築與其他靜態物（主殿、鐘亭、檔口、香爐、石燈籠、四面邊界牆） |
+| 2 | tree：樹 |
+| 3 | car：另一台車（兩台都標 3） |
+
+語意：
+
+- 門檻不變：接觸力（Rapier 的 total force magnitude）≥ 車重 × 3.0 才算撞。
+- 一台車在同一個廣播間隔內（兩次 `cars` 廣播之間的所有物理步）有多個超過門檻的接觸時，取接觸力最大那一個的種類；廣播後清除（`VehicleWorld::clear_bumped`，時機與 v5 相同）。
+- 與步行玩家碰撞體（空車才與步行者碰撞，用來讓人推得動空車）的接觸不設 bump：撞人由既有的 `knock` 訊息表示。
+- 樹的辨識：`world.rs` 另列 `COURTYARD_TREES`（抄自 `layout.ts` 的 `TREES`），`COURTYARD_SOLIDS` 由「樹以外的靜態物」與它串接而成，`Zone::trees` 指向它；車輛物理世界建立靜態碰撞體時依 `zone.trees` 在 collider 的 `user_data` 標上 wall 或 tree（步行者標 0、車以 `collider_to_car` 辨識），不靠清單順序。`world::tests::courtyard_trees_match_layout` 鎖住 9 棵樹的位置與大小。
+- 固定資料改名為 `server/tests/protocol-v6.json`，產生腳本 `server/tests/protocol-v6-vectors.py`。車輛物件的欄位由 `bumped`（布林）改為 `bump`（整數 0..3）；`binary.cars.valid` 涵蓋 0～3 四個值（7 筆），`invalid` 中原本「保留位元 bit 6 為 1」在 v6 是合法的 bump = 2，改為「bit 7 為 1（旗標 0xff）」，與原本的「bit 7 為 1」共 7 筆。
+
+| 驗收項目 | 測試 |
+| --- | --- |
+| 四種 bump 的編解碼來回、bit 7 被拒絕、bump > 3 不編碼 | `tests/protocol.rs` 的 `cars_bump_kinds_round_trip_and_bit7_is_rejected`、`cars_encoding_refuses_what_the_frame_cannot_carry`、`shared_cars_vectors_encode_and_decode` |
+| 車撞牆（香爐、東側邊界牆）回報 1 | `vehicles::world::tests::hitting_a_wall_reports_a_bump`、`hitting_the_boundary_wall_reports_wall` |
+| 車撞樹回報 2 | `vehicles::world::tests::hitting_a_tree_reports_tree` |
+| 兩車互撞兩台都回報 3，清除後歸 0 | `vehicles::world::tests::two_cars_colliding_both_report_car` |
+| 同一間隔多個接觸取力最大者、廣播後重新計算 | `vehicles::world::tests::strongest_contact_in_an_interval_wins` |
+| 步行者推空車不設 bump | `vehicles::world::tests::walker_contact_does_not_set_bump` |
+| 非廣播步的撞車在下一則 `cars` 幀為 3，之後歸 0 | `room::vehicle_tests::a_bump_on_a_non_broadcast_step_still_reaches_the_next_cars_frame` |
+| 樹的數量與位置與 `layout.ts` 一致 | `world::tests::courtyard_trees_match_layout` |
+| v1～v5 與 v7 的 `hello` 被拒 | `tests/websocket.rs` 的 `unsupported_version_then_close` |
+
 ### 廟會時段、遊戲區免撞與第 1 段稽核修正（2026-11-22，後端，計畫任務 18）
 
 - **廟會時段**：`shared/vehicles.json` 的 `session`（`periodMs` 3600000、`openMs` 1800000、`offsetMs` 0）以伺服器 Unix 毫秒計，`(ms − offset) mod period < open` 為開放（`params.rs` 的 `session_open`），即每小時的前 30 分鐘。時段外 `claim` 與 `ride`（上車）回 `error session_closed`（在其他檢查之前），下車不受影響。房間的 10 Hz tick 偵測「開放 → 關閉」的那一刻：所有騎士下車，每台車立即開始淡出（`car` 的 `fadeAt` = 結束時刻，與下車時「`fadeAt` 是淡出開始時刻」同義），`fadeMs`（15 秒）後移除並廣播 `carGone`。`car`／`carGone` 事件送給全房（含殿內），`cars` 幀只送庭院。

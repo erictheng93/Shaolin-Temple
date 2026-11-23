@@ -60,7 +60,7 @@ async fn closed(ws: &mut Ws, code: u16) {
         other => panic!("expected close, got {other:?}"),
     }
 }
-const HELLO: &str = r#"{"t":"hello","v":5,"name":"測試"}"#;
+const HELLO: &str = r#"{"t":"hello","v":6,"name":"測試"}"#;
 #[tokio::test]
 async fn origin_rejected_missing_and_foreign() {
     let server = server().await;
@@ -90,9 +90,10 @@ async fn hello_timeout() {
 #[tokio::test]
 async fn unsupported_version_then_close() {
     let server = server().await;
-    // 舊前端（v1：JSON moves；v2：JSON action；v3：沒有 welcome.auth／name；v4：沒有碰碰車）連到新伺服器：明確拒絕，
-    // 不會收到它解不開的訊息；比伺服器新的 v6 同樣拒絕。
-    for version in ["1", "2", "3", "4", "6"] {
+    // 舊前端（v1：JSON moves；v2：JSON action；v3：沒有 welcome.auth／name；v4：沒有碰碰車；
+    // v5：cars 旗標只有 bumped 位元，解不開 bump 種類）連到新伺服器：明確拒絕，
+    // 不會收到它解不開的訊息；比伺服器新的 v7 同樣拒絕。
+    for version in ["1", "2", "3", "4", "5", "7"] {
         let mut ws = connect(&server).await;
         text(
             &mut ws,
@@ -102,7 +103,7 @@ async fn unsupported_version_then_close() {
         let message = next(&mut ws).await;
         let value: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
         assert_eq!(value["code"], "unsupported_version");
-        assert_eq!(value["message"], "Protocol version 5 required");
+        assert_eq!(value["message"], "Protocol version 6 required");
         closed(&mut ws, 1008).await;
     }
 }

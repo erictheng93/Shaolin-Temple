@@ -1,5 +1,5 @@
 {
-  "_comment": "協定版本 5 的共用固定資料。server／client 為有效的 JSON 訊息；invalid.server 是前端 decode() 必須拒絕（回傳 null）的伺服器訊息，invalid.client 是伺服器必須視為無效訊息的上行訊息（每筆的 message 是訊息本身）；binary 為二進位幀（hex）：valid／invalid 是 moves／sync，input 是伺服器編碼前的 tuple、decoded 是解碼後的 tuple；action 是動作廣播（codes 為動作編號對照表，索引即編號；unwrap 為由 32 位元 startedAt 還原絕對時間的案例）；cars 為碰碰車狀態廣播。binary 由 server/tests/protocol-v5-vectors.py 產生，見 docs/superpowers/plans/2026-11-21-bumper-cars.md 任務 5。",
+  "_comment": "協定版本 6 的共用固定資料。server／client 為有效的 JSON 訊息；invalid.server 是前端 decode() 必須拒絕（回傳 null）的伺服器訊息，invalid.client 是伺服器必須視為無效訊息的上行訊息（每筆的 message 是訊息本身）；binary 為二進位幀（hex）：valid／invalid 是 moves／sync，input 是伺服器編碼前的 tuple、decoded 是解碼後的 tuple；action 是動作廣播（codes 為動作編號對照表，索引即編號；unwrap 為由 32 位元 startedAt 還原絕對時間的案例）；cars 為碰碰車狀態廣播（每台車的 bump 是撞擊種類：0 沒撞、1 wall、2 tree、3 car）。binary 由 server/tests/protocol-v6-vectors.py 產生，見 docs/superpowers/plans/2026-11-21-bumper-cars.md 任務 5。",
   "outfitCount": 8,
   "kindCount": 4,
   "server": [
@@ -102,7 +102,7 @@
     {
       "t": "error",
       "code": "unsupported_version",
-      "message": "Protocol version 5 required"
+      "message": "Protocol version 6 required"
     },
     {
       "t": "zone",
@@ -191,31 +191,31 @@
     },
     {
       "t": "hello",
-      "v": 5,
+      "v": 6,
       "name": "n",
       "resumeToken": "t",
       "outfit": 4
     },
     {
       "t": "hello",
-      "v": 5,
+      "v": 6,
       "name": "n"
     },
     {
       "t": "hello",
-      "v": 5,
+      "v": 6,
       "name": "n",
       "resumeToken": "t"
     },
     {
       "t": "hello",
-      "v": 5,
+      "v": 6,
       "name": "n",
       "session": "s"
     },
     {
       "t": "hello",
-      "v": 5,
+      "v": 6,
       "name": "n",
       "resumeToken": "t",
       "session": "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
@@ -453,7 +453,7 @@
         "name": "hello.session 不是字串",
         "message": {
           "t": "hello",
-          "v": 5,
+          "v": 6,
           "name": "n",
           "session": 1
         }
@@ -462,7 +462,7 @@
         "name": "hello.session 超過 512 bytes",
         "message": {
           "t": "hello",
-          "v": 5,
+          "v": 6,
           "name": "n",
           "session": "sssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
         }
@@ -3785,7 +3785,7 @@
               {
                 "c": 3,
                 "occupied": true,
-                "bumped": false,
+                "bump": 0,
                 "x": 1.25,
                 "z": -3.0,
                 "heading": 1.5707963267948966,
@@ -3802,7 +3802,7 @@
               {
                 "c": 3,
                 "occupied": true,
-                "bumped": false,
+                "bump": 0,
                 "x": 1.25,
                 "z": -3.0,
                 "heading": 1.5707963267948966,
@@ -3814,14 +3814,14 @@
           }
         },
         {
-          "name": "朝向 π（須編成 -32768）",
+          "name": "朝向 π（須編成 -32768），bump = 1（wall）",
           "input": {
             "ack": 100,
             "cars": [
               {
                 "c": 0,
                 "occupied": false,
-                "bumped": true,
+                "bump": 1,
                 "x": 0.0,
                 "z": 0.0,
                 "heading": 3.141592653589793,
@@ -3838,7 +3838,7 @@
               {
                 "c": 0,
                 "occupied": false,
-                "bumped": true,
+                "bump": 1,
                 "x": 0.0,
                 "z": 0.0,
                 "heading": -3.141592653589793,
@@ -3850,14 +3850,14 @@
           }
         },
         {
-          "name": "16 台車（滿員狀態）",
+          "name": "16 台車（滿員狀態），bump 依序為 0～3",
           "input": {
             "ack": 1234,
             "cars": [
               {
                 "c": 0,
                 "occupied": false,
-                "bumped": true,
+                "bump": 0,
                 "x": -8.0,
                 "z": -8.0,
                 "heading": -3.141592653589793,
@@ -3868,7 +3868,7 @@
               {
                 "c": 1,
                 "occupied": true,
-                "bumped": false,
+                "bump": 1,
                 "x": -7.0,
                 "z": -7.0,
                 "heading": -2.748893571891069,
@@ -3879,7 +3879,7 @@
               {
                 "c": 2,
                 "occupied": false,
-                "bumped": false,
+                "bump": 2,
                 "x": -6.0,
                 "z": -6.0,
                 "heading": -2.356194490192345,
@@ -3890,7 +3890,7 @@
               {
                 "c": 3,
                 "occupied": true,
-                "bumped": true,
+                "bump": 3,
                 "x": -5.0,
                 "z": -5.0,
                 "heading": -1.9634954084936207,
@@ -3901,7 +3901,7 @@
               {
                 "c": 4,
                 "occupied": false,
-                "bumped": false,
+                "bump": 0,
                 "x": -4.0,
                 "z": -4.0,
                 "heading": -1.5707963267948966,
@@ -3912,7 +3912,7 @@
               {
                 "c": 5,
                 "occupied": true,
-                "bumped": false,
+                "bump": 1,
                 "x": -3.0,
                 "z": -3.0,
                 "heading": -1.1780972450961724,
@@ -3923,7 +3923,7 @@
               {
                 "c": 6,
                 "occupied": false,
-                "bumped": true,
+                "bump": 2,
                 "x": -2.0,
                 "z": -2.0,
                 "heading": -0.7853981633974483,
@@ -3934,7 +3934,7 @@
               {
                 "c": 7,
                 "occupied": true,
-                "bumped": false,
+                "bump": 3,
                 "x": -1.0,
                 "z": -1.0,
                 "heading": -0.39269908169872414,
@@ -3945,7 +3945,7 @@
               {
                 "c": 8,
                 "occupied": false,
-                "bumped": false,
+                "bump": 0,
                 "x": 0.0,
                 "z": 0.0,
                 "heading": 0.0,
@@ -3956,7 +3956,7 @@
               {
                 "c": 9,
                 "occupied": true,
-                "bumped": true,
+                "bump": 1,
                 "x": 1.0,
                 "z": 1.0,
                 "heading": 0.39269908169872414,
@@ -3967,7 +3967,7 @@
               {
                 "c": 10,
                 "occupied": false,
-                "bumped": false,
+                "bump": 2,
                 "x": 2.0,
                 "z": 2.0,
                 "heading": 0.7853981633974483,
@@ -3978,7 +3978,7 @@
               {
                 "c": 11,
                 "occupied": true,
-                "bumped": false,
+                "bump": 3,
                 "x": 3.0,
                 "z": 3.0,
                 "heading": 1.1780972450961724,
@@ -3989,7 +3989,7 @@
               {
                 "c": 12,
                 "occupied": false,
-                "bumped": true,
+                "bump": 0,
                 "x": 4.0,
                 "z": 4.0,
                 "heading": 1.5707963267948966,
@@ -4000,7 +4000,7 @@
               {
                 "c": 13,
                 "occupied": true,
-                "bumped": false,
+                "bump": 1,
                 "x": 5.0,
                 "z": 5.0,
                 "heading": 1.9634954084936207,
@@ -4011,7 +4011,7 @@
               {
                 "c": 14,
                 "occupied": false,
-                "bumped": false,
+                "bump": 2,
                 "x": 6.0,
                 "z": 6.0,
                 "heading": 2.356194490192345,
@@ -4022,7 +4022,7 @@
               {
                 "c": 15,
                 "occupied": true,
-                "bumped": true,
+                "bump": 3,
                 "x": 7.0,
                 "z": 7.0,
                 "heading": 2.748893571891069,
@@ -4032,14 +4032,14 @@
               }
             ]
           },
-          "hex": "04d20420e0fce0fc008050fbb004c01144fd44fd0090e6fb1a04c802a8fda8fd00a07cfc8403d0330cfe0cfe00b012fdee02d80470fe70fe00c0a8fd5802e015d4fed4fe00d03efec201e82638ff38ff00e0d4fe2c01f0179cff9cff00f06aff9600f80800000000000000000000003964006400001096006aff080ac800c80000202c01d4fe101b2c012c010030c2013efe182c9001900100405802a8fd201df401f4010050ee0212fd280e58025802006084037cfc303fbc02bc0200701a04e6fb38",
+          "hex": "04d20400e0fce0fc008050fbb004c03144fd44fd0090e6fb1a04c842a8fda8fd00a07cfc8403d0730cfe0cfe00b012fdee02d80470fe70fe00c0a8fd5802e035d4fed4fe00d03efec201e84638ff38ff00e0d4fe2c01f0779cff9cff00f06aff9600f80800000000000000000000003964006400001096006aff084ac800c80000202c01d4fe107b2c012c010030c2013efe180c9001900100405802a8fd203df401f4010050ee0212fd284e58025802006084037cfc307fbc02bc0200701a04e6fb38",
           "decoded": {
             "ack": 1234,
             "cars": [
               {
                 "c": 0,
                 "occupied": false,
-                "bumped": true,
+                "bump": 0,
                 "x": -8.0,
                 "z": -8.0,
                 "heading": -3.141592653589793,
@@ -4050,7 +4050,7 @@
               {
                 "c": 1,
                 "occupied": true,
-                "bumped": false,
+                "bump": 1,
                 "x": -7.0,
                 "z": -7.0,
                 "heading": -2.748893571891069,
@@ -4061,7 +4061,7 @@
               {
                 "c": 2,
                 "occupied": false,
-                "bumped": false,
+                "bump": 2,
                 "x": -6.0,
                 "z": -6.0,
                 "heading": -2.356194490192345,
@@ -4072,7 +4072,7 @@
               {
                 "c": 3,
                 "occupied": true,
-                "bumped": true,
+                "bump": 3,
                 "x": -5.0,
                 "z": -5.0,
                 "heading": -1.9634954084936207,
@@ -4083,7 +4083,7 @@
               {
                 "c": 4,
                 "occupied": false,
-                "bumped": false,
+                "bump": 0,
                 "x": -4.0,
                 "z": -4.0,
                 "heading": -1.5707963267948966,
@@ -4094,7 +4094,7 @@
               {
                 "c": 5,
                 "occupied": true,
-                "bumped": false,
+                "bump": 1,
                 "x": -3.0,
                 "z": -3.0,
                 "heading": -1.1780972450961724,
@@ -4105,7 +4105,7 @@
               {
                 "c": 6,
                 "occupied": false,
-                "bumped": true,
+                "bump": 2,
                 "x": -2.0,
                 "z": -2.0,
                 "heading": -0.7853981633974483,
@@ -4116,7 +4116,7 @@
               {
                 "c": 7,
                 "occupied": true,
-                "bumped": false,
+                "bump": 3,
                 "x": -1.0,
                 "z": -1.0,
                 "heading": -0.39269908169872414,
@@ -4127,7 +4127,7 @@
               {
                 "c": 8,
                 "occupied": false,
-                "bumped": false,
+                "bump": 0,
                 "x": 0.0,
                 "z": 0.0,
                 "heading": 0.0,
@@ -4138,7 +4138,7 @@
               {
                 "c": 9,
                 "occupied": true,
-                "bumped": true,
+                "bump": 1,
                 "x": 1.0,
                 "z": 1.0,
                 "heading": 0.39269908169872414,
@@ -4149,7 +4149,7 @@
               {
                 "c": 10,
                 "occupied": false,
-                "bumped": false,
+                "bump": 2,
                 "x": 2.0,
                 "z": 2.0,
                 "heading": 0.7853981633974483,
@@ -4160,7 +4160,7 @@
               {
                 "c": 11,
                 "occupied": true,
-                "bumped": false,
+                "bump": 3,
                 "x": 3.0,
                 "z": 3.0,
                 "heading": 1.1780972450961724,
@@ -4171,7 +4171,7 @@
               {
                 "c": 12,
                 "occupied": false,
-                "bumped": true,
+                "bump": 0,
                 "x": 4.0,
                 "z": 4.0,
                 "heading": 1.5707963267948966,
@@ -4182,7 +4182,7 @@
               {
                 "c": 13,
                 "occupied": true,
-                "bumped": false,
+                "bump": 1,
                 "x": 5.0,
                 "z": 5.0,
                 "heading": 1.9634954084936207,
@@ -4193,7 +4193,7 @@
               {
                 "c": 14,
                 "occupied": false,
-                "bumped": false,
+                "bump": 2,
                 "x": 6.0,
                 "z": 6.0,
                 "heading": 2.356194490192345,
@@ -4204,7 +4204,7 @@
               {
                 "c": 15,
                 "occupied": true,
-                "bumped": true,
+                "bump": 3,
                 "x": 7.0,
                 "z": 7.0,
                 "heading": 2.748893571891069,
@@ -4223,7 +4223,7 @@
               {
                 "c": 7,
                 "occupied": true,
-                "bumped": false,
+                "bump": 0,
                 "x": 150.0,
                 "z": -200.0,
                 "heading": 0.0,
@@ -4240,13 +4240,85 @@
               {
                 "c": 7,
                 "occupied": true,
-                "bumped": false,
+                "bump": 0,
                 "x": 100.0,
                 "z": -100.0,
                 "heading": 0.0,
                 "vx": 30.0,
                 "vz": -30.0,
                 "w": 7.9375
+              }
+            ]
+          }
+        },
+        {
+          "name": "bump = 2（tree），空車",
+          "input": {
+            "ack": 7,
+            "cars": [
+              {
+                "c": 9,
+                "occupied": false,
+                "bump": 2,
+                "x": -15.0,
+                "z": -3.0,
+                "heading": 0.0,
+                "vx": 0.5,
+                "vz": 2.0,
+                "w": -0.25
+              }
+            ]
+          },
+          "hex": "0407004924fad4fe00003200c800fc",
+          "decoded": {
+            "ack": 7,
+            "cars": [
+              {
+                "c": 9,
+                "occupied": false,
+                "bump": 2,
+                "x": -15.0,
+                "z": -3.0,
+                "heading": 0.0,
+                "vx": 0.5,
+                "vz": 2.0,
+                "w": -0.25
+              }
+            ]
+          }
+        },
+        {
+          "name": "bump = 3（car），c = 15、occupied（旗標 0x7f）",
+          "input": {
+            "ack": 8,
+            "cars": [
+              {
+                "c": 15,
+                "occupied": true,
+                "bump": 3,
+                "x": 2.0,
+                "z": 8.0,
+                "heading": -1.5707963267948966,
+                "vx": -4.0,
+                "vz": 0.0,
+                "w": 0.0
+              }
+            ]
+          },
+          "hex": "0408007fc800200300c070fe000000",
+          "decoded": {
+            "ack": 8,
+            "cars": [
+              {
+                "c": 15,
+                "occupied": true,
+                "bump": 3,
+                "x": 2.0,
+                "z": 8.0,
+                "heading": -1.5707963267948966,
+                "vx": -4.0,
+                "vz": 0.0,
+                "w": 0.0
               }
             ]
           }
@@ -4262,12 +4334,12 @@
           "hex": "0400000000000000000000000000000100000000000000000000000200000000000000000000000300000000000000000000000400000000000000000000000500000000000000000000000600000000000000000000000700000000000000000000000800000000000000000000000900000000000000000000000a00000000000000000000000b00000000000000000000000c00000000000000000000000d00000000000000000000000e00000000000000000000000f0000000000000000000000000000000000000000000000"
         },
         {
-          "name": "保留位元 bit 6 為 1",
-          "hex": "040000400000000000000000000000"
-        },
-        {
           "name": "保留位元 bit 7 為 1",
           "hex": "040000800000000000000000000000"
+        },
+        {
+          "name": "保留位元 bit 7 為 1（其餘旗標全滿，0xff）",
+          "hex": "040000ff0000000000000000000000"
         },
         {
           "name": "x 超出 ±100 公尺（10001 公分）",

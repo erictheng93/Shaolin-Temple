@@ -10,7 +10,9 @@
  * - AudioContext 只能在使用者操作後建立／恢復，因此 unlock() 必須在點擊事件中呼叫。
  */
 
-type SynthName = 'bell' | 'bowl' | 'bump' | 'knock'
+import { synthesizeBumpCar, synthesizeBumpTree, synthesizeBumpWall, synthesizeKnock } from './impacts.ts'
+
+type SynthName = 'bell' | 'bowl'
 
 const MAX_VOICES = 12
 
@@ -46,10 +48,6 @@ function synthesize(ctx: BaseAudioContext, name: SynthName): AudioBuffer {
     bell: { seconds: 7, f0: 98, partials: [[1, 1, 3.2], [2.0, 0.6, 2.2], [2.76, 0.45, 1.6], [5.4, 0.25, 0.9], [8.93, 0.12, 0.5]] },
     // 頌缽：拍頻造成的嗡嗡聲
     bowl: { seconds: 6, f0: 294, partials: [[1, 1, 3.5], [1.006, 0.8, 3.5], [2.71, 0.35, 2], [5.15, 0.12, 1]] },
-    // 碰碰車碰撞：低沉短促橡膠撞擊
-    bump: { seconds: 0.25, f0: 95, partials: [[1, 1, 0.05], [1.8, 0.4, 0.03]], click: 0.015 },
-    // 撞飛：較重的擊中感與滑落衰減
-    knock: { seconds: 0.45, f0: 140, partials: [[1, 1, 0.08], [0.65, 0.7, 0.12], [2.1, 0.3, 0.04]], click: 0.02 },
   }
   const s = spec[name]
   const len = Math.floor(sr * s.seconds)
@@ -148,6 +146,49 @@ export function synthesizeQing(ctx: BaseAudioContext, strikes: readonly number[]
   let peak = 0
   for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(data[i]!))
   const norm = peak > 0 ? 0.6 / peak : 1
+  for (let i = 0; i < len; i++) data[i]! *= norm
+  return buffer
+}
+
+/** 合十：衣袖聲與磬聲的音量（正規化前，磬的基音為 1）、磬的餘韻長度（秒）。 */
+const BOW_RUSTLE_GAIN = 0.1
+const BOW_TAIL = 2.4
+
+/**
+ * 合成合十問訊的音效：彎腰時一陣衣袖摩擦的窸窣，彎到底（strikeAt 秒）時一聲輕輕的引磬。
+ * 合十是最常做的動作、很多人會同時做，所以比跪拜的引磬低、柔（包布的槌、起音慢、高分音少）、小聲，
+ * 兩個相近的分音讓餘韻微微起伏，不是一個單調的「叮」。random 可注入。
+ */
+export function synthesizeBow(ctx: BaseAudioContext, strikeAt: number, random: () => number = Math.random): AudioBuffer {
+  const sr = ctx.sampleRate
+  const f0 = 1046.5
+  const partials: Array<[ratio: number, amp: number, decay: number]> = [[1, 1, 1.0], [1.004, 0.7, 1.0], [2.71, 0.22, 0.4], [5.2, 0.06, 0.12]]
+  const len = Math.floor(sr * (strikeAt + BOW_TAIL))
+  const buffer = ctx.createBuffer(1, len, sr)
+  const data = buffer.getChannelData(0)
+  const s0 = Math.floor(strikeAt * sr)
+  // 衣袖：去掉低頻的雜訊，sin² 包絡再加一點不規則的起伏（布料不是均勻地滑）
+  let low = 0
+  let flutter = 0
+  for (let i = 0; i < s0; i++) {
+    const white = random() * 2 - 1
+    low += 0.2 * (white - low)
+    flutter += 0.002 * (random() * 2 - 1 - flutter)
+    data[i] = BOW_RUSTLE_GAIN * (white - low) * Math.sin((Math.PI * i) / s0) ** 2 * (0.6 + 12 * Math.abs(flutter))
+  }
+  const attack = Math.floor(sr * 0.005)
+  const fade = Math.floor(sr * 0.4)
+  let peak = 0
+  for (let i = 0; i < len - s0; i++) {
+    const t = i / sr
+    let v = 0
+    for (const [ratio, amp, decay] of partials) v += amp * Math.sin(2 * Math.PI * f0 * ratio * t) * Math.exp(-t / decay)
+    v *= Math.min(1, i / attack, (len - s0 - i) / fade)
+    data[s0 + i] = v
+    peak = Math.max(peak, Math.abs(v))
+  }
+  // 比跪拜的引磬（0.6）小聲
+  const norm = peak > 0 ? 0.4 / peak : 1
   for (let i = 0; i < len; i++) data[i]! *= norm
   return buffer
 }
@@ -335,7 +376,12 @@ export class AudioManager {
       this.musicBus.connect(this.master)
       this.sfxBus.connect(this.master)
       this.master.connect(ctx.destination)
-      for (const n of ['bell', 'bowl', 'bump', 'knock'] as const) this.buffers.set(n, synthesize(ctx, n))
+      for (const n of ['bell', 'bowl'] as const) this.buffers.set(n, synthesize(ctx, n))
+      // 碰碰車撞到車、建築、樹、人各一種聲音（名稱對應 vehicles/sfx.ts）
+      this.buffers.set('bumpCar', synthesizeBumpCar(ctx))
+      this.buffers.set('bumpWall', synthesizeBumpWall(ctx))
+      this.buffers.set('bumpTree', synthesizeBumpTree(ctx))
+      this.buffers.set('knock', synthesizeKnock(ctx))
       this.buffers.set('wood', synthesizeMuyu(ctx))
       this.birdBuffers = Array.from({ length: BIRD_VARIANTS }, () => synthesizeBirdCall(ctx))
       this.windBuffer = synthesizeWindNoise(ctx)

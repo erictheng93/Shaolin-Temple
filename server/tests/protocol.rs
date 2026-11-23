@@ -7,7 +7,7 @@ use temple_server::world;
 #[test]
 fn shared_frontend_fixtures_round_trip() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("protocol-v5.json")).unwrap();
+        serde_json::from_str(include_str!("protocol-v6.json")).unwrap();
     for value in fixtures["server"].as_array().unwrap() {
         let message: ServerMessage = serde_json::from_value(value.clone()).unwrap();
         let actual = serde_json::to_value(message).unwrap();
@@ -143,7 +143,7 @@ fn malformed_client_fields_rejected() {
 }
 
 fn fixtures() -> serde_json::Value {
-    serde_json::from_str(include_str!("protocol-v5.json")).unwrap()
+    serde_json::from_str(include_str!("protocol-v6.json")).unwrap()
 }
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())
@@ -328,7 +328,14 @@ fn shared_cars_vectors_encode_and_decode() {
     let fixtures = fixtures();
     let cars_fixture = &fixtures["binary"]["cars"];
     let valid = cars_fixture["valid"].as_array().unwrap();
-    assert_eq!(valid.len(), 5);
+    assert_eq!(valid.len(), 7);
+    // 四種撞擊種類都要有向量
+    let bumps: std::collections::BTreeSet<u64> = valid
+        .iter()
+        .flat_map(|case| case["input"]["cars"].as_array().unwrap())
+        .map(|c| c["bump"].as_u64().unwrap())
+        .collect();
+    assert_eq!(bumps.into_iter().collect::<Vec<_>>(), [0, 1, 2, 3]);
     for case in valid {
         let name = case["name"].as_str().unwrap();
         let bytes = hex(case["hex"].as_str().unwrap());
@@ -341,7 +348,7 @@ fn shared_cars_vectors_encode_and_decode() {
             .map(|c| CarState {
                 c: c["c"].as_u64().unwrap() as u8,
                 occupied: c["occupied"].as_bool().unwrap(),
-                bumped: c["bumped"].as_bool().unwrap(),
+                bump: c["bump"].as_u64().unwrap() as u8,
                 x: c["x"].as_f64().unwrap(),
                 z: c["z"].as_f64().unwrap(),
                 heading: c["heading"].as_f64().unwrap(),
@@ -373,7 +380,7 @@ fn shared_cars_vectors_encode_and_decode() {
             .map(|c| CarState {
                 c: c["c"].as_u64().unwrap() as u8,
                 occupied: c["occupied"].as_bool().unwrap(),
-                bumped: c["bumped"].as_bool().unwrap(),
+                bump: c["bump"].as_u64().unwrap() as u8,
                 x: c["x"].as_f64().unwrap(),
                 z: c["z"].as_f64().unwrap(),
                 heading: c["heading"].as_f64().unwrap(),
@@ -386,7 +393,7 @@ fn shared_cars_vectors_encode_and_decode() {
         for (actual, expected) in decoded.1.iter().zip(expected_cars.iter()) {
             assert_eq!(actual.c, expected.c, "{name}");
             assert_eq!(actual.occupied, expected.occupied, "{name}");
-            assert_eq!(actual.bumped, expected.bumped, "{name}");
+            assert_eq!(actual.bump, expected.bump, "{name}");
             assert!((actual.x - expected.x).abs() < 1e-12, "{name}");
             assert!((actual.z - expected.z).abs() < 1e-12, "{name}");
             let d = (actual.heading - expected.heading).rem_euclid(2.0 * std::f64::consts::PI);
@@ -409,6 +416,66 @@ fn shared_cars_vectors_encode_and_decode() {
         let bytes = hex(case["hex"].as_str().unwrap());
         assert!(decode_cars(&bytes).is_none(), "{}", case["name"]);
     }
+    // 保留位元 bit 7 為 1 的向量存在
+    assert!(invalid.iter().any(|case| {
+        let bytes = hex(case["hex"].as_str().unwrap());
+        bytes.len() == 3 + 12 && bytes[3] & 0x80 != 0
+    }));
+}
+
+#[test]
+fn cars_bump_kinds_round_trip_and_bit7_is_rejected() {
+    use temple_server::protocol::{BUMP_CAR, BUMP_NONE, BUMP_TREE, BUMP_WALL};
+    for (bump, c, occupied) in [
+        (BUMP_NONE, 0u8, false),
+        (BUMP_WALL, 5, true),
+        (BUMP_TREE, 10, false),
+        (BUMP_CAR, 15, true),
+    ] {
+        let car = CarState {
+            c,
+            occupied,
+            bump,
+            x: 1.5,
+            z: -2.25,
+            heading: 0.5,
+            vx: 1.0,
+            vz: -1.0,
+            w: 0.25,
+        };
+        let bytes = encode_cars(9, &[car]).unwrap();
+        // 旗標：bit 0～3 車號、bit 4 occupied、bit 5～6 bump、bit 7 為 0
+        assert_eq!(bytes[3], c | (u8::from(occupied) << 4) | (bump << 5));
+        assert_eq!((bytes[3] >> 5) & 0x03, bump);
+        assert_eq!(bytes[3] & 0x80, 0);
+        let (ack, decoded) = decode_cars(&bytes).unwrap();
+        assert_eq!(ack, 9);
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].bump, bump);
+        assert_eq!(decoded[0].c, c);
+        assert_eq!(decoded[0].occupied, occupied);
+
+        // bit 7 為 1 時整則拒絕（其他位元不論）
+        let mut bad = bytes.clone();
+        bad[3] |= 0x80;
+        assert!(decode_cars(&bad).is_none(), "bump {bump}");
+    }
+    // 第二台車的 bit 7 為 1 也整則拒絕
+    let ok = CarState {
+        c: 1,
+        occupied: false,
+        bump: BUMP_NONE,
+        x: 0.0,
+        z: 0.0,
+        heading: 0.0,
+        vx: 0.0,
+        vz: 0.0,
+        w: 0.0,
+    };
+    let mut bytes = encode_cars(0, &[ok, CarState { c: 2, ..ok }]).unwrap();
+    assert!(decode_cars(&bytes).is_some());
+    bytes[3 + 12] |= 0x80;
+    assert!(decode_cars(&bytes).is_none());
 }
 
 #[test]
@@ -416,7 +483,7 @@ fn cars_encoding_refuses_what_the_frame_cannot_carry() {
     let dummy = CarState {
         c: 0,
         occupied: false,
-        bumped: false,
+        bump: 0,
         x: 0.0,
         z: 0.0,
         heading: 0.0,
@@ -429,6 +496,12 @@ fn cars_encoding_refuses_what_the_frame_cannot_carry() {
     let mut bad_car = dummy;
     bad_car.c = MAX_CARS as u8;
     assert!(encode_cars(0, &[bad_car]).is_none());
+    // bump 只有 2 位元（0..=3）
+    let mut bad_bump = dummy;
+    bad_bump.bump = 4;
+    assert!(encode_cars(0, &[bad_bump]).is_none());
+    bad_bump.bump = 3;
+    assert!(encode_cars(0, &[bad_bump]).is_some());
     // Cars 不以 JSON 送出。
     let message = ServerMessage::Cars {
         ack: 0,

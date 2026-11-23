@@ -1,4 +1,4 @@
-import fixtures from '../../../../server/tests/protocol-v5.json'
+import fixtures from '../../../../server/tests/protocol-v6.json'
 import { describe, expect, it } from 'vitest'
 import {
   ACTION_CODES,
@@ -9,6 +9,7 @@ import {
   encodeCars,
   unwrapStartedAt,
   type BatchMessage,
+  type CarWireState,
 } from './binaryFrame'
 import { FrameContext, KIND_COUNT, PROTOCOL_VERSION, decode, encode, type ClientMessage, type DecodeContext } from './protocol'
 
@@ -19,7 +20,7 @@ const fromHex = (hex: string): ArrayBuffer => {
 }
 const toHex = (bytes: Uint8Array): string => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 
-it('Rust 共用 v5 固定資料可由前端收發', () => {
+it('Rust 共用 v6 固定資料可由前端收發', () => {
   for (const m of fixtures.client) if (m.t === 'hello') expect(m.v).toBe(PROTOCOL_VERSION)
   for (const message of fixtures.server) expect(decode(JSON.stringify(message))).toEqual(message)
   for (const message of fixtures.client) expect(JSON.parse(encode(message as ClientMessage))).toEqual(message)
@@ -129,7 +130,7 @@ describe('cars 二進位幀（與 Rust 共用的測試向量）', () => {
 
   it('編碼結果等於 hex，解碼結果等於 decoded', () => {
     for (const v of cars.valid) {
-      expect(toHex(encodeCars(v.input.ack, v.input.cars)!), v.name).toBe(v.hex)
+      expect(toHex(encodeCars(v.input.ack, v.input.cars as CarWireState[])!), v.name).toBe(v.hex)
       const decoded = decodeCars(fromHex(v.hex))
       expect(decoded, v.name).not.toBeNull()
       expect(decoded!.ack, v.name).toBe(v.decoded.ack)
@@ -139,7 +140,7 @@ describe('cars 二進位幀（與 Rust 共用的測試向量）', () => {
         const expected = v.decoded.cars[i]!
         expect(actual.c, v.name).toBe(expected.c)
         expect(actual.occupied, v.name).toBe(expected.occupied)
-        expect(actual.bumped, v.name).toBe(expected.bumped)
+        expect(actual.bump, v.name).toBe(expected.bump)
         expect(actual.x, v.name).toBeCloseTo(expected.x, 2)
         expect(actual.z, v.name).toBeCloseTo(expected.z, 2)
         let d = ((actual.heading - expected.heading) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)

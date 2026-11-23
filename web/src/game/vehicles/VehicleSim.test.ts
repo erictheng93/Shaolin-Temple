@@ -20,7 +20,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     return {
       c,
       occupied: true,
-      bumped: false,
+      bump: 0,
       x,
       z,
       heading,
@@ -381,7 +381,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
         const quantizedCar: CarState = {
           c: raw.c,
           occupied: raw.occupied,
-          bumped: raw.bumped,
+          bump: raw.bump,
           x: Math.round(raw.x * 100) / 100, // 公分量化
           z: Math.round(raw.z * 100) / 100,
           heading:
