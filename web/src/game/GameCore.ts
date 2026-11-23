@@ -9,6 +9,7 @@ import { debugPosition, type DebugPosition } from './core/position'
 import { normalizeName } from './core/names'
 import { decideRename, isRenamePending } from './core/rename'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
+import { ApproachFlow } from './core/approachFlow'
 import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, saveSettings, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
@@ -144,8 +145,6 @@ const SFX_HEARING_RANGE = 28
 const UI_PUSH_MS = 250
 /** 伺服器糾正本機位置時，差距小於這個距離（公尺）就滑過去，否則瞬移。 */
 const SMOOTH_CORRECTION_M = 1
-/** 走向參拜點：離站位這麼近就算抵達（抵達後直接站到站位上並轉向）。 */
-const APPROACH_ARRIVE = 0.3
 /** 場景切換：淡出時間與淡入前的停留（毫秒），需與 App.vue 的 CSS 過場一致。 */
 const FADE_MS = 400
 const FADE_HOLD_MS = 150
@@ -175,11 +174,6 @@ export class GameCore {
   private savedCamera: Partial<Record<ZoneId, CameraPose>> = {}
   /** 尋路尚未走到的轉折點（目前目標在 mover.target）。 */
   private path: Point[] = []
-  /**
-   * 正在走向定點、抵達後才開始的動作（approach）；waiting 表示已站在定點上、等 startWait 歸零才開始。
-   * 玩家自己移動、點擊地面、按動作或切換場景時取消。
-   */
-  private pending: { id: string; pose: Pose; waiting?: boolean } | null = null
   /** 本機正在進行、鎖定移動的動作 id（鎖定結束後不一定清除，以 lockedUntil 為準）；用來判斷能不能提前結束（endAction）。 */
   private lockedAction: string | null = null
   /** 香爐裡的香與煙（兩個場景共用，只畫目前場景的香爐）。 */
@@ -198,6 +192,18 @@ export class GameCore {
   private net: NetworkClient
   private audio = new AudioManager()
   private actions = new ActionRegistry()
+  /**
+   * 走向定點、抵達後才開始的動作（approach）與定點上的就位等候（startWait）；
+   * 玩家自己移動、點擊地面、按動作、切換場景等時取消（取消原因見 ApproachCancel）。
+   */
+  private approach = new ApproachFlow({
+    actions: this.actions,
+    position: () => this.players.local.mover,
+    standAt: (pose) => this.standAt(pose),
+    begin: (id, pose) => this.beginAction(id, pose),
+    walkTo: (pose) => this.walkTo(pose),
+    toast: (text) => this.opts.onToast(text),
+  })
   private uninstallers: Array<() => void> = []
   private moveCfg!: MoveConfig
   private vehicleAudio: VehicleAudio
@@ -531,7 +537,7 @@ export class GameCore {
     const def = this.actions.get(id)
     if (!def || def.hidden || this.fading) return
     // 按任何動作都取消正在定點上的等候（按的是同一個動作會在下面重新就位）
-    if (this.pending?.waiting) this.pending = null
+    this.approach.cancel('action')
     if (now < local.lockedUntil) {
       const interrupted = this.interruptLocal()
       if (!interrupted || interrupted === id) return
@@ -546,32 +552,7 @@ export class GameCore {
       this.beginAction(id, null)
       return
     }
-    const spot = def.approach(this.spotContext())
-    if (typeof spot === 'string') {
-      this.opts.onToast(spot)
-      return
-    }
-    if (Math.hypot(spot.x - local.mover.x, spot.z - local.mover.z) <= APPROACH_ARRIVE) {
-      this.arriveAt(id, spot)
-      return
-    }
-    if (!this.walkTo(spot)) {
-      this.toast('move.unreachable')
-      return
-    }
-    this.pending = { id, pose: spot }
-  }
-
-  /** 抵達定點：動作要求等候（startWait > 0）時站到定點上等，否則立刻開始。 */
-  private arriveAt(id: string, pose: Pose): void {
-    const def = this.actions.get(id)
-    if (def?.startWait && def.startWait(performance.now()) > 0) {
-      this.standAt(pose)
-      this.pending = { id, pose, waiting: true }
-      this.toast('action.waiting', { action: t(def.label) })
-      return
-    }
-    this.beginAction(id, pose)
+    this.approach.start(id, this.spotContext())
   }
 
   /** 站到站位上、面向神龕或香爐；位置與面向一起送出（排在之後的動作之前）。 */
@@ -817,7 +798,7 @@ export class GameCore {
     if (riding) {
       this.lastInputAt = now
       this.path = []
-      this.pending = null
+      this.approach.cancel('ride')
       const k = this.moveInput()
       wantsMove = k.x !== 0 || k.y !== 0
       const yaw = this.renderer.yaw
@@ -849,7 +830,7 @@ export class GameCore {
         if (k.x !== 0 || k.y !== 0) {
           // 鍵盤／搖桿操作取消尋路路徑與正在走向定點的動作
           this.path = []
-          this.pending = null
+          this.approach.cancel('move')
         }
         wantsMove = k.x !== 0 || k.y !== 0 || local.mover.target !== null
         const yaw = this.renderer.yaw
@@ -868,26 +849,7 @@ export class GameCore {
           if (!arrived) this.path = []
         }
         // 走向定點的動作：路走完（或被擋住）時，抵達就開始（或就位等候），沒抵達就提示；等候中等到 startWait 歸零才開始
-        if (this.pending?.waiting) {
-          const { id, pose } = this.pending
-          if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) > APPROACH_ARRIVE) {
-            // 等候中可能被走過的玩家推離站位；開始時會貼回站位，推遠了會瞬移，所以取消
-            this.pending = null
-            this.toast('move.blocked')
-          } else if ((this.actions.get(id)?.startWait?.(now) ?? 0) <= 0) {
-            this.pending = null
-            this.beginAction(id, pose)
-          }
-        } else if (this.pending && !local.mover.target) {
-          const { id, pose } = this.pending
-          this.pending = null
-          if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) <= APPROACH_ARRIVE) {
-            this.arriveAt(id, pose)
-            moving = false
-          } else {
-            this.toast('move.blocked')
-          }
-        }
+        if (this.approach.update(now, local.mover.target !== null)) moving = false
       }
       local.anim.moving = moving
 
@@ -1008,7 +970,7 @@ export class GameCore {
     // 點到主殿建築時走向殿門，而不是被推到建築最近的邊緣。
     const tapPortal = portalForTap(this.zone, hit.point.x, hit.point.z)
     const want = tapPortal ? portalApproach(tapPortal) : { x: hit.point.x, z: hit.point.z }
-    this.pending = null
+    this.approach.cancel('tap')
     this.walkTo(resolveCollisions(want.x, want.z, this.moveCfg), 1600)
   }
 
@@ -1033,7 +995,7 @@ export class GameCore {
     this.fading = true
     local.mover.target = null
     this.path = []
-    this.pending = null
+    this.approach.cancel('zone')
     this.lockedAction = null
     local.lockedUntil = performance.now() + FADE_MS * 2 + FADE_HOLD_MS
     this.input.clearKeys()
@@ -1086,7 +1048,7 @@ export class GameCore {
     const pos = resolveCollisions(pose.x, pose.z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, heading: pose.heading, target: null })
     this.path = []
-    this.pending = null
+    this.approach.cancel('zone')
     this.knockFlight = null
     this.players.setLocalZone(zone)
     this.incense.setZone(zone)
@@ -1128,7 +1090,7 @@ export class GameCore {
     else if (now - this.blockedSince > 1500 && m.target) {
       m.target = null
       this.path = []
-      this.pending = null
+      this.approach.cancel('blocked')
       this.marker.visible = false
       this.blockedSince = null
     }
@@ -1166,7 +1128,7 @@ export class GameCore {
     const pos = resolveCollisions(x, z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, target: null })
     this.path = []
-    this.pending = null
+    this.approach.cancel('correction')
     this.marker.visible = false
     this.snapCamera = true
     this.wake()
@@ -1184,7 +1146,7 @@ export class GameCore {
       this.stopLoop()
       this.input.clearKeys()
       // 定點上的等候不留到回前景（可能已隔很久）才開始
-      if (this.pending?.waiting) this.pending = null
+      this.approach.cancel('background')
       this.net.setBackground(true)
       void this.audio.suspend()
     } else {
@@ -1349,7 +1311,7 @@ export class GameCore {
         fading: this.fading,
         local: this.players.local,
         clearLocalActions: () => {
-          this.pending = null
+          this.approach.cancel('knock')
           this.path = []
           this.lockedAction = null
           this.players.local.anim.clip = null
@@ -1405,6 +1367,23 @@ export class GameCore {
     this.events.emit('actionPerformed', { playerId: r.id, actionId: m.id, local: false, zone: r.zone, startedAt, x: r.x, z: r.z })
   }
 
+  /**
+   * GameplayApi.retimeAction：把玩家目前正在做的動作改成從 startedAt 開始（動作片段的進度與鎖定移動的結束時刻），冷卻不變。
+   * 「正在做」＝動作片段還是這個動作的動畫，鎖定移動的動作還在鎖定中（本機另要求鎖定的就是這個動作）。
+   */
+  private retimeAction(id: string, actionId: string, startedAt: number): void {
+    const def = this.actions.get(actionId)
+    if (!def) return
+    const now = performance.now()
+    const self = id === 'local' || id === this.selfId
+    const p = self ? this.players.local : this.players.remotes.get(id)
+    if (!p || p.anim.clip !== def.animation) return
+    if (def.locksMovement && (now >= p.lockedUntil || (self && this.lockedAction !== actionId))) return
+    this.anim.play(p.anim, def.animation, now, def.durationMs, startedAt)
+    if (def.locksMovement) p.lockedUntil = startedAt + def.durationMs
+    this.wake()
+  }
+
   // ---------- 玩法模組 ----------
 
   private installGameplay(): void {
@@ -1438,6 +1417,7 @@ export class GameCore {
         const r = this.players.remotes.get(id)
         return r ? { x: r.to.x, z: r.to.z, zone: r.zone } : null
       },
+      retimeAction: (id, actionId, startedAt) => this.retimeAction(id, actionId, startedAt),
     }
     for (const mod of gameplayModules) {
       try {

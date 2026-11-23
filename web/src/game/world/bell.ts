@@ -1,5 +1,5 @@
 import { t } from '../../i18n'
-import { BELL_PAVILION, PLAYER_RADIUS } from './layout'
+import { BELL_CENTER, BELL_STATION_GAP, BELL_STATIONS } from './layout'
 import { pickFreeSpot, type SpotContext } from './worship'
 import type { Pose } from './zones'
 
@@ -10,23 +10,8 @@ const smooth = (x: number) => x * x * (3 - 2 * x)
  * 角色的動作、撞木的擺動與鐘聲的時刻因此一致。
  */
 
-/** 鐘的中心（鐘亭正中，TempleScene 的 bellPivot）。 */
-export const BELL_CENTER = {
-  x: (BELL_PAVILION.minX + BELL_PAVILION.maxX) / 2,
-  z: (BELL_PAVILION.minZ + BELL_PAVILION.maxZ) / 2,
-}
-
-/**
- * 敲鐘站位：鐘亭面向庭院（+z）的一側，站在鐘亭障礙物（含角色半徑）外 0.15 公尺，左右各一、間距 0.8 公尺
- * （大於兩個角色半徑 0.7，也大於視為有人的 0.6），三人可同時站著不重疊。面向鐘。
- * 撞木從這一側伸向鐘，三條拉繩從撞木尾端垂到三個站位的手前。
- */
-export const BELL_STATION_GAP = 0.8
-const BELL_STATION_Z = BELL_PAVILION.maxZ + PLAYER_RADIUS + 0.15
-export const BELL_STATIONS: ReadonlyArray<Pose> = [-1, 0, 1].map((i) => {
-  const x = BELL_CENTER.x + i * BELL_STATION_GAP
-  return { x, z: BELL_STATION_Z, heading: Math.atan2(BELL_CENTER.x - x, BELL_CENTER.z - BELL_STATION_Z) }
-})
+// 站位資料定義在 layout.ts（Node 的 mock 伺服器要直接載入），這裡照原名轉出口。
+export { BELL_CENTER, BELL_STATION_GAP, BELL_STATIONS }
 
 /** 敲鐘：走到最近的空站位。不在庭院或站位都有人時回傳原因。 */
 export function pickBellStation(ctx: SpotContext): Pose | string {
@@ -77,8 +62,11 @@ export function strikerAngle(ms: number): number {
 
 // ---------- 多人輪流敲的聲音規則 ----------
 
-/** 個人冷卻：同一個人兩次敲鐘至少間隔 10 秒。 */
-export const BELL_COOLDOWN_MS = 10_000
+/**
+ * 個人冷卻：同一個人兩次敲鐘至少間隔 6 秒。必須小於兩聲的最短間隔（BELL_HIT_MS + BELL_QUIET_MS = 6.75 秒），
+ * 同一組人才能每一聲都一起敲。
+ */
+export const BELL_COOLDOWN_MS = 6_000
 /**
  * 鐘聲未歇：任何人撞到鐘之後 5 秒內（或已有人正在敲、還沒撞到），按敲鐘會先走到空站位就位等候，靜默期一結束才開始。
  * 撞到的時刻在開始後 BELL_HIT_MS，所以實際兩聲的間隔至少約 6.75 秒，前一聲的基音已衰減到約 1/8。

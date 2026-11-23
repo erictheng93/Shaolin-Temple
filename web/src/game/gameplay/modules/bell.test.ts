@@ -112,6 +112,41 @@ describe('敲鐘', () => {
     expect(solo.swingStrengths).toEqual([1])
   })
 
+  it('合力敲鐘：加入者（本機與遠端）的動作時間軸重設到這一聲的 t0，開啟者不重設', () => {
+    const { events, retimed } = setup()
+    const t0 = performance.now()
+    events.emit('actionPerformed', bellEvent('p-a', t0))
+    expect(retimed).toEqual([])
+    vi.advanceTimersByTime(400)
+    // 本機加入：自己的動作在 t0 + 400 開始，改走 t0 的時間軸
+    events.emit('actionPerformed', bellEvent('local', t0 + 400, true))
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 650))
+    // 重複的事件不再重設
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 650))
+    expect(retimed).toEqual([
+      { playerId: 'local', actionId: 'bell', startedAt: t0 },
+      { playerId: 'p-b', actionId: 'bell', startedAt: t0 },
+    ])
+    // 超過加入窗口的另開一聲：開啟者不重設
+    events.emit('actionPerformed', bellEvent('p-c', t0 + BELL_JOIN_MS + 300))
+    expect(retimed).toHaveLength(2)
+  })
+
+  it('合力敲鐘亂序：開啟得較早的事件晚到時加入既有那一聲，對齊的是那一聲的 t0（不往前移）', () => {
+    const { events, retimed, strikes } = setup()
+    const t0 = performance.now()
+    // 加入者 p-b 的事件先到，開啟了這一聲；較早開始的 p-a 晚到
+    events.emit('actionPerformed', bellEvent('p-b', t0))
+    vi.advanceTimersByTime(300)
+    events.emit('actionPerformed', bellEvent('p-a', t0 - 250))
+    events.emit('actionPerformed', bellEvent('local', t0 + 300, true))
+    expect(strikes).toEqual([t0])
+    expect(retimed).toEqual([
+      { playerId: 'p-a', actionId: 'bell', startedAt: t0 },
+      { playerId: 'local', actionId: 'bell', startedAt: t0 },
+    ])
+  })
+
   it('撞到之後才到的加入者不補響、不重啟撞木', () => {
     const { events, played, swings, strikes, positions } = setup()
     positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })

@@ -5,7 +5,7 @@ import { ActionRegistry } from '../ActionRegistry'
 import type { GameEvents, GameplayApi } from '../types'
 import { worshipModule } from './worship'
 
-/** 測試用：參拜模組安裝在假的 GameplayApi 上，記錄播放的聲音、鐘的擺動與撞木。 */
+/** 測試用：參拜模組安裝在假的 GameplayApi 上，記錄播放的聲音、鐘的擺動、撞木與動作時間軸的重設。 */
 export const makeRig = () => {
   const rotation = { x: 0, y: 0, z: 0, set(x: number, y: number, z: number) { Object.assign(this, { x, y, z }) } }
   return { pivot: { rotation, position: { y: 0 } }, head: { rotation: { ...rotation } }, face: 0, prop: 0, propAngle: 0 } as unknown as AvatarRig
@@ -24,6 +24,8 @@ export function setup() {
   const swingStrengths: number[] = []
   const strikes: number[] = []
   const clock = { offset: 0 }
+  /** retimeAction 的呼叫紀錄。 */
+  const retimed: Array<{ playerId: string; actionId: string; startedAt: number }> = []
   const api: GameplayApi = {
     actions,
     animations: anim,
@@ -53,9 +55,12 @@ export function setup() {
       return p ? { x: p.x, z: p.z } : { x: 0, z: 0 }
     },
     playerPosition: (id) => positions.get(id) ?? null,
+    retimeAction: (playerId, actionId, startedAt) => {
+      retimed.push({ playerId, actionId, startedAt })
+    },
   }
   const uninstall = worshipModule.install(api)
-  return { anim, actions, events, sfx, stats, offered, positions, played, swings, swingStrengths, strikes, clock, uninstall }
+  return { anim, actions, events, sfx, stats, offered, positions, played, swings, swingStrengths, strikes, clock, retimed, uninstall }
 }
 
 export const pose = (anim: AnimationSystem, clip: string, duration: number, p: number) => {

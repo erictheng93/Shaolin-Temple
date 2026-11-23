@@ -22,7 +22,7 @@ import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
 import { MIN_DIST, TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
 import { OBSTACLES } from '../src/game/world/layout.ts'
 import { VEHICLES, sessionState } from '../src/game/world/vehicles.ts'
-import { BELL_PAVILION, PLAYER_RADIUS, SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
+import { BELL_STATIONS, SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
 import { ACTION_CODES, MAX_CARS, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch, encodeCars } from '../src/game/net/binaryFrame.ts'
 
@@ -629,14 +629,6 @@ for (let i = 0; i < BOTS; i++) {
   })
 }
 
-// 鐘亭的三個敲鐘站位，抄自 world/bell.ts 的 BELL_STATIONS（那個檔案 import 了 i18n 目錄，Node 直接載入會失敗，所以這裡重算；改站位時兩邊一起改）
-const BELL_STATIONS = [-1, 0, 1].map((i) => {
-  const cx = (BELL_PAVILION.minX + BELL_PAVILION.maxX) / 2
-  const cz = (BELL_PAVILION.minZ + BELL_PAVILION.maxZ) / 2
-  const x = cx + i * 0.8
-  const z = BELL_PAVILION.maxZ + PLAYER_RADIUS + 0.15
-  return { x, z, heading: Math.atan2(cx - x, cz - z) }
-})
 /** 合力敲鐘的小隊：{ members, deadline }，同時只有一組。 */
 let bellCrew = null
 const BELL_CREW_WAIT_MS = 30_000
