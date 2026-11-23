@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BELL_HALL_GAIN, BELL_HALL_LOWPASS_HZ, BELL_HIT_MS, BELL_MS, BELL_PULL_MS, BELL_QUIET_MS, BELL_STATIONS } from '../../world/bell'
+import {
+  BELL_CREW_SWING,
+  BELL_HALL_GAIN,
+  BELL_HALL_LOWPASS_HZ,
+  BELL_HIT_MS,
+  BELL_JOIN_MS,
+  BELL_MS,
+  BELL_PULL_MS,
+  BELL_QUIET_MS,
+  BELL_STATIONS,
+  bellCrewGain,
+} from '../../world/bell'
 import type { SpotContext } from '../../world/worship'
 import { pose, setup } from './testHarness'
 
@@ -48,29 +59,83 @@ describe('敲鐘', () => {
     expect(played[1]).toMatchObject({ name: 'bell', t: t1 + BELL_HIT_MS })
   })
 
-  it('鐘聲未歇（有人正在敲，或撞到後 5 秒內）時不出發，提示稍候', () => {
+  it('鐘聲未歇（有人正在敲，或撞到後 5 秒內）時仍出發到空站位，抵達後就位等候到靜默期結束', () => {
     const { actions, events } = setup()
     const def = actions.get('bell')!
+    expect(def.startWait!(performance.now())).toBe(0)
     const t0 = performance.now()
     events.emit('actionPerformed', bellEvent('p-remote', t0))
-    // 還沒撞到也算
-    expect(def.approach!(yard())).toMatch(/鐘聲未歇，約 \d+ 秒後再敲/)
-    vi.advanceTimersByTime(BELL_HIT_MS + BELL_QUIET_MS - 1)
-    expect(def.approach!(yard())).toBeTypeOf('string')
-    vi.advanceTimersByTime(1)
+    // 不再拒絕：仍回傳站位
     expect(BELL_STATIONS).toContain(def.approach!(yard()))
+    // 剛開始的這一聲還能加入：立刻開始
+    vi.advanceTimersByTime(BELL_JOIN_MS)
+    expect(def.startWait!(performance.now())).toBe(0)
+    // 過了加入窗口（還沒撞到也算未歇）：要等到撞到後 5 秒
+    vi.advanceTimersByTime(1)
+    expect(def.startWait!(performance.now())).toBe(t0 + BELL_HIT_MS + BELL_QUIET_MS - performance.now())
+    vi.advanceTimersByTime(BELL_HIT_MS + BELL_QUIET_MS - BELL_JOIN_MS - 2)
+    expect(def.startWait!(performance.now())).toBe(1)
+    vi.advanceTimersByTime(1)
+    expect(def.startWait!(performance.now())).toBe(0)
   })
 
-  it('兩人幾乎同時敲：2 秒內的第二聲壓低，不會疊成兩聲一樣大的鐘', () => {
-    const { events, played, positions } = setup()
+  it('三條繩子都有人拉了：第四人不能加入這一聲，要等靜默期', () => {
+    const { actions, events } = setup()
+    const t0 = performance.now()
+    for (const id of ['p-a', 'p-b', 'p-c']) events.emit('actionPerformed', bellEvent(id, t0))
+    expect(actions.get('bell')!.startWait!(t0 + 100)).toBeGreaterThan(0)
+  })
+
+  it('合力敲鐘：三人在窗口內開始只響一聲（三人倍率）、撞木只走開啟者的時間軸、鐘只擺一次（較大）', () => {
+    const solo = setup()
+    solo.positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+    solo.events.emit('actionPerformed', bellEvent('p-a', performance.now()))
+    vi.advanceTimersByTime(BELL_MS)
+
+    const { events, played, swings, swingStrengths, strikes, positions } = setup()
+    positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+    const t0 = performance.now()
+    events.emit('actionPerformed', bellEvent('local', t0, true))
+    vi.advanceTimersByTime(200)
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 150))
+    // 亂序：開始得比開啟者早、晚到的也加入，不改時間軸
+    events.emit('actionPerformed', bellEvent('p-c', t0 - 120))
+    // 重複的事件不重複計入
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 150))
+    expect(strikes).toEqual([t0])
+    vi.advanceTimersByTime(BELL_MS)
+    expect(played.map((p) => [p.name, p.t])).toEqual([['bell', t0 + BELL_HIT_MS]])
+    expect(played[0]!.gain!).toBeCloseTo((solo.played[0]!.gain! * bellCrewGain(3)) / bellCrewGain(1))
+    expect(played[0]!.gain!).toBeLessThanOrEqual(1)
+    expect(swings).toEqual([t0 + BELL_HIT_MS])
+    expect(swingStrengths).toEqual([BELL_CREW_SWING[2]])
+    expect(solo.swingStrengths).toEqual([1])
+  })
+
+  it('撞到之後才到的加入者不補響、不重啟撞木', () => {
+    const { events, played, swings, strikes, positions } = setup()
+    positions.set('local', { x: 12, z: -1.5, zone: 'courtyard' })
+    const t0 = performance.now()
+    events.emit('actionPerformed', bellEvent('p-a', t0))
+    vi.advanceTimersByTime(BELL_HIT_MS + 100)
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 300))
+    vi.advanceTimersByTime(BELL_MS)
+    expect(strikes).toEqual([t0])
+    expect(played).toHaveLength(1)
+    expect(swings).toHaveLength(1)
+  })
+
+  it('兩人幾乎同時敲卻不在同一聲（超過加入窗口）：2 秒內的第二聲壓低，不會疊成兩聲一樣大的鐘', () => {
+    const { events, played, strikes, positions } = setup()
     positions.set('local', { x: 0, z: 11, zone: 'courtyard' })
     const t0 = performance.now()
     events.emit('actionPerformed', bellEvent('p-a', t0))
-    events.emit('actionPerformed', bellEvent('p-b', t0 + 500))
-    vi.advanceTimersByTime(BELL_MS)
+    events.emit('actionPerformed', bellEvent('p-b', t0 + BELL_JOIN_MS + 300))
+    vi.advanceTimersByTime(BELL_MS * 2)
+    expect(strikes).toEqual([t0, t0 + BELL_JOIN_MS + 300])
     expect(played.map((p) => p.name)).toEqual(['bell', 'bell'])
     expect(played[1]!.gain!).toBeCloseTo(played[0]!.gain! * 0.35)
-    expect(played[0]!.gain!).toBeGreaterThan(0.3)
+    expect(played[0]!.gain!).toBeGreaterThan(0.3 * bellCrewGain(1))
     expect(played.every((p) => p.lowpass === undefined)).toBe(true)
   })
 
@@ -80,7 +145,7 @@ describe('敲鐘', () => {
     events.emit('actionPerformed', bellEvent('p-a', performance.now()))
     vi.advanceTimersByTime(BELL_MS)
     expect(swings).toHaveLength(0)
-    expect(played.map((p) => [p.name, p.gain])).toEqual([['bell', BELL_HALL_GAIN]])
+    expect(played.map((p) => [p.name, p.gain])).toEqual([['bell', BELL_HALL_GAIN * bellCrewGain(1)]])
     expect(played[0]!.lowpass).toBe(BELL_HALL_LOWPASS_HZ)
     positions.set('local', { x: 0, z: 5, zone: 'courtyard' })
     events.emit('actionPerformed', bellEvent('p-a', performance.now() - BELL_HIT_MS - 2000))
@@ -94,17 +159,33 @@ describe('敲鐘', () => {
     positions.set('local', { x: 0, z: 5, zone: 'hall' })
     const t0 = performance.now()
     events.emit('actionPerformed', bellEvent('p-a', t0))
-    events.emit('actionPerformed', bellEvent('p-b', t0 + 500))
-    vi.advanceTimersByTime(BELL_MS)
-    expect(played.map((p) => p.gain)).toEqual([BELL_HALL_GAIN, BELL_HALL_GAIN * 0.35])
+    events.emit('actionPerformed', bellEvent('p-b', t0 + BELL_JOIN_MS + 300))
+    vi.advanceTimersByTime(BELL_MS * 2)
+    const solo = BELL_HALL_GAIN * bellCrewGain(1)
+    expect(played).toHaveLength(2)
+    expect(played[0]!.gain!).toBeCloseTo(solo)
+    expect(played[1]!.gain!).toBeCloseTo(solo * 0.35)
   })
 
-  it('聽者在殿內也記錄鐘聲未歇：走出去馬上敲要等', () => {
+  it('聽者在殿內：合力敲鐘同樣套人數倍率，仍有低通濾波', () => {
+    const { events, played, swings, positions } = setup()
+    positions.set('local', { x: 0, z: 5, zone: 'hall' })
+    const t0 = performance.now()
+    events.emit('actionPerformed', bellEvent('p-a', t0))
+    events.emit('actionPerformed', bellEvent('p-b', t0 + 300))
+    vi.advanceTimersByTime(BELL_MS)
+    expect(swings).toHaveLength(0)
+    expect(played).toHaveLength(1)
+    expect(played[0]!.gain!).toBeCloseTo(BELL_HALL_GAIN * bellCrewGain(2))
+    expect(played[0]!.lowpass).toBe(BELL_HALL_LOWPASS_HZ)
+  })
+
+  it('聽者在殿內也記錄鐘聲未歇：走出去馬上敲要就位等候', () => {
     const { actions, events, positions } = setup()
     positions.set('local', { x: 0, z: 5, zone: 'hall' })
     events.emit('actionPerformed', bellEvent('p-a', performance.now()))
     vi.advanceTimersByTime(BELL_HIT_MS + 1000)
-    expect(actions.get('bell')!.approach!(yard())).toMatch(/鐘聲未歇/)
+    expect(actions.get('bell')!.startWait!(performance.now())).toBe(BELL_QUIET_MS - 1000)
   })
 
   it('撞鐘動畫：拉繩後仰、撞到時前傾最大、最後回正', () => {

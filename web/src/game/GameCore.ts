@@ -175,8 +175,11 @@ export class GameCore {
   private savedCamera: Partial<Record<ZoneId, CameraPose>> = {}
   /** 尋路尚未走到的轉折點（目前目標在 mover.target）。 */
   private path: Point[] = []
-  /** 正在走向定點、抵達後才開始的動作（approach）。玩家自己移動或切換場景時取消。 */
-  private pending: { id: string; pose: Pose } | null = null
+  /**
+   * 正在走向定點、抵達後才開始的動作（approach）；waiting 表示已站在定點上、等 startWait 歸零才開始。
+   * 玩家自己移動、點擊地面、按動作或切換場景時取消。
+   */
+  private pending: { id: string; pose: Pose; waiting?: boolean } | null = null
   /** 本機正在進行、鎖定移動的動作 id（鎖定結束後不一定清除，以 lockedUntil 為準）；用來判斷能不能提前結束（endAction）。 */
   private lockedAction: string | null = null
   /** 香爐裡的香與煙（兩個場景共用，只畫目前場景的香爐）。 */
@@ -527,6 +530,8 @@ export class GameCore {
     const local = this.players.local
     const def = this.actions.get(id)
     if (!def || def.hidden || this.fading) return
+    // 按任何動作都取消正在定點上的等候（按的是同一個動作會在下面重新就位）
+    if (this.pending?.waiting) this.pending = null
     if (now < local.lockedUntil) {
       const interrupted = this.interruptLocal()
       if (!interrupted || interrupted === id) return
@@ -547,7 +552,7 @@ export class GameCore {
       return
     }
     if (Math.hypot(spot.x - local.mover.x, spot.z - local.mover.z) <= APPROACH_ARRIVE) {
-      this.beginAction(id, spot)
+      this.arriveAt(id, spot)
       return
     }
     if (!this.walkTo(spot)) {
@@ -557,19 +562,33 @@ export class GameCore {
     this.pending = { id, pose: spot }
   }
 
+  /** 抵達定點：動作要求等候（startWait > 0）時站到定點上等，否則立刻開始。 */
+  private arriveAt(id: string, pose: Pose): void {
+    const def = this.actions.get(id)
+    if (def?.startWait && def.startWait(performance.now()) > 0) {
+      this.standAt(pose)
+      this.pending = { id, pose, waiting: true }
+      this.toast('action.waiting', { action: t(def.label) })
+      return
+    }
+    this.beginAction(id, pose)
+  }
+
+  /** 站到站位上、面向神龕或香爐；位置與面向一起送出（排在之後的動作之前）。 */
+  private standAt(pose: Pose): void {
+    Object.assign(this.players.local.mover, { x: pose.x, z: pose.z, heading: pose.heading, target: null })
+    this.path = []
+    this.marker.visible = false
+    this.net.sendPosition(pose.x, pose.z, pose.heading, false)
+  }
+
   /** 開始執行動作（已在定點或不需要定點）：冷卻、鎖定移動、動畫、音效、事件與送出。 */
   private beginAction(id: string, pose: Pose | null): void {
     const now = performance.now()
     const local = this.players.local
     const def = this.actions.tryBegin(id, now)
     if (!def) return
-    if (pose) {
-      // 站到站位上、面向神龕或香爐；位置與面向一起送出（排在動作之前）
-      Object.assign(local.mover, { x: pose.x, z: pose.z, heading: pose.heading, target: null })
-      this.path = []
-      this.marker.visible = false
-      this.net.sendPosition(pose.x, pose.z, pose.heading, false)
-    }
+    if (pose) this.standAt(pose)
     if (def.locksMovement) {
       local.lockedUntil = now + def.durationMs
       this.lockedAction = id
@@ -848,12 +867,22 @@ export class GameCore {
           local.mover.target = arrived ? (this.path.shift() ?? null) : null
           if (!arrived) this.path = []
         }
-        // 走向定點的動作：路走完（或被擋住）時，抵達就開始，沒抵達就提示
-        if (this.pending && !local.mover.target) {
+        // 走向定點的動作：路走完（或被擋住）時，抵達就開始（或就位等候），沒抵達就提示；等候中等到 startWait 歸零才開始
+        if (this.pending?.waiting) {
+          const { id, pose } = this.pending
+          if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) > APPROACH_ARRIVE) {
+            // 等候中可能被走過的玩家推離站位；開始時會貼回站位，推遠了會瞬移，所以取消
+            this.pending = null
+            this.toast('move.blocked')
+          } else if ((this.actions.get(id)?.startWait?.(now) ?? 0) <= 0) {
+            this.pending = null
+            this.beginAction(id, pose)
+          }
+        } else if (this.pending && !local.mover.target) {
           const { id, pose } = this.pending
           this.pending = null
           if (Math.hypot(pose.x - local.mover.x, pose.z - local.mover.z) <= APPROACH_ARRIVE) {
-            this.beginAction(id, pose)
+            this.arriveAt(id, pose)
             moving = false
           } else {
             this.toast('move.blocked')
@@ -1154,6 +1183,8 @@ export class GameCore {
       this.paused = true
       this.stopLoop()
       this.input.clearKeys()
+      // 定點上的等候不留到回前景（可能已隔很久）才開始
+      if (this.pending?.waiting) this.pending = null
       this.net.setBackground(true)
       void this.audio.suspend()
     } else {
@@ -1383,8 +1414,8 @@ export class GameCore {
       audio: this.audio,
       events: this.events,
       scene: {
-        swingBell: () => {
-          this.temple.swingBell()
+        swingBell: (strength) => {
+          this.temple.swingBell(strength)
           this.wake()
         },
         strikeBell: (startedAt) => {

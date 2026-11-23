@@ -22,7 +22,7 @@ import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
 import { TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
 import { OBSTACLES } from '../src/game/world/layout.ts'
 import { VEHICLES, sessionState } from '../src/game/world/vehicles.ts'
-import { SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
+import { BELL_PAVILION, PLAYER_RADIUS, SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
 import { randomTempleName } from '../src/game/core/names.ts'
 import { ACTION_CODES, MAX_CARS, MAX_MOVES_PER_MESSAGE, MAX_SHORT_ID, encodeAction, encodeBatch, encodeCars } from '../src/game/net/binaryFrame.ts'
 
@@ -41,11 +41,11 @@ if (!(BOTS >= 0 && BOTS <= MAX_SHORT_ID)) {
 // 動作允許清單＝二進位幀的動作編號對照表（binaryFrame.ts 的 ACTION_CODES，測試保證與 server/src/world.rs 的 ACTIONS 相同）
 // chant_end：誦經中提前起身（客戶端送出，轉送給同場景的人）
 const ACTIONS = ACTION_CODES
-// 機器人只做該場景能做的動作（跪拜、誦經限殿內，敲鐘限庭院）；不會走到蒲團、香爐或鐘亭前，上香不會在香爐插香
+// 機器人只做該場景能做的動作（跪拜、誦經限殿內，敲鐘限庭院）；敲鐘會走到鐘亭站位，不會走到蒲團或香爐前，上香不會在香爐插香
 const BOT_ACTIONS = { courtyard: ['bow', 'bell'], hall: ['bow', 'prostrate', 'chant'] }
 // 機器人做這些動作時停留到動作結束再走（客戶端在動作期間不顯示走路）；誦經 24 秒、跪拜 8 秒
-const BOT_HOLD_S = { chant: 25, prostrate: 9 }
-// 機器人敲鐘時遵守與客戶端相同的「鐘聲未歇」：任何人敲鐘後 7 秒內不再敲
+const BOT_HOLD_S = { chant: 25, prostrate: 9, bell: 4 }
+// 機器人敲鐘時遵守與客戶端相同的「鐘聲未歇」：任何人敲鐘後 7 秒內不再敲（合力的一組算一聲，見 startBellCrew）
 const BOT_BELL_GAP_MS = 7000
 let lastBellAt = 0
 const ZONES = ['courtyard', 'hall']
@@ -620,6 +620,68 @@ for (let i = 0; i < BOTS; i++) {
   })
 }
 
+// 鐘亭的三個敲鐘站位，抄自 world/bell.ts 的 BELL_STATIONS（那個檔案 import 了 i18n 目錄，Node 直接載入會失敗，所以這裡重算；改站位時兩邊一起改）
+const BELL_STATIONS = [-1, 0, 1].map((i) => {
+  const cx = (BELL_PAVILION.minX + BELL_PAVILION.maxX) / 2
+  const cz = (BELL_PAVILION.minZ + BELL_PAVILION.maxZ) / 2
+  const x = cx + i * 0.8
+  const z = BELL_PAVILION.maxZ + PLAYER_RADIUS + 0.15
+  return { x, z, heading: Math.atan2(cx - x, cz - z) }
+})
+/** 合力敲鐘的小隊：{ members, deadline }，同時只有一組。 */
+let bellCrew = null
+const BELL_CREW_WAIT_MS = 30_000
+const BELL_STATION_FREE_M = 0.6
+/** 以 leader 為首組隊：隨機 1／2／3 人（40／35／25%），受閒著的庭院機器人與沒人佔的站位限制，各分到不同站位後走過去。 */
+const startBellCrew = (leader) => {
+  const taken = (st) => [...players.values()].some((o) => o !== leader && o.zone === 'courtyard' && Math.hypot(o.x - st.x, o.z - st.z) < BELL_STATION_FREE_M)
+  const stations = BELL_STATIONS.filter((st) => !taken(st)).sort(() => Math.random() - 0.5)
+  const idle = [...players.values()].filter(
+    (o) => o !== leader && o.bot && o.zone === 'courtyard' && !o.bot.bell && !(o.riding != null) && !rooted(o) && !(o.bot.canDrive && now() > (o.bot.nextClaimAt ?? 0)),
+  ).sort(() => Math.random() - 0.5)
+  const r = Math.random()
+  const want = r < 0.4 ? 1 : r < 0.75 ? 2 : 3
+  const members = [leader, ...idle].slice(0, Math.min(want, stations.length))
+  if (!members.length) return
+  members.forEach((m, i) => {
+    m.bot.bell = stations[i]
+    m.bot.bellArrived = false
+    m.bot.tx = stations[i].x
+    m.bot.tz = stations[i].z
+    m.bot.wait = 0
+  })
+  bellCrew = { members, deadline: now() + BELL_CREW_WAIT_MS }
+  console.log(`[mock] 合力敲鐘：${members.length} 人前往鐘亭`)
+}
+/** 全員到位（或逾時）就各自在 0～400 毫秒內送出 bell；沒到的放回閒晃。 */
+const tickBellCrew = () => {
+  if (!bellCrew) return
+  const here = bellCrew.members.filter((m) => m.bot.bellArrived)
+  if (here.length < bellCrew.members.length && now() < bellCrew.deadline) return
+  const release = (m, wait) => {
+    m.bot.bell = null
+    m.bot.bellArrived = false
+    m.bot.wait = wait
+  }
+  const crew = bellCrew
+  bellCrew = null
+  // 等待期間若有真人敲過鐘（lastBellAt 更新），這一聲取消，遵守鐘聲未歇
+  if (!here.length || now() - lastBellAt < BOT_BELL_GAP_MS) {
+    crew.members.forEach((m) => release(m, 0.5))
+    return
+  }
+  lastBellAt = now()
+  for (const m of crew.members) {
+    if (!here.includes(m)) {
+      release(m, 0.5)
+      continue
+    }
+    m.rootedUntil = now() + ROOT_MS.bell + 400
+    release(m, BOT_HOLD_S.bell + 0.4)
+    setTimeout(() => players.get(m.id) === m && broadcastAction(m, 'bell'), Math.random() * 400)
+  }
+}
+
 setInterval(() => {
   const dt = 0.1
   for (const p of players.values()) {
@@ -653,7 +715,7 @@ setInterval(() => {
       continue
     }
     // 機器人領車邏輯：每 4 個庭院機器人有 1 個會去檔口領車
-    if (p.zone === 'courtyard' && b.canDrive && now() > (b.nextClaimAt ?? 0)) {
+    if (p.zone === 'courtyard' && b.canDrive && !b.bell && now() > (b.nextClaimAt ?? 0)) {
       const dx = VEHICLES.booth.counter.x - p.x
       const dz = (VEHICLES.booth.counter.z + 1.5) - p.z
       const dist = Math.hypot(dx, dz)
@@ -685,13 +747,27 @@ setInterval(() => {
     const dx = b.tx - p.x
     const dz = b.tz - p.z
     const d = Math.hypot(dx, dz)
+    if (d < 0.2 && b.bell) {
+      // 到站位：貼齊座標、面向鐘，站著等同伴（rootedUntil 讓全體分離不推開它）
+      p.x = b.bell.x
+      p.z = b.bell.z
+      p.heading = b.bell.heading
+      p.rootedUntil = bellCrew ? bellCrew.deadline : 0
+      b.bellArrived = true
+      b.wait = 0
+      queueMove(p, false)
+      continue
+    }
     if (d < 0.2) {
       b.wait = 2 + Math.random() * 6
       queueMove(p, false)
       if (Math.random() < 0.6) {
         const id = BOT_ACTIONS[p.zone][Math.floor(Math.random() * BOT_ACTIONS[p.zone].length)]
-        if (id === 'bell' && now() - lastBellAt < BOT_BELL_GAP_MS) continue
-        if (id === 'bell') lastBellAt = now()
+        if (id === 'bell') {
+          // 敲鐘改成「合力」：不原地敲，由這個機器人帶 0～2 個閒著的機器人一起走到鐘亭站位，到齊後才一起敲
+          if (!bellCrew && now() - lastBellAt >= BOT_BELL_GAP_MS) startBellCrew(p)
+          continue
+        }
         b.wait = Math.max(b.wait, BOT_HOLD_S[id] ?? 0)
         if (ROOT_MS[id]) p.rootedUntil = now() + (BOT_HOLD_S[id] ?? 0) * 1000
         broadcastAction(p, id)
@@ -704,9 +780,10 @@ setInterval(() => {
     const fromZ = p.z
     moveWithCollision(p, p.x + (dx / d) * step, p.z + (dz / d) * step, 0, false)
     // 被擋住幾乎走不動：換一個目的地，免得機器人一直頂著人
-    if (Math.hypot(p.x - fromX, p.z - fromZ) < step * 0.2 && Math.random() < 0.1) b.wait = 0.5
+    if (!b.bell && Math.hypot(p.x - fromX, p.z - fromZ) < step * 0.2 && Math.random() < 0.1) b.wait = 0.5
     queueMove(p, true)
   }
+  tickBellCrew()
   // 每個 tick 的全體分離（剛進場、剛換場景時重疊的人慢慢分開），並記下這個 tick 的位置
   for (const zone of ZONES) {
     const here = [...players.values()].filter((p) => p.zone === zone && collides(p))
