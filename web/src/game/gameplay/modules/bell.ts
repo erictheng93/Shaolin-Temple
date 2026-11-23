@@ -60,7 +60,9 @@ const RING_KEEP_MS = BELL_MS + BELL_JOIN_MS + LATE_MS
  *
  * 合力敲鐘：開始時間相差 BELL_JOIN_MS 內的 bell 動作（最多三人、各拉一條繩）算同一聲（world/bell.ts 的 bellRingSlot），
  * 撞木只走開啟者的時間軸、鐘聲只響一次，音量與鐘擺依撞到那一刻已加入的人數（BELL_CREW_GAIN、BELL_CREW_SWING）。
- * 個人冷卻 10 秒；鐘聲未歇（任何人撞到鐘之後 5 秒內，或有人正在敲、還沒撞到）時按敲鐘會走到空站位就位等候（startWait），
+ * 加入者（本機與遠端）的身體動作與鎖定移動也改走開啟者的時間軸（api.retimeAction），所有人在撞到的那一刻一起前傾；
+ * 事件亂序時晚到但開始得較早的動作同樣對齊既有那一聲的 t0。
+ * 個人冷卻 6 秒（從自己實際開始算），小於兩聲的最短間隔 BELL_HIT_MS + BELL_QUIET_MS = 6.75 秒，同一組人可以每一聲都敲；鐘聲未歇（任何人撞到鐘之後 5 秒內，或有人正在敲、還沒撞到）時按敲鐘會走到空站位就位等候（startWait），
  * 靜默期一結束自動開始，所以等候的人幾乎同時開始、落在同一聲；抵達時這一聲還可加入就立刻開始。
  * 兩人在網路延遲內同時開始卻沒落在同一聲（相差超過 BELL_JOIN_MS）而在 2 秒內先後撞到時，後一聲以 0.35 倍音量播放。
  * 回傳的函式清除全部註冊與計時器。
@@ -118,8 +120,10 @@ export function installBell(api: GameplayApi): () => void {
       const slot = bellRingSlot(rings, e.playerId, e.startedAt)
       if (slot.kind === 'dup') return
       if (slot.kind === 'join') {
-        // 加入這一聲：同一根撞木、同一聲鐘，只增加人數（撞到那一刻才算音量）
-        rings[slot.index]!.players.push(e.playerId)
+        // 加入這一聲：同一根撞木、同一聲鐘，只增加人數（撞到那一刻才算音量）；身體動作對齊這一聲的時間軸
+        const ring = rings[slot.index]!
+        ring.players.push(e.playerId)
+        api.retimeAction(e.playerId, 'bell', ring.t0)
         return
       }
       const ring = { t0: e.startedAt, players: [e.playerId] }

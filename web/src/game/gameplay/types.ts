@@ -43,6 +43,13 @@ export interface GameplayApi {
    * 自己的 id 在離線時是 'local'。
    */
   playerPosition(playerId: string): { x: number; z: number; zone: string } | null
+  /**
+   * 把玩家（自己或遠端；自己的 id 在離線時是 'local'）目前正在做的 actionId 改成從 startedAt（performance.now 毫秒）開始：
+   * 動作片段的進度與鎖定移動的結束時刻（locksMovement 的 lockedUntil）一起改，片段可能因此一次跳到新的進度。
+   * 冷卻不變（仍從實際開始算）。對照不到玩家、或他已不在做這個動作時不做事。
+   * 用於讓多人一起做的動作對齊同一條時間軸（例如合力敲鐘的加入者對齊開啟者）。
+   */
+  retimeAction(playerId: string, actionId: string, startedAt: number): void
 }
 
 /**

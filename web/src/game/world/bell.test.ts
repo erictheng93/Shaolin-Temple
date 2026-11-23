@@ -6,6 +6,7 @@ import {
   BELL_MS,
   BELL_QUIET_MS,
   BELL_STATIONS,
+  BELL_COOLDOWN_MS,
   STRIKER,
   STRIKER_CONTACT,
   BELL_HALL_GAIN,
@@ -21,7 +22,7 @@ import {
   pickBellStation,
   strikerAngle,
 } from './bell'
-import { BELL_PAVILION, OBSTACLES, PLAYER_RADIUS } from './layout'
+import { BELL_PAVILION, BELL_STATIONS as LAYOUT_BELL_STATIONS, OBSTACLES, PLAYER_RADIUS } from './layout'
 import { OCCUPIED_RADIUS, type SpotContext } from './worship'
 import { ZONES } from './zones'
 
@@ -78,6 +79,13 @@ describe('鐘亭站位', () => {
   })
 })
 
+describe('站位資料來源', () => {
+  it('bell.ts 轉出口的 BELL_STATIONS 與 layout.ts 是同一個物件（mock 伺服器直接讀 layout.ts）', () => {
+    expect(BELL_STATIONS).toBe(LAYOUT_BELL_STATIONS)
+    expect(LAYOUT_BELL_STATIONS).toHaveLength(3)
+  })
+})
+
 describe('撞木時間軸', () => {
   it('開始與結束時靜止；往後蓄力；撞到鐘的那一刻剛好碰到鐘面', () => {
     expect(strikerAngle(0)).toBe(0)
@@ -103,6 +111,10 @@ describe('撞木時間軸', () => {
 })
 
 describe('多人輪流敲的聲音規則', () => {
+  it('個人冷卻小於兩聲的最短間隔，同一組人才能每一聲都一起敲', () => {
+    expect(BELL_COOLDOWN_MS).toBeLessThan(BELL_HIT_MS + BELL_QUIET_MS)
+  })
+
   it('前一聲撞到後 5 秒內要等', () => {
     expect(bellQuietLeft(-Infinity, 0)).toBe(0)
     expect(bellQuietLeft(1000, 1000)).toBe(BELL_QUIET_MS)

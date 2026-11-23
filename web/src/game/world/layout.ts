@@ -72,3 +72,22 @@ export const SOLIDS: ReadonlyArray<Rect> = [
 /** 碰撞用的障礙物（已含角色半徑的餘量）。 */
 export const PLAYER_RADIUS = 0.35
 export const OBSTACLES: ReadonlyArray<Rect> = SOLIDS.map((r) => pad(r, PLAYER_RADIUS))
+
+/** 鐘的中心（鐘亭正中，TempleScene 的 bellPivot）。 */
+export const BELL_CENTER = {
+  x: (BELL_PAVILION.minX + BELL_PAVILION.maxX) / 2,
+  z: (BELL_PAVILION.minZ + BELL_PAVILION.maxZ) / 2,
+}
+
+/**
+ * 敲鐘站位：鐘亭面向庭院（+z）的一側，站在鐘亭障礙物（含角色半徑）外 0.15 公尺，左右各一、間距 0.8 公尺
+ * （大於兩個角色半徑 0.7，也大於視為有人的 0.6），三人可同時站著不重疊。面向鐘。
+ * 撞木從這一側伸向鐘，三條拉繩從撞木尾端垂到三個站位的手前。
+ * 定義在這裡（layout.ts 沒有任何 import）是為了讓 Node 的 mock 伺服器能直接載入；world/bell.ts 照原名轉出口。
+ */
+export const BELL_STATION_GAP = 0.8
+const BELL_STATION_Z = BELL_PAVILION.maxZ + PLAYER_RADIUS + 0.15
+export const BELL_STATIONS: ReadonlyArray<{ x: number; z: number; heading: number }> = [-1, 0, 1].map((i) => {
+  const x = BELL_CENTER.x + i * BELL_STATION_GAP
+  return { x, z: BELL_STATION_Z, heading: Math.atan2(BELL_CENTER.x - x, BELL_CENTER.z - BELL_STATION_Z) }
+})
