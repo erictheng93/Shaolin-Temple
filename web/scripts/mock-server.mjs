@@ -19,7 +19,7 @@ import { WebSocketServer } from 'ws'
 import RAPIER from '@dimforge/rapier3d-compat'
 import { createSimWorld } from '../src/game/vehicles/simCore.ts'
 import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
-import { TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
+import { MIN_DIST, TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
 import { OBSTACLES } from '../src/game/world/layout.ts'
 import { VEHICLES, sessionState } from '../src/game/world/vehicles.ts'
 import { BELL_STATIONS, SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
@@ -168,9 +168,16 @@ const moveWithCollision = (p, x, z, tolerance, past) => {
   if (corrected) syncSelf(p)
   for (const m of r.moved) {
     const o = others.find((b) => b.n === m.n)
-    // 推的是對方「現在」的位置：把位移量加上去，不合法就不動
-    const nx = o.ref.x + (m.x - o.fromX)
-    const nz = o.ref.z + (m.z - o.fromZ)
+    // 推的是對方「現在」的位置：把位移量加上去，不合法就不動。位移是對歷史位置算的、會被好幾則訊息重複使用，
+    // 所以只推到與 p 這次的位置分開（MIN_DIST）為止（與正式伺服器相同）
+    const dx = m.x - o.fromX
+    const dz = m.z - o.fromZ
+    const need = MIN_DIST - Math.hypot(o.ref.x - p.x, o.ref.z - p.z)
+    const len = Math.hypot(dx, dz)
+    if (need <= 0 || len < 1e-9) continue
+    const k = Math.min(1, need / len)
+    const nx = o.ref.x + dx * k
+    const nz = o.ref.z + dz * k
     if (!validAt(p.zone)(nx, nz)) continue
     o.ref.x = nx
     o.ref.z = nz
@@ -225,6 +232,8 @@ const bayIsFree = (bx, bz) => {
 // fair 訊息（暫時的功能）：任何玩家都能手動開關，之後不再依時鐘，直到重啟。
 let fairOverride = null
 const sessionOpen = () => fairOverride ?? (process.env.MOCK_SESSION === 'always' || sessionState(Date.now()).open)
+// welcome 之後補送的 fair：手動狀態，或 MOCK_SESSION=always（前端不知道伺服器的設定，否則會依時鐘擋下領車）
+const welcomeFair = () => fairOverride ?? (process.env.MOCK_SESSION === 'always' ? true : null)
 const SESSION_CLOSED = { t: 'error', code: 'session_closed', message: 'The temple fair is closed' }
 
 const claimCar = (p, kind) => {
@@ -841,7 +850,7 @@ wss.on('connection', (ws) => {
         send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), cars: carSnapshots(), auth })
         if (renamed) for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: old.id, name })
         if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
-        if (fairOverride !== null) send(ws, { t: 'fair', open: fairOverride })
+        if (welcomeFair() !== null) send(ws, { t: 'fair', open: welcomeFair() })
         return
       }
       const n = allocN()
@@ -874,7 +883,7 @@ wss.on('connection', (ws) => {
         cars: carSnapshots(),
         auth,
       })
-      if (fairOverride !== null) send(ws, { t: 'fair', open: fairOverride })
+      if (welcomeFair() !== null) send(ws, { t: 'fair', open: welcomeFair() })
       broadcast({ t: 'join', player: snapshot(me) }, id)
       return
     }

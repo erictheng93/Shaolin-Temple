@@ -104,9 +104,14 @@ impl Zone {
         })
     }
 
-    /// (x, z) 是否在場景邊界內且不在任何加邊障礙物內。
+    /// (x, z) 是否在場景邊界內且不在任何加邊障礙物內。障礙物與 `blocked()` 一樣先內縮 `OBSTACLE_TOLERANCE`：
+    /// 前端把貼牆的人推到障礙物邊界上、沿邊滑動，邊界上（含座標取到 0.01 的誤差）算合法。
     pub fn is_valid(&self, x: f64, z: f64) -> bool {
-        self.bounds.contains(x, z) && !self.obstacles.iter().any(|o| o.contains(x, z))
+        self.bounds.contains(x, z)
+            && !self
+                .obstacles
+                .iter()
+                .any(|o| o.grow(-OBSTACLE_TOLERANCE).contains(x, z))
     }
 }
 

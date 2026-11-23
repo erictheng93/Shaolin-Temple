@@ -366,6 +366,9 @@ export class Players {
 
   dispose(): void {
     this.clearRemotes()
+    // NPC 的名牌貼圖與材質是各自獨有的（不在共用 tracker），要逐一釋放
+    for (const npc of this.npcs) npc.avatar.dispose()
+    this.npcs.length = 0
     this.local.avatar.dispose()
     this.factory.dispose()
   }

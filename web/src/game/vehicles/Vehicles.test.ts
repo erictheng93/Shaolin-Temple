@@ -61,6 +61,25 @@ describe('Vehicles 子系統', () => {
     expect(vehicles.riderCar('me')).toBeNull()
   })
 
+  it('下車一段時間後重新上車：第一幀只推進這一幀的 dt，不把步行的時間算進物理', () => {
+    const advanced: number[] = []
+    const fakeSim = {
+      setCars() {},
+      clearHistory() {},
+      alignDisplay() {},
+      advance: (sec: number) => advanced.push(sec),
+      dispose() {},
+    }
+    ;(vehicles as unknown as { sim: unknown }).sim = fakeSim
+    vehicles.setLocalZone('courtyard')
+    vehicles.onCar({ c: 1, kind: 0, driver: 'me', x: 0, z: 0, heading: 0, fadeAt: null })
+    vehicles.advance(1 / 60, 1000)
+    vehicles.onCar({ c: 1, kind: 0, driver: null, x: 0, z: 0, heading: 0, fadeAt: null })
+    vehicles.onCar({ c: 1, kind: 0, driver: 'me', x: 0, z: 0, heading: 0, fadeAt: null })
+    vehicles.advance(1 / 60, 6000)
+    expect(advanced[advanced.length - 1]).toBeCloseTo(1 / 60)
+  })
+
   it('carGone 移除車並在 riding 相同時清除騎乘', () => {
     vehicles.onCar({ c: 4, kind: 0, driver: 'me', x: 0, z: 0, heading: 0, fadeAt: null })
     expect(vehicles.riding).toBe(4)

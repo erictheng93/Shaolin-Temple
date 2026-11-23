@@ -430,6 +430,12 @@ describe('keepOutside', () => {
     expect(pose).toEqual({ x: -2.9, z: 4.1, heading: Math.PI / 4 })
   })
 
+  it('斜向停在主殿轉角旁：與主殿仍有間隙，不推', () => {
+    const pose = { x: 8.2, z: -5.5, heading: -Math.PI / 4 }
+    keepOutside(pose, { x: 8.2, z: -5.5 })
+    expect(pose).toEqual({ x: 8.2, z: -5.5, heading: -Math.PI / 4 })
+  })
+
   it('旋轉的車身真的壓進燈籠：推回 ref 那一側', () => {
     const pose = { x: -3.2, z: 3, heading: Math.PI / 4 }
     keepOutside(pose, { x: -2, z: 3 })
