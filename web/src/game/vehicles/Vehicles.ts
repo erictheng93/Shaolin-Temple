@@ -170,6 +170,8 @@ export class Vehicles {
   /** 不再騎乘（下車、車消失、重連、離開庭院）：丟掉預測用的狀態，所有車改回依伺服器狀態推算。 */
   private stopPredicting(cars: CarState[]): void {
     this.pending = null
+    // advance() 只在騎乘時呼叫：不清掉的話，下次上車會把步行的這段時間也算成物理時間
+    this.lastAdvanceAt = null
     this.sim?.clearHistory()
     this.sim?.setCars(cars, null)
     for (const car of this.cars.values()) this.rebase(car)
