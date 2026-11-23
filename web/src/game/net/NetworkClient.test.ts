@@ -471,6 +471,21 @@ describe('NetworkClient 碰碰車駕駛與上下車', () => {
     expect(drives()).toHaveLength(3)
   })
 
+  it('sendDrive 遇上行緩衝超過上限時暫緩，消化後送出最新的輸入', () => {
+    connectOnline()
+    const s = last()
+    const drives = () => s.sent.filter((m) => m.t === 'drive')
+    s.bufferedAmount = 1 << 20
+    expect(client.sendDrive(0, 1)).toBeNull()
+    vi.advanceTimersByTime(100)
+    expect(client.sendDrive(Math.PI / 2, 1)).toBeNull()
+    expect(drives()).toHaveLength(0)
+    s.bufferedAmount = 0
+    expect(client.sendDrive(Math.PI, 0.5)).toBe(0)
+    expect(drives()).toHaveLength(1)
+    expect(drives()[0]).toMatchObject({ dir: 128, mag: 128 })
+  })
+
   it('seq 在 65535 之後回到 0', () => {
     connectOnline()
     ;(client as unknown as { driveSeq: number }).driveSeq = 65535

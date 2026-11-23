@@ -63,6 +63,8 @@ export function keepOutside(pose: Pose, ref: { x: number; z: number }): void {
   pose.z = Math.max(WORLD_BOUNDS.minZ + ez, Math.min(WORLD_BOUNDS.maxZ - ez, pose.z))
   for (const r of SOLIDS) {
     if (pose.x + ex <= r.minX || pose.x - ex >= r.maxX || pose.z + ez <= r.minZ || pose.z - ez >= r.maxZ) continue
+    // AABB 只是粗篩：斜著經過角落時包圍盒重疊、旋轉的車身實際上沒碰到
+    if (!carTouchesRect(pose, r)) continue
     // ref 在各軸上離這個障礙物多遠（負的是物理允許的些微穿透）
     const gapX = Math.max(r.minX - (ref.x + ex), ref.x - ex - r.maxX)
     const gapZ = Math.max(r.minZ - (ref.z + ez), ref.z - ez - r.maxZ)
@@ -71,6 +73,22 @@ export function keepOutside(pose: Pose, ref: { x: number; z: number }): void {
     if (gapX >= gapZ) pose.x = ref.x < (r.minX + r.maxX) / 2 ? r.minX - ex : r.maxX + ex
     else pose.z = ref.z < (r.minZ + r.maxZ) / 2 ? r.minZ - ez : r.maxZ + ez
   }
+}
+
+/**
+ * 旋轉的車身與軸對齊長方形是否相交（分離軸檢查車身的兩個軸；世界的兩個軸由呼叫端的 AABB 粗篩檢查過）。
+ * 車頭方向是 (sin h, cos h)，與 keepOutside 的半寬計算一致。
+ */
+function carTouchesRect(pose: Pose, r: { minX: number; maxX: number; minZ: number; maxZ: number }): boolean {
+  const s = Math.sin(pose.heading)
+  const c = Math.cos(pose.heading)
+  const dx = (r.minX + r.maxX) / 2 - pose.x
+  const dz = (r.minZ + r.maxZ) / 2 - pose.z
+  const hx = (r.maxX - r.minX) / 2
+  const hz = (r.maxZ - r.minZ) / 2
+  const along = Math.abs(dx * s + dz * c) < VEHICLES.car.halfLength + hx * Math.abs(s) + hz * Math.abs(c)
+  const across = Math.abs(dx * c - dz * s) < VEHICLES.car.halfWidth + hx * Math.abs(c) + hz * Math.abs(s)
+  return along && across
 }
 
 /**
