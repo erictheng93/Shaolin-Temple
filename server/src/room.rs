@@ -548,6 +548,9 @@ pub struct Room {
     pub(crate) session_was_open: bool,
     /// 玩家手動開關的廟會狀態（`fair` 訊息，暫時的功能）；`Some` 時不看時鐘。
     pub(crate) fair_override: Option<bool>,
+    /// 目前這一聲鐘的開啟時刻（庭院裡最近一個另開一聲的 bell 動作被接受的時刻）；
+    /// 加入者的定點結束時刻對齊它（`world::bell_ring_start`）。鐘只有一口，每房一個值。
+    pub(crate) bell_open: Option<Instant>,
 }
 
 impl Room {
@@ -565,6 +568,7 @@ impl Room {
             created: Instant::now(),
             session_was_open: true,
             fair_override: None,
+            bell_open: None,
         }
     }
     /// 廟會時段與車輛 `fadeAt` 用的伺服器毫秒：`Wall`／`AlwaysOpen` 為 `now_ms()`，
@@ -1003,6 +1007,8 @@ impl Room {
     }
 
     fn action(&mut self, who: &Who, req_id: String, action: String, data_ok: bool, now: Instant) {
+        let bell_open = self.bell_open;
+        let mut ring_start = None;
         let Some(p) = self.live(who) else { return };
         let mut started = None;
         let ack = match p.acks.iter().find(|(r, _)| *r == req_id) {
@@ -1033,6 +1039,15 @@ impl Room {
                         id: id.into(),
                         started_at,
                     });
+                    // 合力敲鐘：前端以 startedAt 分組，不知道定點是否授予，所以庭院裡每個被接受的 bell 都參與分組；
+                    // 加入者的定點結束時刻對齊這一聲的開啟者。殿內的 bell 不影響庭院這一聲。
+                    let base = if id == "bell" && p.zone.id == world::COURTYARD.id {
+                        let t0 = world::bell_ring_start(bell_open, now);
+                        ring_start = Some(t0);
+                        t0
+                    } else {
+                        now
+                    };
                     let cooled = p
                         .rooted_granted_at
                         .is_none_or(|at| now.saturating_duration_since(at) >= ROOTED_GRANT_GAP);
@@ -1040,7 +1055,7 @@ impl Room {
                         let ms = world::action_duration_ms(id).unwrap_or(0);
                         p.rooted_granted_at = Some(now);
                         p.rooted_action = Some(RootedAction {
-                            until: now + Duration::from_millis(ms),
+                            until: base + Duration::from_millis(ms),
                             started: now,
                             x: p.x,
                             z: p.z,
@@ -1055,6 +1070,9 @@ impl Room {
                 ack
             }
         };
+        if ring_start.is_some() {
+            self.bell_open = ring_start;
+        }
         self.send_to(&who.id, ack, now);
         if let Some((n, code, started_at, zone, everywhere)) = started {
             let message = ServerMessage::Action {

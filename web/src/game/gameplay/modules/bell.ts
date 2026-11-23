@@ -62,6 +62,7 @@ const RING_KEEP_MS = BELL_MS + BELL_JOIN_MS + LATE_MS
  * 撞木只走開啟者的時間軸、鐘聲只響一次，音量與鐘擺依撞到那一刻已加入的人數（BELL_CREW_GAIN、BELL_CREW_SWING）。
  * 加入者（本機與遠端）的身體動作與鎖定移動也改走開啟者的時間軸（api.retimeAction），所有人在撞到的那一刻一起前傾；
  * 事件亂序時晚到但開始得較早的動作同樣對齊既有那一聲的 t0。
+ * 進房（welcome 快照）時正在敲的人經 snapshotActions 由早到晚走同一條路徑：分組、對齊、撞木、鐘聲未歇與還沒撞到的鐘聲都照常。
  * 個人冷卻 6 秒（從自己實際開始算），小於兩聲的最短間隔 BELL_HIT_MS + BELL_QUIET_MS = 6.75 秒，同一組人可以每一聲都敲；鐘聲未歇（任何人撞到鐘之後 5 秒內，或有人正在敲、還沒撞到）時按敲鐘會走到空站位就位等候（startWait），
  * 靜默期一結束自動開始，所以等候的人幾乎同時開始、落在同一聲；抵達時這一聲還可加入就立刻開始。
  * 兩人在網路延遲內同時開始卻沒落在同一聲（相差超過 BELL_JOIN_MS）而在 2 秒內先後撞到時，後一聲以 0.35 倍音量播放。
@@ -98,6 +99,33 @@ export function installBell(api: GameplayApi): () => void {
     lastPlayedAt = hitAt
   }
 
+  /** 一個 bell 動作（即時事件或快照）：加入既有的一聲（對齊它的 t0），或另開一聲（撞木、排定撞到那一刻的鐘聲）。 */
+  const onBell = (playerId: string, startedAt: number) => {
+    rings = rings.filter((r) => performance.now() - r.t0 <= RING_KEEP_MS)
+    const slot = bellRingSlot(rings, playerId, startedAt)
+    if (slot.kind === 'dup') return
+    if (slot.kind === 'join') {
+      // 加入這一聲：同一根撞木、同一聲鐘，只增加人數（撞到那一刻才算音量）；身體動作對齊這一聲的時間軸
+      const ring = rings[slot.index]!
+      ring.players.push(playerId)
+      api.retimeAction(playerId, 'bell', ring.t0)
+      return
+    }
+    const ring = { t0: startedAt, players: [playerId] }
+    rings.push(ring)
+    api.scene.strikeBell(ring.t0)
+    const hitAt = ring.t0 + BELL_HIT_MS
+    lastHitAt = Math.max(lastHitAt, hitAt)
+    const timer = setTimeout(
+      () => {
+        timers.delete(timer)
+        ringOut(ring)
+      },
+      Math.max(0, hitAt - performance.now()),
+    )
+    timers.add(timer)
+  }
+
   const off = [
     api.animations.registerClip('bellStrike', bellStrikeClip),
     api.actions.register({
@@ -115,30 +143,15 @@ export function installBell(api: GameplayApi): () => void {
         rings.some((r) => Math.abs(now - r.t0) <= BELL_JOIN_MS && r.players.length < BELL_CREW_MAX) ? 0 : bellQuietLeft(lastHitAt, now),
     }),
     api.events.on('actionPerformed', (e) => {
-      if (e.actionId !== 'bell') return
-      rings = rings.filter((r) => performance.now() - r.t0 <= RING_KEEP_MS)
-      const slot = bellRingSlot(rings, e.playerId, e.startedAt)
-      if (slot.kind === 'dup') return
-      if (slot.kind === 'join') {
-        // 加入這一聲：同一根撞木、同一聲鐘，只增加人數（撞到那一刻才算音量）；身體動作對齊這一聲的時間軸
-        const ring = rings[slot.index]!
-        ring.players.push(e.playerId)
-        api.retimeAction(e.playerId, 'bell', ring.t0)
-        return
-      }
-      const ring = { t0: e.startedAt, players: [e.playerId] }
-      rings.push(ring)
-      api.scene.strikeBell(ring.t0)
-      const hitAt = ring.t0 + BELL_HIT_MS
-      lastHitAt = Math.max(lastHitAt, hitAt)
-      const timer = setTimeout(
-        () => {
-          timers.delete(timer)
-          ringOut(ring)
-        },
-        Math.max(0, hitAt - performance.now()),
-      )
-      timers.add(timer)
+      if (e.actionId === 'bell') onBell(e.playerId, e.startedAt)
+    }),
+    // 進房時快照裡的 bell 動作（已直接套在角色上）：由早到晚走同一條分組路徑，最早開始的人開啟那一聲，與房內其他客戶端一致。
+    // 已結束的也照樣餵：撞擊太久以前的不補響（ringOut 的 LATE_MS），但 lastHitAt 仍據此判斷鐘聲未歇。
+    api.events.on('snapshotActions', (e) => {
+      e.actions
+        .filter((a) => a.actionId === 'bell')
+        .sort((a, b) => a.startedAt - b.startedAt)
+        .forEach((a) => onBell(a.playerId, a.startedAt))
     }),
   ]
 

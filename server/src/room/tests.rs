@@ -1718,6 +1718,116 @@ fn rooting_is_only_granted_for_actions_of_the_current_zone() {
     assert!(Room::rooted(room.live(&b).unwrap(), t));
 }
 
+/// `n` 位玩家站在庭院，各自相隔 1 公尺。
+fn bell_crew(now: Instant, n: usize) -> (Room, Vec<Who>, Vec<mpsc::Receiver<ServerMessage>>) {
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (mut who, mut rxs) = (Vec::new(), Vec::new());
+    for i in 0..n {
+        let (tx, rx) = mpsc::channel(64);
+        let w = room
+            .join(format!("P{i}"), AuthKind::Guest, 0, tx, now)
+            .unwrap();
+        let p = room.live(&w).unwrap();
+        (p.x, p.z) = (i as f64 - 1.0, 8.0);
+        p.trail = [(p.x, 8.0); 4];
+        who.push(w);
+        rxs.push(rx);
+    }
+    (room, who, rxs)
+}
+
+fn rooted_until(room: &mut Room, who: &Who) -> Instant {
+    room.live(who)
+        .unwrap()
+        .rooted_action
+        .as_ref()
+        .unwrap()
+        .until
+}
+
+#[test]
+fn bell_joiner_within_the_window_is_rooted_until_the_opener_ends() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, w, _rx) = bell_crew(now, 2);
+    room.action(&w[0], "r1".into(), "bell".into(), true, now);
+    room.action(&w[1], "r1".into(), "bell".into(), true, now + ms(500));
+    assert_eq!(rooted_until(&mut room, &w[1]), now + ms(3400));
+    assert_eq!(room.bell_open, Some(now));
+    // 在開啟者結束之前推不動，之後就推得動（不是自己的開始 + 3400 ms）
+    assert!(Room::rooted(room.live(&w[1]).unwrap(), now + ms(3399)));
+    assert!(!Room::rooted(room.live(&w[1]).unwrap(), now + ms(3400)));
+}
+
+#[test]
+fn bell_outside_the_window_opens_its_own_ring() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, w, _rx) = bell_crew(now, 2);
+    room.action(&w[0], "r1".into(), "bell".into(), true, now);
+    room.action(&w[1], "r1".into(), "bell".into(), true, now + ms(900));
+    assert_eq!(rooted_until(&mut room, &w[1]), now + ms(4300));
+    assert_eq!(room.bell_open, Some(now + ms(900)));
+    assert!(Room::rooted(room.live(&w[1]).unwrap(), now + ms(4299)));
+    assert!(!Room::rooted(room.live(&w[1]).unwrap(), now + ms(4300)));
+}
+
+#[test]
+fn later_joiners_align_to_the_opener_not_to_earlier_joiners() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, w, _rx) = bell_crew(now, 4);
+    room.action(&w[0], "r1".into(), "bell".into(), true, now);
+    room.action(&w[1], "r1".into(), "bell".into(), true, now + ms(300));
+    room.action(&w[2], "r1".into(), "bell".into(), true, now + ms(600));
+    assert_eq!(room.bell_open, Some(now));
+    for who in &w[..3] {
+        assert_eq!(rooted_until(&mut room, who), now + ms(3400));
+    }
+    // 與開啟者相差 1200 ms（雖然只比上一位加入者晚 600 ms）：另開一聲
+    room.action(&w[3], "r1".into(), "bell".into(), true, now + ms(1200));
+    assert_eq!(rooted_until(&mut room, &w[3]), now + ms(4600));
+    assert_eq!(room.bell_open, Some(now + ms(1200)));
+}
+
+#[test]
+fn bell_sent_from_the_hall_does_not_touch_the_courtyard_ring() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, w, _rx) = bell_crew(now, 3);
+    let p = room.live(&w[2]).unwrap();
+    (p.x, p.z) = (0.0, -4.65);
+    room.switch_zone(&w[2], "hall", now);
+    assert_eq!(room.live(&w[2]).unwrap().zone.id, "hall");
+
+    room.action(&w[0], "r1".into(), "bell".into(), true, now);
+    // 殿內的 bell 照常接受，但不另開一聲
+    room.action(&w[2], "r1".into(), "bell".into(), true, now + ms(800));
+    assert_eq!(
+        room.live(&w[2]).unwrap().action.as_ref().unwrap().id,
+        "bell"
+    );
+    assert_eq!(room.bell_open, Some(now));
+    // 若殿內那一聲算數，這一位會加入它（相差 200 ms）；實際上與開啟者相差 1000 ms，另開一聲
+    room.action(&w[1], "r1".into(), "bell".into(), true, now + ms(1000));
+    assert_eq!(rooted_until(&mut room, &w[1]), now + ms(4400));
+    assert_eq!(room.bell_open, Some(now + ms(1000)));
+}
+
+#[test]
+fn ungranted_bell_still_opens_a_ring() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, w, _rx) = bell_crew(now, 2);
+    // 第一位剛被授予過定點（冷卻中）：這次 bell 不授予，但前端照樣以它開一聲，加入者對齊它
+    room.action(&w[0], "r0".into(), "incense".into(), true, now);
+    room.action(&w[0], "r1".into(), "bell".into(), true, now + ms(1000));
+    assert!(!Room::rooted(room.live(&w[0]).unwrap(), now + ms(1000)));
+    assert_eq!(room.bell_open, Some(now + ms(1000)));
+    room.action(&w[1], "r1".into(), "bell".into(), true, now + ms(1500));
+    assert_eq!(rooted_until(&mut room, &w[1]), now + ms(4400));
+}
+
 #[test]
 fn pushed_player_whose_own_position_is_accepted_gets_no_stale_sync() {
     let now = Instant::now();

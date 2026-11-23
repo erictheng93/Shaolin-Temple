@@ -11,6 +11,12 @@ export interface GameEvents extends Record<string, unknown> {
    * x、z 是收到當下的位置：遠端玩家的最後一筆位置通常比動作晚一個 tick 到，需要準確位置時改用 playerPosition()。
    */
   actionPerformed: { playerId: string; actionId: string; local: boolean; zone: string; startedAt: number; x: number; z: number }
+  /**
+   * 收到房間快照（welcome：進房、重連、斷線恢復與重新整理都走這裡）後送一次：快照裡每位遠端玩家最近一次的動作，
+   * 角色已直接照 startedAt 套上動作片段與鎖定（不送 actionPerformed，所以不補播聲音、不補效果）。
+   * 可能已經結束（伺服器保留每人最後一個動作），需要時依 startedAt 自行判斷；順序不保證。沒有動作時 actions 為空陣列。
+   */
+  snapshotActions: { actions: Array<{ playerId: string; actionId: string; zone: string; startedAt: number; x: number; z: number }> }
   playerJoined: { id: string; name: string }
   playerLeft: { id: string }
 }

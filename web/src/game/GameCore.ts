@@ -10,6 +10,7 @@ import { normalizeName } from './core/names'
 import { decideRename, isRenamePending } from './core/rename'
 import { ADAPTIVE_LEVELS, AdaptiveQuality } from './core/AdaptiveQuality'
 import { ApproachFlow } from './core/approachFlow'
+import { retimePlayerAction } from './core/retime'
 import { effectivePreset, readDeviceInfo, readNetworkInfo, resolveQuality, saveSettings, type QualityLevel, type QualityPreset, type Settings } from './core/settings'
 import { ActionRegistry } from './gameplay/ActionRegistry'
 import { gameplayModules } from './gameplay/modules'
@@ -1170,6 +1171,7 @@ export class GameCore {
         this.auth = m.auth
         this.serverOffset = m.serverTime - performance.now()
         this.players.clearRemotes()
+        const snapshotActions: GameEvents['snapshotActions']['actions'] = []
         for (const p of m.players) {
           // 自己的位置平常由本機決定；短編號只對照遠端玩家，moves 中不會有自己，sync 中的自己是伺服器的校正。
           if (p.id === m.selfId) {
@@ -1189,12 +1191,15 @@ export class GameCore {
                 const startedAt = p.action.startedAt - this.serverOffset
                 if (def.locksMovement) r.lockedUntil = startedAt + def.durationMs
                 this.anim.play(r.anim, def.animation, performance.now(), def.durationMs, startedAt)
+                snapshotActions.push({ playerId: r.id, actionId: p.action.id, zone: r.zone, startedAt, x: r.x, z: r.z })
               }
             }
           }
         }
         this.vehicles.onWelcome(m.cars ?? [])
         this.fairOverride = null
+        // 快照帶進來的動作已直接套到角色上（不經 actionPerformed，不補播聲音、不補效果）；另外通知玩法，例如合力敲鐘要分組、對齊。
+        this.events.emit('snapshotActions', { actions: snapshotActions })
         break
       }
       case 'join':
@@ -1367,23 +1372,6 @@ export class GameCore {
     this.events.emit('actionPerformed', { playerId: r.id, actionId: m.id, local: false, zone: r.zone, startedAt, x: r.x, z: r.z })
   }
 
-  /**
-   * GameplayApi.retimeAction：把玩家目前正在做的動作改成從 startedAt 開始（動作片段的進度與鎖定移動的結束時刻），冷卻不變。
-   * 「正在做」＝動作片段還是這個動作的動畫，鎖定移動的動作還在鎖定中（本機另要求鎖定的就是這個動作）。
-   */
-  private retimeAction(id: string, actionId: string, startedAt: number): void {
-    const def = this.actions.get(actionId)
-    if (!def) return
-    const now = performance.now()
-    const self = id === 'local' || id === this.selfId
-    const p = self ? this.players.local : this.players.remotes.get(id)
-    if (!p || p.anim.clip !== def.animation) return
-    if (def.locksMovement && (now >= p.lockedUntil || (self && this.lockedAction !== actionId))) return
-    this.anim.play(p.anim, def.animation, now, def.durationMs, startedAt)
-    if (def.locksMovement) p.lockedUntil = startedAt + def.durationMs
-    this.wake()
-  }
-
   // ---------- 玩法模組 ----------
 
   private installGameplay(): void {
@@ -1417,7 +1405,10 @@ export class GameCore {
         const r = this.players.remotes.get(id)
         return r ? { x: r.to.x, z: r.to.z, zone: r.zone } : null
       },
-      retimeAction: (id, actionId, startedAt) => this.retimeAction(id, actionId, startedAt),
+      retimeAction: (id, actionId, startedAt) => {
+        const host = { actions: this.actions, anim: this.anim, local: this.players.local, remotes: this.players.remotes, selfId: this.selfId, lockedAction: this.lockedAction }
+        if (retimePlayerAction(host, id, actionId, startedAt, performance.now())) this.wake()
+      },
     }
     for (const mod of gameplayModules) {
       try {
