@@ -45,7 +45,8 @@ async fn loadtest_smoke_against_local_server() {
     let result: serde_json::Value = serde_json::from_str(last).unwrap();
     assert_eq!(result["connected"], 6);
     assert_eq!(result["drivers"], 2);
-    assert_eq!(result["moving_players"], 3);
+    // 6 條中移動者是 1、3、5，司機是 2、5：5 號只開車，實際步行 2 位。
+    assert_eq!(result["moving_players"], 2);
     assert_eq!(result["connect_failed"], 0);
     assert_eq!(result["closed_by_server"], 0);
     // 兩位司機都領到車（伺服器以 AlwaysOpen 啟動，不受廟會時段影響）
@@ -118,7 +119,8 @@ async fn loadtest_smoke_fifty_players_full_room_with_collision_and_separation() 
     let result: serde_json::Value = serde_json::from_str(last).unwrap();
     assert_eq!(result["connected"], 50);
     assert_eq!(result["drivers"], 4);
-    assert_eq!(result["moving_players"], 25);
+    // 移動者是奇數號（25 位），司機是 12、24、37、49：37、49 只開車，實際步行 23 位。
+    assert_eq!(result["moving_players"], 23);
     assert_eq!(result["connect_failed"], 0);
     assert_eq!(result["closed_by_server"], 0);
     assert_eq!(result["invalid_frames"], 0);

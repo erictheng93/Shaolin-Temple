@@ -236,6 +236,7 @@ async fn player(
     index: usize,
     args: Arc<Args>,
     moving: bool,
+    is_driver: bool,
     stats: Arc<Stats>,
     mut stop: watch::Receiver<bool>,
 ) -> Joined {
@@ -278,8 +279,6 @@ async fn player(
         return Joined::Failed(format!("welcome: got {}", welcome["t"]));
     }
     let my_id = welcome["selfId"].as_str().unwrap_or("").to_string();
-    let is_driver = (index * args.drivers / args.connections)
-        != ((index + 1) * args.drivers / args.connections);
     enum DriverPhase {
         Walking,
         Claiming { retry_at: Instant },
@@ -373,7 +372,7 @@ async fn player(
                     None
                 }
             }
-            _ = move_timer.tick(), if !is_driver && moving => {
+            _ = move_timer.tick(), if moving => {
                 if Instant::now() < paused_until {
                     None
                 } else {
@@ -501,14 +500,20 @@ async fn main() {
     let (stop_tx, stop_rx) = watch::channel(false);
     let movers = (args.connections as f64 * args.moving_ratio).round() as usize;
     let mut tasks = Vec::new();
+    // 實際送 move 的步行者：被選為移動者、但不是司機（司機只送 drive）。
+    let mut walkers = 0;
     for index in 0..args.connections {
-        // 讓移動中的玩家均勻分散在各房間，而不是集中在前幾個房間。
-        let moving =
-            (index * movers / args.connections) != ((index + 1) * movers / args.connections);
+        // 讓移動中的玩家與司機各自均勻分散在各房間，而不是集中在前幾個房間。
+        let spread =
+            |n: usize| (index * n / args.connections) != ((index + 1) * n / args.connections);
+        let is_driver = spread(args.drivers);
+        let moving = spread(movers) && !is_driver;
+        walkers += usize::from(moving);
         tasks.push(tokio::spawn(player(
             index,
             args.clone(),
             moving,
+            is_driver,
             stats.clone(),
             stop_rx.clone(),
         )));
@@ -580,7 +585,7 @@ async fn main() {
         "drivers": args.drivers,
         "drivers_driving_at_start": driving,
         "moving_ratio": args.moving_ratio,
-        "moving_players": movers,
+        "moving_players": walkers,
         "seconds": round2(elapsed),
         "connected": connected,
         "connect_failed": failures.len(),
@@ -610,7 +615,7 @@ async fn main() {
         "failure_reasons": reasons,
     });
     println!(
-        "連線 {connected}/{}（移動中 {movers}，司機 {}），量測 {elapsed:.1} 秒",
+        "連線 {connected}/{}（步行移動中 {walkers}，司機 {}），量測 {elapsed:.1} 秒",
         args.connections, args.drivers
     );
     println!(
