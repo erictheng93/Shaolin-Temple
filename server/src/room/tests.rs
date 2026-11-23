@@ -1760,6 +1760,36 @@ fn bell_joiner_within_the_window_is_rooted_until_the_opener_ends() {
 }
 
 #[test]
+fn bell_joiner_snapshot_carries_the_ring_start() {
+    let now = Instant::now();
+    let ms = Duration::from_millis;
+    let (mut room, w, _rx) = bell_crew(now, 2);
+    room.action(&w[0], "r1".into(), "bell".into(), true, now);
+    let opener = room
+        .live(&w[0])
+        .unwrap()
+        .action
+        .as_ref()
+        .unwrap()
+        .started_at;
+    room.action(&w[1], "r1".into(), "bell".into(), true, now + ms(500));
+    // 開啟者之後改做別的動作：快照裡加入者的 startedAt 仍是這一聲的開啟時刻，不是自己的 +500 ms
+    room.action(&w[0], "r2".into(), "bow".into(), true, now + ms(4000));
+    let joiner = room
+        .live(&w[1])
+        .unwrap()
+        .action
+        .as_ref()
+        .unwrap()
+        .started_at;
+    assert!(
+        // 測試的 Instant 是虛擬的、now_ms() 是真實時鐘（兩次呼叫幾乎同時）：對齊 t0 就是比真實時間早 500 ms
+        (opener - joiner - 500.0).abs() < 50.0,
+        "joiner {joiner} opener {opener}"
+    );
+}
+
+#[test]
 fn bell_outside_the_window_opens_its_own_ring() {
     let now = Instant::now();
     let ms = Duration::from_millis;
