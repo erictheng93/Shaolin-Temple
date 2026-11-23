@@ -1035,10 +1035,6 @@ impl Room {
                 p.acks.push_back((req_id, ack.clone()));
                 if let (None, Some(id), Some(code)) = (reason, known, world::action_code(&action)) {
                     let started_at = now_ms();
-                    p.action = Some(PlayerAction {
-                        id: id.into(),
-                        started_at,
-                    });
                     // 合力敲鐘：前端以 startedAt 分組，不知道定點是否授予，所以庭院裡每個被接受的 bell 都參與分組；
                     // 加入者的定點結束時刻對齊這一聲的開啟者。殿內的 bell 不影響庭院這一聲。
                     let base = if id == "bell" && p.zone.id == world::COURTYARD.id {
@@ -1048,6 +1044,13 @@ impl Room {
                     } else {
                         now
                     };
+                    // 快照（welcome／join）裡的 bell 存這一聲的開啟時刻：開啟者之後改做別的動作或離房時，
+                    // 進房的人仍能從加入者還原同一個 t0（即時廣播仍帶實際開始時間，前端自己對齊）。
+                    p.action = Some(PlayerAction {
+                        id: id.into(),
+                        started_at: started_at
+                            - now.saturating_duration_since(base).as_secs_f64() * 1000.0,
+                    });
                     let cooled = p
                         .rooted_granted_at
                         .is_none_or(|at| now.saturating_duration_since(at) >= ROOTED_GRANT_GAP);
