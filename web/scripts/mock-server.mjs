@@ -145,8 +145,8 @@ const queueMove = (p, moving) => {
 // ---- 玩家之間的硬碰撞（與正式伺服器同一套規則，world/collide.ts）----
 /** 驗證時取對方幾個 tick 之前的位置（補償插值與延遲）。 */
 const VIEW_DELAY_TICKS = 2
-/** 定點動作的大約長度（毫秒）：期間推不動。mock 用的近似值，正式伺服器以動作表為準。 */
-const ROOT_MS = { prostrate: 6000, chant: 24000, incense: 6000, bell: 4000 }
+/** 鎖定移動的動作長度（毫秒）：期間推不動。抄自前端動作定義的 durationMs（worship.ts、chant.ts、world/bell.ts），改那邊時一起改。 */
+const ROOT_MS = { bow: 2200, prostrate: 8000, chant: 24000, incense: 6000, bell: 3400 }
 const collides = (p) => !p.riding && p.riding !== 0 && players.get(p.id) === p
 const rooted = (p) => (p.rootedUntil ?? 0) > Date.now()
 /** 庭院的 bell 在廣播當下呼叫：加入目前這一聲（定點結束＝開啟者開始＋時長）或另開一聲。 */
@@ -609,6 +609,15 @@ const sendTuples = (ws, t, list) => {
 }
 const snapshot = (p) => ({ id: p.id, n: p.n, name: p.name, x: p.x, z: p.z, heading: p.heading, zone: p.zone, outfit: p.outfit })
 
+/** ROAM 範圍內的合法出生點（ROAM 涵蓋香爐、石燈籠等障礙物，出生在裡面會永遠走不出來）。 */
+const spawnAt = (zone) => {
+  for (;;) {
+    const x = pick(ROAM[zone].x)
+    const z = pick(ROAM[zone].z)
+    if (validAt(zone)(x, z)) return { x, z }
+  }
+}
+
 // 機器人：在廣場上隨機走動，偶爾做動作；每 4 個庭院機器人有 1 個會去檔口領車。
 for (let i = 0; i < BOTS; i++) {
   const id = `bot-${i}`
@@ -619,8 +628,7 @@ for (let i = 0; i < BOTS; i++) {
     moving: false,
     lastPosAt: 0,
     name: randomTempleName(),
-    x: pick(ROAM[zone].x),
-    z: pick(ROAM[zone].z),
+    ...spawnAt(zone),
     heading: 0,
     zone,
     outfit: Math.floor(Math.random() * OUTFIT_COUNT),
@@ -918,7 +926,8 @@ wss.on('connection', (ws) => {
         }
         // 正式伺服器應驗證玩家確實站在出入口，並以伺服器端的落點為準。
         if (!ZONES.includes(m.zone)) return
-        Object.assign(me, { zone: m.zone, x: m.x, z: m.z, heading: m.heading })
+        // 位置歷史是舊場景的座標，換場景就清掉，碰撞才不會撞到舊場景的殘影
+        Object.assign(me, { zone: m.zone, x: m.x, z: m.z, heading: m.heading, trail: [] })
         me.moving = false
         dirty.delete(me)
         // 先對同房所有人廣播 zone，再把新場景所有其他玩家的目前位置整批送給切換者。

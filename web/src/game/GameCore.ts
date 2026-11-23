@@ -518,6 +518,12 @@ export class GameCore {
       this.toast('server.sessionClosed')
       return
     }
+    // 沒連線時 sendClaim() 不會送出，不可進入等待（否則按鈕永遠停用）
+    if (this.net.connectionStatus !== 'online') {
+      this.claimUi = { open: true, pending: false, result: null, error: 'top.offline' }
+      this.pushUi(true)
+      return
+    }
     this.claimUi = { open: true, pending: true, result: null, error: null }
     this.vehicles.claim()
     this.pushUi(true)
@@ -1048,6 +1054,9 @@ export class GameCore {
 
     const pos = resolveCollisions(pose.x, pose.z, this.moveCfg)
     Object.assign(this.players.local.mover, { ...pos, heading: pose.heading, target: null })
+    // 直接放到權威落點：尚未補完的小幅糾正與位置紀錄屬於之前的落點（可能是別的場景），一起清掉
+    this.slideX = this.slideZ = 0
+    this.posTrail.length = 0
     this.path = []
     this.approach.cancel('zone')
     this.knockFlight = null
@@ -1423,6 +1432,8 @@ export class GameCore {
 
   private pushUi(force: boolean): void {
     if (this.disposed) return
+    // 等待領車結果時斷線：請求或回覆已遺失，結束等待讓玩家重按
+    if (this.claimUi.pending && this.net.connectionStatus !== 'online') this.claimUi = { ...this.claimUi, pending: false }
     const now = performance.now()
     const curOnline = this.net.enabled ? this.players.count : 1
     const curStatus = this.net.connectionStatus
