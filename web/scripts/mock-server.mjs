@@ -19,7 +19,7 @@ import { WebSocketServer } from 'ws'
 import RAPIER from '@dimforge/rapier3d-compat'
 import { createSimWorld } from '../src/game/vehicles/simCore.ts'
 import { dequantizeDrive } from '../src/game/vehicles/drive.ts'
-import { TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
+import { MIN_DIST, TOLERANCE, resolveMove, separate } from '../src/game/world/collide.ts'
 import { OBSTACLES } from '../src/game/world/layout.ts'
 import { VEHICLES, sessionState } from '../src/game/world/vehicles.ts'
 import { SOLIDS, TREE_SOLIDS, WORLD_BOUNDS } from '../src/game/world/layout.ts'
@@ -168,9 +168,16 @@ const moveWithCollision = (p, x, z, tolerance, past) => {
   if (corrected) syncSelf(p)
   for (const m of r.moved) {
     const o = others.find((b) => b.n === m.n)
-    // 推的是對方「現在」的位置：把位移量加上去，不合法就不動
-    const nx = o.ref.x + (m.x - o.fromX)
-    const nz = o.ref.z + (m.z - o.fromZ)
+    // 推的是對方「現在」的位置：把位移量加上去，不合法就不動。位移是對歷史位置算的、會被好幾則訊息重複使用，
+    // 所以只推到與 p 這次的位置分開（MIN_DIST）為止（與正式伺服器相同）
+    const dx = m.x - o.fromX
+    const dz = m.z - o.fromZ
+    const need = MIN_DIST - Math.hypot(o.ref.x - p.x, o.ref.z - p.z)
+    const len = Math.hypot(dx, dz)
+    if (need <= 0 || len < 1e-9) continue
+    const k = Math.min(1, need / len)
+    const nx = o.ref.x + dx * k
+    const nz = o.ref.z + dz * k
     if (!validAt(p.zone)(nx, nz)) continue
     o.ref.x = nx
     o.ref.z = nz

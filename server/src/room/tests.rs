@@ -2148,3 +2148,56 @@ fn spawn_picks_the_first_free_candidate_or_the_least_crowded_one() {
     assert_eq!(pick(&[0.1, 0.5, 0.3]), 0.5);
     assert_eq!(pick(&[0.4]), 0.4);
 }
+
+#[test]
+fn repeated_moves_against_the_same_history_do_not_keep_pushing() {
+    // B 的歷史位置在 (0, 8)；A 從 (-0.6, 8) 在同一個 tick 內連送三次 (-0.1, 8)。
+    // 第一次把 B 推到 0.25、A 留在 -0.35；之後兩人已經分開，B 不可再被推走。
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (a_tx, _a_rx) = mpsc::channel(32);
+    let (b_tx, _b_rx) = mpsc::channel(32);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let b = room
+        .join("B".into(), AuthKind::Guest, 0, b_tx, now)
+        .unwrap();
+    for (who, x) in [(&a, -0.6), (&b, 0.0)] {
+        let p = room.live(who).unwrap();
+        (p.x, p.z) = (x, 8.0);
+        p.trail = [(x, 8.0); 4];
+    }
+    let ms = Duration::from_millis;
+    room.position(&a, -0.1, 8.0, 0.0, true, now);
+    let first = room.live(&b).unwrap().x;
+    assert!((first - 0.25).abs() < 1e-6, "第一次推到 0.25，實際 {first}");
+    room.position(&a, -0.1, 8.0, 0.0, true, now + ms(30));
+    room.position(&a, -0.1, 8.0, 0.0, true, now + ms(60));
+    let b_x = room.live(&b).unwrap().x;
+    let a_x = room.live(&a).unwrap().x;
+    assert!((b_x - first).abs() < 1e-6, "B 不應再被推，實際 {b_x}");
+    assert!(
+        (b_x - a_x - crate::collide::MIN_DIST).abs() < 1e-6,
+        "A {a_x}、B {b_x}"
+    );
+}
+
+#[test]
+fn sliding_along_an_obstacle_edge_is_not_corrected() {
+    // 前端把貼著香爐的人推到障礙物邊界上沿邊滑動：邊界上的座標要算合法，不可退回原位。
+    let now = Instant::now();
+    let mut room = Room::new(1, RoomConfig::new(50), Arc::new(Metrics::default()));
+    let (a_tx, mut a_rx) = mpsc::channel(32);
+    let a = room
+        .join("A".into(), AuthKind::Guest, 0, a_tx, now)
+        .unwrap();
+    let p = room.live(&a).unwrap();
+    (p.x, p.z) = (1.3, -1.5);
+    p.trail = [(1.3, -1.5); 4];
+    while a_rx.try_recv().is_ok() {}
+    room.position(&a, 1.25, -1.3, 0.0, true, now + Duration::from_millis(100));
+    let p = room.live(&a).unwrap();
+    assert_eq!((p.x, p.z), (1.25, -1.3));
+    assert!(std::iter::from_fn(|| a_rx.try_recv().ok()).all(|m| kind(&m) != "sync"));
+}

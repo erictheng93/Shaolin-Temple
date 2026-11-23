@@ -952,6 +952,8 @@ impl Room {
         }
 
         // 被推動的人：把推動的位移量加到目前位置上，再做一次 valid 檢查，不合法就不動；dirty = true、moving 不變，對他本人送 sync（同樣節流）
+        // 推擠是對對方的歷史位置算的，同一份歷史會被兩個 tick 之間的好幾則訊息重複使用：
+        // 只推到與 mover 這次的位置分開（MIN_DIST）為止，已經分開就不再推，否則會一直累加。
         for m in pushed {
             let Some(orig) = others.iter().find(|b| b.n == m.n) else {
                 continue;
@@ -963,8 +965,14 @@ impl Room {
                 .values_mut()
                 .find(|q| q.n == m.n && q.zone.id == zone.id)
             {
-                let new_x = q.x + dx;
-                let new_z = q.z + dz;
+                let need = crate::collide::MIN_DIST - (q.x - final_x).hypot(q.z - final_z);
+                let len = dx.hypot(dz);
+                if need <= 0.0 || len < 1e-9 {
+                    continue;
+                }
+                let k = (need / len).min(1.0);
+                let new_x = q.x + dx * k;
+                let new_z = q.z + dz * k;
                 if q.zone.is_valid(new_x, new_z) {
                     q.x = new_x;
                     q.z = new_z;
