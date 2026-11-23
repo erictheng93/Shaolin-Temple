@@ -80,6 +80,7 @@ const ja: Record<MessageKey, string> = {
   'server.claimCooldown': '受取直後です。しばらくしてからもう一度お試しください',
   'server.dismountFirst': '降りてから本堂に入ってください',
   'server.sessionClosed': '縁日の時間外です。車は使えません',
+  'server.rateLimited': '操作が多すぎます。少し待ってからもう一度お試しください',
   'server.error': 'サーバーで問題が起きました。しばらくしてからお試しください',
 
   'chat.label': 'チャット',

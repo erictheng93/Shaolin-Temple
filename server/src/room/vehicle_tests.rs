@@ -2154,3 +2154,40 @@ async fn fair_override_closes_and_reopens_the_session_for_everyone() {
     sleep(Duration::from_millis(50)).await;
     assert_ne!(error_code(&a.drain()), Some("session_closed"));
 }
+
+// 兩個 tick 之間依序處理 fair(true)、claim、fair(false)：沒有任何 tick 看到開放，
+// 關閉的副作用（車開始淡出）仍要在 fair(false) 當下執行。
+#[tokio::test(start_paused = true)]
+async fn fair_reopen_claim_close_between_ticks_still_fades_the_car() {
+    let room = spawn_room(cfg());
+    let mut a = connect(&room).await;
+    a.walk_to_counter().await;
+    let who = a.who.clone();
+    let fair = |open: bool| RoomCommand::Fair {
+        who: who.clone(),
+        open,
+    };
+    room.send(fair(false)).await.unwrap();
+    sleep(Duration::from_millis(250)).await;
+    a.drain();
+
+    room.send(fair(true)).await.unwrap();
+    a.claim(0).await;
+    room.send(fair(false)).await.unwrap();
+    sleep(Duration::from_millis(250)).await;
+    let msgs = a.drain();
+    let faded = msgs.iter().any(|m| {
+        matches!(
+            m,
+            ServerMessage::Car {
+                driver: None,
+                fade_at: Some(_),
+                ..
+            }
+        )
+    });
+    assert!(
+        faded,
+        "car claimed during the reopen must fade on close: {msgs:?}"
+    );
+}

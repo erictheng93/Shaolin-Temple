@@ -262,6 +262,14 @@ async fn session_inner(
                             ClientMessage::Stop { x, z, heading, .. } => {
                                 held = Some((now, x, z, heading, false))
                             }
+                            // 領車有等待中的介面（只等 car 或 error）：不能像可取代的狀態一樣靜默丟棄。
+                            ClientMessage::Claim => {
+                                let error = ServerMessage::Error {
+                                    code: "rate_limited".into(),
+                                    message: "Too many requests, try again shortly".into(),
+                                };
+                                deliver(ws, &state.metrics, error).await;
+                            }
                             _ => {}
                         }
                         continue;

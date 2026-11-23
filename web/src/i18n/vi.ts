@@ -80,6 +80,7 @@ const vi: Record<MessageKey, string> = {
   'server.claimCooldown': 'Vừa mới nhận xe, vui lòng chờ giây lát',
   'server.dismountFirst': 'Vui lòng xuống xe trước khi vào điện',
   'server.sessionClosed': 'Hội chùa chưa mở, chưa thể lấy hay lên xe',
+  'server.rateLimited': 'Thao tác quá nhanh, vui lòng thử lại sau giây lát',
   'server.error': 'Máy chủ gặp sự cố. Xin thử lại sau.',
 
   'chat.label': 'Trò chuyện',

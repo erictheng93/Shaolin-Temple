@@ -80,6 +80,7 @@ const en: Record<MessageKey, string> = {
   'server.claimCooldown': 'Car claimed recently, please wait a moment',
   'server.dismountFirst': 'Please dismount before entering the hall',
   'server.sessionClosed': 'The temple fair is closed; cars are unavailable',
+  'server.rateLimited': 'Too many requests, please try again shortly',
   'server.error': 'Something went wrong on the server. Please try again later.',
 
   'chat.label': 'Chat',

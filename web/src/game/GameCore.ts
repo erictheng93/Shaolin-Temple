@@ -78,6 +78,7 @@ const SERVER_ERRORS = new Map<string, MessageKey>([
   ['claim_cooldown', 'server.claimCooldown'],
   ['dismount_first', 'server.dismountFirst'],
   ['session_closed', 'server.sessionClosed'],
+  ['rate_limited', 'server.rateLimited'],
 ])
 
 /** 動作 ack 失敗的提示：timeout（本機逾時）有專屬訊息，其餘（unknown_action、unsupported_data…）通用訊息附上原始 code。 */

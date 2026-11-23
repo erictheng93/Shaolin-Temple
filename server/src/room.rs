@@ -1104,13 +1104,15 @@ impl Room {
         self.broadcast(message, now, |_| true);
     }
 
-    /// 手動開關廟會：記住並廣播給全房；關閉時的下車與淡出由下一個 tick 的 `check_session` 處理。
+    /// 手動開關廟會：記住並廣播給全房，並當下執行 `check_session`（關閉時立刻下車與淡出）。
+    /// 不能只靠下一個 tick 取樣：兩個 tick 之間的「開 → 領車 → 關」會被 tick 看成一直關著而漏掉。
     fn set_fair(&mut self, who: &Who, open: bool, now: Instant) {
         if self.live(who).is_none() {
             return;
         }
         self.fair_override = Some(open);
         self.broadcast(ServerMessage::Fair { open }, now, |_| true);
+        self.check_session(now);
     }
 
     fn switch_zone(&mut self, who: &Who, target: &str, now: Instant) {
