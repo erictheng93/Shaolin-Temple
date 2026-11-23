@@ -26,6 +26,8 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       LINE_CHANNEL_ID: ${LINE_CHANNEL_ID:-}
       LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET:-}
+      # 代理寫入用戶端位址的標頭（灰雲 Traefik 為 X-Real-Ip）；留空＝伺服器不依來源限速 /auth。見 docs/DEPLOY.md。
+      CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-}
     healthcheck:
       test: ["CMD", "/temple-server", "--healthcheck"]
       interval: 15s
