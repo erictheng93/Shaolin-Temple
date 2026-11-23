@@ -225,6 +225,8 @@ const bayIsFree = (bx, bz) => {
 // fair 訊息（暫時的功能）：任何玩家都能手動開關，之後不再依時鐘，直到重啟。
 let fairOverride = null
 const sessionOpen = () => fairOverride ?? (process.env.MOCK_SESSION === 'always' || sessionState(Date.now()).open)
+// welcome 之後補送的 fair：手動狀態，或 MOCK_SESSION=always（前端不知道伺服器的設定，否則會依時鐘擋下領車）
+const welcomeFair = () => fairOverride ?? (process.env.MOCK_SESSION === 'always' ? true : null)
 const SESSION_CLOSED = { t: 'error', code: 'session_closed', message: 'The temple fair is closed' }
 
 const claimCar = (p, kind) => {
@@ -772,7 +774,7 @@ wss.on('connection', (ws) => {
         send(ws, { t: 'welcome', selfId: old.id, room: 'mock-1', resumeToken: old.token, serverTime: now(), players: [...players.values()].map(snapshot), cars: carSnapshots(), auth })
         if (renamed) for (const p of players.values()) if (p.ws) send(p.ws, { t: 'name', id: old.id, name })
         if (changed) broadcast({ t: 'outfit', id: old.id, outfit: old.outfit }, old.id)
-        if (fairOverride !== null) send(ws, { t: 'fair', open: fairOverride })
+        if (welcomeFair() !== null) send(ws, { t: 'fair', open: welcomeFair() })
         return
       }
       const n = allocN()
@@ -805,7 +807,7 @@ wss.on('connection', (ws) => {
         cars: carSnapshots(),
         auth,
       })
-      if (fairOverride !== null) send(ws, { t: 'fair', open: fairOverride })
+      if (welcomeFair() !== null) send(ws, { t: 'fair', open: welcomeFair() })
       broadcast({ t: 'join', player: snapshot(me) }, id)
       return
     }
