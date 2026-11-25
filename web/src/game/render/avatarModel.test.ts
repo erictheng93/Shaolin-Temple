@@ -52,7 +52,7 @@ describe('小沙彌模型的衣裝屬性', () => {
     }
     const expected: number[] = [BODY_PART.shared, BODY_PART.robe, BODY_PART.tunic, BODY_PART.trousers, BODY_PART.leggings, BODY_PART.belt]
     if (fine) expected.push(BODY_PART.bead)
-    expect([...parts].sort()).toEqual(expected.sort())
+    expect([...parts].sort((a, b) => a - b)).toEqual(expected.sort((a, b) => a - b))
     expect(onSash).toBeGreaterThan(0)
     expect(leftShoulder).toBeLessThan(0.058)
     expect(rightShoulder).toBeGreaterThan(0.1)

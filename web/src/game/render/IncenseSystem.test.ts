@@ -34,7 +34,9 @@ describe('IncenseSystem', () => {
     sys.add(HALL_CENSERS[2]!.id, 0)
     sys.setZone('courtyard')
     sys.update(1000, 1)
+    expect(meshes()).toHaveLength(2) // 香與煙：2 個 draw call
     const [sticks, smoke] = meshes()
+    expect(sticks!.visible && smoke!.visible).toBe(true)
     expect(sticks!.count).toBe(1)
     expect(smoke!.count).toBe(3)
     sys.setZone('hall')
@@ -51,6 +53,7 @@ describe('IncenseSystem', () => {
     const scene = new THREE.Scene()
     const sys = new IncenseSystem(scene, new ResourceTracker(), [COURTYARD_CENSER])
     sys.update(0, 0)
+    expect(scene.children).toHaveLength(2)
     expect((scene.children as THREE.InstancedMesh[]).every((m) => !m.visible && m.count === 0)).toBe(true)
     sys.dispose()
     expect(scene.children).toHaveLength(0)

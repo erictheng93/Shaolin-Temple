@@ -47,12 +47,14 @@ mod tests {
         let p = params();
         let k = &p.knock;
 
-        // 速率 2.5 → 2.0 (2.5 * 0.6 = 1.5 < 2.0)
-        assert_eq!(knock_distance(2.5, k), 2.0);
-        // 速率 5.0 → 3.0 (5.0 * 0.6 = 3.0)
-        assert_eq!(knock_distance(5.0, k), 3.0);
-        // 速率 20.0 → 5.0 (20.0 * 0.6 = 12.0 > 5.0)
-        assert_eq!(knock_distance(20.0, k), 5.0);
+        // 剛達門檻的速度：算出的距離不到下限，取下限
+        assert_eq!(knock_distance(k.min_speed, k), k.min_distance);
+        // 中間值：距離與速度成正比
+        let mid = (k.min_distance + k.max_distance) / 2.0;
+        let speed = mid / k.distance_per_speed;
+        assert!((knock_distance(speed, k) - mid).abs() < 1e-5);
+        // 極高速：取上限
+        assert_eq!(knock_distance(1000.0, k), k.max_distance);
     }
 
     #[test]
@@ -70,8 +72,9 @@ mod tests {
 
     #[test]
     fn landing_stops_inside_bounds() {
-        // 由 (18, 0) 朝 +x 飛 5 公尺 → x <= 19
-        let (lx, _lz) = knock_landing(&world::COURTYARD, 18.0, 0.0, 1.0, 0.0, 5.0);
-        assert!(lx <= 19.0, "lx was {lx}");
+        // 由東側邊界內 1 公尺朝 +x 飛 5 公尺 → 不出邊界
+        let max_x = world::COURTYARD.bounds.max_x;
+        let (lx, _lz) = knock_landing(&world::COURTYARD, max_x - 1.0, 0.0, 1.0, 0.0, 5.0);
+        assert!(lx <= max_x, "lx was {lx}");
     }
 }

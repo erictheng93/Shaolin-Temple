@@ -456,11 +456,13 @@ mod tests {
 
     #[test]
     fn courtyard_solids_contain_booth_rect() {
+        // 檔口位置以 shared/vehicles.json 為唯一來源
+        let r = &crate::vehicles::params::params().booth.rect;
         let booth = Rect {
-            min_x: -15.5,
-            max_x: -12.5,
-            min_z: 8.0,
-            max_z: 10.5,
+            min_x: r.min_x as f64,
+            max_x: r.max_x as f64,
+            min_z: r.min_z as f64,
+            max_z: r.max_z as f64,
         };
         assert!(COURTYARD.solids.contains(&booth));
     }

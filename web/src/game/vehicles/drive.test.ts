@@ -17,12 +17,12 @@ describe('drive (駕駛動力學純函式)', () => {
     const m: CarMotion = { heading: 0.0, vx: 0.0, vz: 0.0, w: 0.0 }
     const input: DriveInput = { dir: 0.0, mag: 1.0 }
     const out = drive(m, input, p)
-    expect(out.force).toBe(1400.0)
+    expect(out.force).toBe(p.driveForce)
     expect(Math.abs(out.w)).toBeLessThan(1e-6)
   })
 
   it('達到最高速後不再施力', () => {
-    const m: CarMotion = { heading: 0.0, vx: 0.0, vz: 8.0, w: 0.0 }
+    const m: CarMotion = { heading: 0.0, vx: 0.0, vz: p.maxSpeed, w: 0.0 }
     const input: DriveInput = { dir: 0.0, mag: 1.0 }
     const out = drive(m, input, p)
     expect(out.force).toBe(0.0)
@@ -39,7 +39,7 @@ describe('drive (駕駛動力學純函式)', () => {
     const m: CarMotion = { heading: 0.0, vx: 0.0, vz: 0.0, w: 0.0 }
     const input: DriveInput = { dir: Math.PI, mag: 1.0 }
     const out = drive(m, input, p)
-    expect(out.force).toBe(-1400.0)
+    expect(out.force).toBe(-p.driveForce)
     expect(Math.abs(out.w)).toBeLessThan(1e-6)
   })
 

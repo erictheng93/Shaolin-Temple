@@ -102,7 +102,7 @@ mod tests {
         };
         let input = DriveInput { dir: 0.0, mag: 1.0 };
         let out = drive(&m, &input, p);
-        assert_eq!(out.force, 1400.0);
+        assert_eq!(out.force, p.drive_force);
         assert!(out.w.abs() < 1e-6);
     }
 
@@ -112,7 +112,7 @@ mod tests {
         let m = CarMotion {
             heading: 0.0,
             vx: 0.0,
-            vz: 8.0,
+            vz: p.max_speed,
             w: 0.0,
         };
         let input = DriveInput { dir: 0.0, mag: 1.0 };
@@ -148,7 +148,7 @@ mod tests {
         };
         let input = DriveInput { dir: PI, mag: 1.0 };
         let out = drive(&m, &input, p);
-        assert_eq!(out.force, -1400.0);
+        assert_eq!(out.force, -p.drive_force);
         assert!(out.w.abs() < 1e-6);
     }
 
@@ -158,13 +158,13 @@ mod tests {
         let m = CarMotion {
             heading: 0.0,
             vx: 0.0,
-            vz: 5.0,
+            vz: p.reverse_below_speed + 3.5,
             w: 0.0,
         };
         let input = DriveInput { dir: PI, mag: 1.0 };
         let out = drive(&m, &input, p);
         assert!(out.force >= 0.0);
-        assert!(out.w != 0.0);
+        assert!(out.w > 0.0, "仍朝目標方向轉向");
     }
 
     #[test]

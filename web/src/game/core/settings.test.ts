@@ -128,7 +128,9 @@ describe('assetPresetFor', () => {
       expect(assetPresetFor('high')).toBe(QUALITY_PRESETS.high)
       const auto = assetPresetFor('auto')
       expect(auto.textureSize).toBe(512)
-      expect(needsReload(auto, assetPresetFor(detectQuality()))).toBe(detectQuality() === 'high')
+      expect(auto.statueTier).toBe('std')
+      // 自動遇資料節省降成 512／std，與手動高畫質載入內容不同（不論自動判斷出哪一級）
+      expect(needsReload(auto, assetPresetFor('high'))).toBe(true)
     } finally {
       if (conn) Object.defineProperty(navigator, 'connection', conn)
       else delete (navigator as { connection?: unknown }).connection

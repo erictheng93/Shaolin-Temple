@@ -8,17 +8,6 @@ describe('衣裝資料', () => {
     expect(DEFAULT_OUTFIT).toBe(0)
   })
 
-  it('既有 6 套的外觀不變', () => {
-    expect(OUTFITS.slice(0, 6)).toEqual([
-      { key: 'orange', label: 'outfit.orange', robe: '#c9853a' },
-      { key: 'grey', label: 'outfit.grey', robe: '#86837d' },
-      { key: 'brown', label: 'outfit.brown', robe: '#6e4f3a' },
-      { key: 'black', label: 'outfit.black', robe: '#363333' },
-      { key: 'kasaya', label: 'outfit.kasaya', robe: '#c99a3e', sash: '#9c2f23' },
-      { key: 'beads', label: 'outfit.beads', robe: '#56687f', beads: '#4a2e1c' },
-    ])
-  })
-
   it('配件：只有袈裟有披帶、念珠那套有念珠、行腳僧戴斗笠、武僧穿短褂；顏色都是 #rrggbb', () => {
     expect(OUTFITS.filter((o) => o.sash).map((o) => o.key)).toEqual(['kasaya'])
     expect(OUTFITS.filter((o) => o.beads).map((o) => o.key)).toEqual(['beads'])

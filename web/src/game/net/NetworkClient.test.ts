@@ -436,7 +436,7 @@ describe('NetworkClient 登入權杖', () => {
 })
 
 describe('NetworkClient 碰碰車駕駛與上下車', () => {
-  it('sendDrive 輸入不變時每 500 ms 送一次、改變時最多 15 Hz', () => {
+  it('sendDrive 輸入不變時每 200 ms 重送一次（心跳）、改變時最多 15 Hz', () => {
     connectOnline()
     const s = last()
     const drives = () => s.sent.filter((m) => m.t === 'drive')
@@ -446,19 +446,19 @@ describe('NetworkClient 碰碰車駕駛與上下車', () => {
     expect(seq0).toBe(0)
     expect(drives()).toHaveLength(1)
 
-    // 輸入不變，經過 100ms：被節流（未達 500ms）
+    // 輸入不變，經過 100ms：被節流（未達 200ms）
     vi.advanceTimersByTime(100)
     const seqFail = client.sendDrive(0, 1)
     expect(seqFail).toBeNull()
     expect(drives()).toHaveLength(1)
 
-    // 輸入不變，再過 400ms（合計 500ms）：500ms 心跳送出
-    vi.advanceTimersByTime(400)
+    // 輸入不變，再過 100ms（合計 200ms）：心跳送出
+    vi.advanceTimersByTime(100)
     const seq1 = client.sendDrive(0, 1)
     expect(seq1).toBe(1)
     expect(drives()).toHaveLength(2)
 
-    // 輸入改變，但只過 30ms（> 15 Hz 間隔 66.67ms）：被節流
+    // 輸入改變，但只過 30ms（< 15 Hz 間隔 66.67ms）：被節流
     vi.advanceTimersByTime(30)
     const seqFail2 = client.sendDrive(Math.PI / 2, 1)
     expect(seqFail2).toBeNull()
@@ -486,25 +486,25 @@ describe('NetworkClient 碰碰車駕駛與上下車', () => {
     expect(drives()[0]).toMatchObject({ dir: 128, mag: 128 })
   })
 
-  it('seq 在 65535 之後回到 0', () => {
+  it('seq 為 16 位元，65535 之後回到 0', () => {
     connectOnline()
-    ;(client as unknown as { driveSeq: number }).driveSeq = 65535
-    const seq1 = client.sendDrive(0, 1)
-    expect(seq1).toBe(65535)
-
-    vi.advanceTimersByTime(100)
-    const seq2 = client.sendDrive(1, 1)
-    expect(seq2).toBe(0)
+    let seq: number | null = null
+    for (let i = 0; i <= 0xffff; i++) {
+      seq = client.sendDrive(i % 2 ? 1 : 0, 1)
+      expect(seq).toBe(i)
+      vi.advanceTimersByTime(100)
+    }
+    expect(client.sendDrive(0, 1)).toBe(0)
   })
 
-  it('進入背景時若在騎乘先送 ride null（由 GameCore 呼叫，測 setBackground 不會清掉這則）', () => {
+  it('sendRide：上線送出 ride（含 null＝下車）；離線時不送', () => {
     connectOnline()
     const s = last()
+    client.sendRide(3)
     client.sendRide(null)
-    expect(s.sent).toContainEqual({ t: 'ride', car: null })
-
-    client.setBackground(true)
-    // 再次確認已送出的 ride 訊息依然存在，且不會被 drain 影響
-    expect(s.sent).toContainEqual({ t: 'ride', car: null })
+    expect(s.sent.filter((m) => m.t === 'ride')).toEqual([{ t: 'ride', car: 3 }, { t: 'ride', car: null }])
+    s.drop()
+    client.sendRide(1)
+    expect(s.sent.filter((m) => m.t === 'ride')).toHaveLength(2)
   })
 })

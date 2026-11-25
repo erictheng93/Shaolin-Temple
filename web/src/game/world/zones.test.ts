@@ -35,7 +35,7 @@ describe('zones', () => {
     }
   })
 
-  it('從庭院出生點直走向殿門會進入殿內出入口；殿內走回門口會觸發回庭院', () => {
+  it('庭院從殿門前落點直走向殿門會觸發進殿；殿內從出生點直走向門口會觸發回庭院', () => {
     for (const [id, target] of [['courtyard', { x: 0, z: -20 }], ['hall', { x: 0, z: 20 }]] as const) {
       const from = id === 'courtyard' ? ZONES.hall.portals[0]!.spawn : ZONES.hall.spawn
       const s = { x: from.x, z: from.z, heading: 0, target }

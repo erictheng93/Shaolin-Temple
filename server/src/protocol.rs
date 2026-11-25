@@ -916,6 +916,7 @@ mod tests {
         assert_eq!(clean_chat("  a \n\t b   c\r\n "), "a b c");
         assert_eq!(clean_chat(" \n\u{200B}\u{1}\t "), "");
         let cjk = "佛".repeat(100);
+        assert_eq!(CHAT_MAX_CHARS, 80, "協定規定清理後最多 80 個字元");
         assert_eq!(clean_chat(&cjk).chars().count(), CHAT_MAX_CHARS);
         assert_eq!(clean_chat(&"🙏".repeat(100)), "🙏".repeat(CHAT_MAX_CHARS));
         // 截斷後不留尾端空白

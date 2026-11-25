@@ -194,7 +194,7 @@ describe('Vehicles 子系統', () => {
     // 站在櫃檯旁 (距離 <= boothRadius 2.5m)
     const uiNear = vehicles.ui(cx, cz)
     expect(uiNear.booth).not.toBeNull()
-    // 配額：kind 0 限 4，kind 1 限 3，kind 2 限 2，kind 3 限 1
+    // 配額（shared/vehicles.json）：kind 0 限 4，kind 1 限 3，kind 2 限 2，kind 3 限 1
     // 剩餘：[4 - 1, 3, 2, 1 - 1] = [3, 3, 2, 0]
     expect(uiNear.booth?.left).toEqual([3, 3, 2, 0])
 
@@ -213,7 +213,7 @@ describe('Vehicles 子系統', () => {
     vehicles.toggleRide(0, 0)
     expect(mockNet.sendRide).not.toHaveBeenCalled()
 
-    // 附近出現一台空車（距離 <= mountRadius 2.0m）
+    // 附近出現一台空車（距離 <= mountRadius）
     vehicles.onCar({ c: 1, kind: 0, driver: null, x: 0.8, z: 0.8, heading: 0, fadeAt: null })
     vehicles.toggleRide(0, 0)
     expect(mockNet.sendRide).toHaveBeenCalledWith(1)
@@ -224,6 +224,21 @@ describe('Vehicles 子系統', () => {
     expect(vehicles.riding).toBe(1)
     vehicles.toggleRide(0, 0)
     expect(mockNet.sendRide).toHaveBeenCalledWith(null)
+  })
+
+  it('claim 不帶車種（由伺服器依權重抽）；不在庭院時 claim 與 toggleRide 都不送出', () => {
+    vehicles.setLocalZone('courtyard')
+    vehicles.claim()
+    expect(mockNet.sendClaim).toHaveBeenCalledTimes(1)
+    expect(mockNet.sendClaim.mock.calls[0]).toEqual([])
+
+    vehicles.setLocalZone('hall')
+    mockNet.sendClaim.mockClear()
+    vehicles.onCar({ c: 1, kind: 0, driver: null, x: 0, z: 0, heading: 0, fadeAt: null })
+    vehicles.claim()
+    vehicles.toggleRide(0, 0)
+    expect(mockNet.sendClaim).not.toHaveBeenCalled()
+    expect(mockNet.sendRide).not.toHaveBeenCalled()
   })
 
   it('切到殿內後 update 不畫車', () => {

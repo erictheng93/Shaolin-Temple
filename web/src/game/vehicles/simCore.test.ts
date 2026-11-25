@@ -72,7 +72,7 @@ describe('simCore (碰碰車模擬核心)', () => {
     sim.free()
   })
 
-  /** 跑到第一次有碰撞為止，回傳該步每台車的碰撞種類（c → bump）；60 步內沒撞到回傳空 Map。 */
+  /** 跑到第一次有碰撞為止，回傳該步每台車的碰撞種類（c → bump）；90 步內沒撞到回傳空 Map。 */
   function runUntilBump(sim: ReturnType<typeof createSimWorld>, inputs: Record<number, { dir: number; mag: number }>): Map<number, number> {
     for (let i = 0; i < 90; i++) {
       for (const [c, input] of Object.entries(inputs)) sim.setInput(Number(c), input)

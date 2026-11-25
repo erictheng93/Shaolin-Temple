@@ -51,6 +51,27 @@ async fn get(server: &Server, authorization: Option<&str>) -> (u16, String) {
         .unwrap_or_default();
     (status, body.to_owned())
 }
+/// 反覆讀取 `/metrics`，直到 `series` 等於 `expected`（最多 5 秒），回傳當時的內文。
+/// 計數由房間與連線 task 非同步更新，固定 sleep 在負載高的 CI 上可能不夠、平常又白等。
+async fn metrics_when(server: &Server, series: &str, expected: f64) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, body) = get(server, None).await;
+        if body
+            .lines()
+            .find_map(|l| l.strip_prefix(series)?.strip_prefix(' '))
+            .and_then(|v| v.parse::<f64>().ok())
+            == Some(expected)
+        {
+            return body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{series} never reached {expected}\n{body}"
+        );
+        sleep(Duration::from_millis(20)).await;
+    }
+}
 fn value(body: &str, series: &str) -> f64 {
     body.lines()
         .find_map(|l| l.strip_prefix(series)?.strip_prefix(' '))
@@ -140,8 +161,8 @@ async fn counters_follow_connections_and_messages() {
         }
     };
     let moves_len = moves.into_data().len() as f64;
-    sleep(Duration::from_millis(100)).await;
-    let (_, body) = get(&server, None).await;
+    // hello ×2 + move ×1
+    let body = metrics_when(&server, "temple_messages_in_total", 3.0).await;
     assert_eq!(value(&body, "temple_connections"), 2.0);
     assert_eq!(value(&body, "temple_rooms"), 1.0);
     assert_eq!(value(&body, "temple_players"), 2.0);
@@ -149,8 +170,6 @@ async fn counters_follow_connections_and_messages() {
         value(&body, "temple_rooms_by_players{players=\"1-10\"}"),
         1.0
     );
-    // hello ×2 + move ×1
-    assert_eq!(value(&body, "temple_messages_in_total"), 3.0);
     assert_eq!(
         value(&body, "temple_messages_out_total{t=\"welcome\"}"),
         2.0
@@ -160,8 +179,6 @@ async fn counters_follow_connections_and_messages() {
     assert!(value(&body, "temple_tick_seconds_count") >= 1.0);
 
     drop(sockets);
-    sleep(Duration::from_millis(500)).await;
-    let (_, body) = get(&server, None).await;
-    assert_eq!(value(&body, "temple_connections"), 0.0);
+    let body = metrics_when(&server, "temple_connections", 0.0).await;
     assert_eq!(value(&body, "temple_connections_total"), 2.0);
 }
