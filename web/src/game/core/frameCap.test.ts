@@ -25,6 +25,9 @@ describe('frameCap', () => {
     expect(frameCap({ activeFps: 60, idleMs: 8_000, lowBattery: false, touch: true })).toBe(60)
     expect(frameCap({ activeFps: 60, idleMs: 8_001, lowBattery: false, touch: true })).toBe(20)
     expect(frameCap({ activeFps: 30, idleMs: 10_000, lowBattery: false, touch: true })).toBe(20)
+    // 久放的門檻觸控與否相同
+    expect(frameCap({ activeFps: 60, idleMs: 60_000, lowBattery: false, touch: true })).toBe(20)
+    expect(frameCap({ activeFps: 60, idleMs: 60_001, lowBattery: false, touch: true })).toBe(10)
   })
 })
 

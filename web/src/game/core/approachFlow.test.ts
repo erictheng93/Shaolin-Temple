@@ -3,7 +3,7 @@ import { t } from '../../i18n'
 import { ActionRegistry } from '../gameplay/ActionRegistry'
 import type { SpotContext } from '../world/worship'
 import type { Pose } from '../world/zones'
-import { APPROACH_ARRIVE, ApproachFlow, type ApproachCancel } from './approachFlow'
+import { APPROACH_ARRIVE, APPROACH_CANCELS, ApproachFlow, type ApproachCancel } from './approachFlow'
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['performance'] })
@@ -150,6 +150,10 @@ describe('走向定點與就位等候（ApproachFlow）', () => {
     ['騎車', 'ride'],
     ['被人擋住走不動', 'blocked'],
   ]
+
+  it('causes 涵蓋 APPROACH_CANCELS 的每一個原因（新增原因時這裡要補）', () => {
+    expect(causes.map(([, c]) => c).sort()).toEqual([...APPROACH_CANCELS].sort())
+  })
 
   it.each(causes)('等候中%s：取消等候，之後 startWait 歸零也不開始', (_name, cause) => {
     const { flow, state, begun, toasts } = waiting()

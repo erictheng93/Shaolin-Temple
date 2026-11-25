@@ -77,7 +77,7 @@ npm run capture:doorway              # 殿門兩側的景：無頭 Chrome 擷取
 - `NetworkClient` 負責重連（`backoff.ts`）、心跳、送出節流與 `resumeToken` 恢復，`binaryType` 設為 `arraybuffer`；渲染頻率與網路送出頻率各自獨立。上行座標取到 0.01；切到背景時若在移動會先補送 `stop`；退避計數在收到 `welcome` 才歸零；收到 `welcome` 之前不送佇列（位置、場景、改名）、`zone` 與背景補送的 `stop`，welcome 清佇列、以快照為準；close code 1013／1008 至少等 5 秒再重連；`unsupported_version` 不再重連並提示重新整理。
 - 後端（`server/`）：每個房間一個 actor task 擁有狀態（`src/room.rs`），連線以 channel 溝通，房間只用 `try_send`。場景邊界與出入口常數在 `src/world.rs`，數值抄自前端的 `world/layout.ts`／`zones.ts`，改場地時兩邊要一起改。障礙物也抄了一份在 `src/world.rs`。
 - 位置由本機先走、伺服器驗證：伺服器以「移動額度」（防瞬移）與障礙物直線檢查（防穿牆）驗證，拒絕時送只含本人短編號的 `sync`，`GameCore.correctLocal()` 把自己拉回該位置。
-- 玩家之間的硬碰撞（2026-11-21，前端與 mock 已做；Rust 伺服器待做，見 `docs/superpowers/plans/2026-11-21-player-collision.md`）：步行的玩家是半徑 0.3 公尺的圓，互相不重疊；走向別人會推動對方（重疊量各分一半），定點動作（跪拜、誦經、上香、敲鐘）中的人推不動。規則是 `world/collide.ts` 的純函式 `resolveMove`／`separate`（只用加減乘除與開根號），前端、mock 與 Rust 以共用固定資料 `server/tests/collide-script.json` 鎖住結果，改算法三邊一起改。本機在 `stepMover` 之後先行套用（`GameCore.collideLocal()`），被推的遠端玩家只在畫面上先移。伺服器糾正本機位置（只含自己的 `sync`）時，`correctLocal()` 拿它和本機「一個來回延遲之前」的位置（`posTrail`）比，只把差額補上：小於 1 公尺用滑的、不取消尋路，超過才瞬移。不用 Rapier（省流量模式也要有碰撞）、不改協定。
+- 玩家之間的硬碰撞（2026-11-21；前端、mock 與 Rust 伺服器（`server/src/collide.rs`，房間在位置驗證與每 tick 分離時套用）皆已實作）：步行的玩家是半徑 0.3 公尺的圓，互相不重疊；走向別人會推動對方（重疊量各分一半），定點動作（跪拜、誦經、上香、敲鐘）中的人推不動。規則是 `world/collide.ts` 的純函式 `resolveMove`／`separate`（只用加減乘除與開根號），前端、mock 與 Rust 以共用固定資料 `server/tests/collide-script.json` 鎖住結果，改算法三邊一起改。本機在 `stepMover` 之後先行套用（`GameCore.collideLocal()`），被推的遠端玩家只在畫面上先移。伺服器糾正本機位置（只含自己的 `sync`）時，`correctLocal()` 拿它和本機「一個來回延遲之前」的位置（`posTrail`）比，只把差額補上：小於 1 公尺用滑的、不取消尋路，超過才瞬移。不用 Rapier（省流量模式也要有碰撞）、不改協定。
 
 ### 入寺、登入與名字
 

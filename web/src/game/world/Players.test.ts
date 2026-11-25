@@ -126,6 +126,15 @@ describe('Players 插值與看門狗', () => {
     expect(r.x).toBe(6)
   })
 
+  it('位置差距剛好 5 公尺以內仍插值（不直接套用）', () => {
+    const p = makePlayers()
+    p.upsert(snap('b', 1), 0)
+    p.setRemoteTargetByN(1, 5, 0, 0, true, 100)
+    const r = p.remotes.get('b')!
+    expect(r.from).not.toBe(r.to)
+    expect(r.x).toBe(0)
+  })
+
   it('每 100 ms 一筆的等速輸入：顯示位置連續、速度恆定，最後停在最新位置不外插', () => {
     const p = makePlayers()
     p.upsert(snap('b', 1), 0)

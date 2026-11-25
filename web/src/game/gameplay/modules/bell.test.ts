@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BELL_CENTER,
+  BELL_COOLDOWN_MS,
   BELL_CREW_SWING,
   BELL_HALL_GAIN,
   BELL_HALL_LOWPASS_HZ,
@@ -38,6 +39,9 @@ describe('敲鐘', () => {
     const { actions } = setup()
     const def = actions.get('bell')!
     expect(def.locksMovement).toBe(true)
+    // 個人冷卻 6 秒，且小於兩聲最短間隔，同一組人才能每一聲都敲
+    expect(def.cooldownMs).toBe(BELL_COOLDOWN_MS)
+    expect(def.cooldownMs).toBeLessThan(BELL_HIT_MS + BELL_QUIET_MS)
     expect(def.unavailableReason!('hall')).toBeTruthy()
     const spot = def.approach!(yard())
     expect(BELL_STATIONS).toContain(spot)

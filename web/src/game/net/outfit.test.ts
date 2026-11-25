@@ -175,8 +175,10 @@ describe('NetworkClient.setOutfit', () => {
     client.setOutfit(3)
     client.setOutfit(4)
     client.setOutfit(3) // 又改回 3：最後一次選擇是 3，伺服器上是 3，補送也無妨（伺服器相同值不廣播）
-    vi.advanceTimersByTime(5000)
-    expect(outfits(last()).at(-1)).toBe(3)
+    vi.advanceTimersByTime(2000)
+    expect(outfits(last())).toEqual([1, 2, 3]) // 額度還沒恢復
+    vi.advanceTimersByTime(500)
+    expect(outfits(last())).toEqual([1, 2, 3, 3]) // 補送的是最新選擇，不是被擋下的 4
   })
 
   it('斷線時不送；重連的 hello 帶最新值，且不再補送舊的待送值', () => {

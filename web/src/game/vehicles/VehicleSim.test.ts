@@ -255,7 +255,7 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
   it('8. load 失敗時 Vehicles 繼續使用插值顯示', async () => {
     const loadSpy = vi.spyOn(VehicleSim, 'load').mockRejectedValueOnce(new Error('Sim load error'))
     const fleetMock = {
-      sync: () => {},
+      sync: vi.fn(),
       dispose: () => {},
     }
     const netMock = {
@@ -281,8 +281,10 @@ describe('VehicleSim (客戶端車輛預測與重播校正)', () => {
     // 收到 cars 訊息進行插值
     vehicles.onCars(0, [makeCar(0, 6, 6, 0)], 1000)
     // 呼叫 update 不應拋錯
-    const active = vehicles.update(1016, 1016, 0.016)
-    expect(typeof active).toBe('boolean')
+    vehicles.update(1016, 1016, 0.016)
+    // sim 載入失敗後仍以插值畫出車（本機沒有騎乘，故為遠端插值顯示）
+    const calls = fleetMock.sync.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
 
     vehicles.dispose()
     loadSpy.mockRestore()

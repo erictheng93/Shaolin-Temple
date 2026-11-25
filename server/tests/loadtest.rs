@@ -83,7 +83,9 @@ async fn loadtest_smoke_fifty_players_full_room_with_collision_and_separation() 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        let options = ServerOptions::new(vec!["http://localhost:5173".into()]);
+        // 同上：司機領車不受真實時間的廟會時段影響，結果不隨執行時刻改變。
+        let mut options = ServerOptions::new(vec!["http://localhost:5173".into()]);
+        options.room.session_clock = SessionClock::AlwaysOpen;
         axum::serve(listener, app_with_options(options))
             .await
             .unwrap();

@@ -21,6 +21,7 @@ const fromHex = (hex: string): ArrayBuffer => {
 const toHex = (bytes: Uint8Array): string => [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 
 it('Rust 共用 v6 固定資料可由前端收發', () => {
+  expect(PROTOCOL_VERSION).toBe(6) // 固定資料檔名是 v6；升版時要連同固定資料一起換
   for (const m of fixtures.client) if (m.t === 'hello') expect(m.v).toBe(PROTOCOL_VERSION)
   for (const message of fixtures.server) expect(decode(JSON.stringify(message))).toEqual(message)
   for (const message of fixtures.client) expect(JSON.parse(encode(message as ClientMessage))).toEqual(message)

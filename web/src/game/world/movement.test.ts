@@ -44,7 +44,7 @@ describe('stepMover', () => {
     expect(s.target).toBeNull()
   })
 
-  it('走進空車時速度降為 40%，離開後恢復；有人的車不影響', () => {
+  it('走進空車（slowZones 回報的位置）時速度降為 40%，離開後恢復', () => {
     // 空車在 (5, 5)
     const slowCfg: MoveConfig = {
       ...cfg,
@@ -61,15 +61,6 @@ describe('stepMover', () => {
     stepMover(outCar, { dirX: 1, dirZ: 0 }, 1, slowCfg)
     // 恢復原速 2
     expect(outCar.x).toBeCloseTo(2)
-
-    // 有人的車（slowZones 回傳空集合，不影響）
-    const occupiedCfg: MoveConfig = {
-      ...cfg,
-      slowZones: () => [],
-    }
-    const nearOccupied = mover(5, 5)
-    stepMover(nearOccupied, { dirX: 1, dirZ: 0 }, 1, occupiedCfg)
-    expect(nearOccupied.x - 5).toBeCloseTo(2)
   })
 })
 
