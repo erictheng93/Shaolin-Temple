@@ -102,6 +102,8 @@
 | `/textures/`、`/models/`、`/basis/`、`/draco/` | 1 天 | 網址**沒有**版本參數：替換檔案時使用者最多看到舊版 1 天；之後若常換再加版本參數 |
 | 其他（`index.html`、`favicon.svg`、SPA 回退） | `no-cache` | 每次重新驗證（ETag），部署後立即拿到新的雜湊檔名 |
 
+所有路徑另帶安全標頭：`X-Frame-Options: DENY` 與 `Content-Security-Policy: frame-ancestors 'none'`（不可被別的網站嵌入框架）、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`、`Permissions-Policy`（關閉相機、麥克風、定位、付款）。`add_header` 一律寫在 `server` 層、快取值由 `map $uri` 決定：nginx 1.28 的 `location` 只要有自己的 `add_header` 就不繼承外層的，安全標頭會消失。CSP 目前只有 `frame-ancestors`；完整的來源白名單（wasm、Worker、`VITE_WS_URL`）另案處理。
+
 壓縮：只有 nginx 內建的 gzip（文字、wasm、glb）；`.ktx2` 已是 Basis 超壓縮，不壓。沒有 brotli（需要額外模組，收益有限；若開 Cloudflare 代理會由它提供）。
 
 ## POC：Cloudflare Pages ＋ 本機後端（Cloudflare Tunnel）
@@ -115,7 +117,7 @@
 ```
 
 - 前後端是兩個主機名（Pages 與 Tunnel 不能共用同一個主機名的不同路徑）：`VITE_WS_URL=wss://temple-ws.wishly.tw/ws`、`ALLOWED_ORIGINS=https://temple.wishly.tw`。
-- 快取標頭在 [web/public/_headers](../web/public/_headers)，規則與 `nginx.conf` 相同；改其中一份要同步另一份。SPA 回退是 Pages 的預設行為（沒有 `404.html` 時）。
+- 快取與安全標頭在 [web/public/_headers](../web/public/_headers)，規則與 `nginx.conf` 相同；改其中一份要同步另一份。SPA 回退是 Pages 的預設行為（沒有 `404.html` 時）。
 - 限制：開發機睡眠或關機就斷線；延遲多一段家用線路；這個環境的量測不可當作容量聲明。
 
 ### 前端部署（Direct Upload，在 `web/` 執行）
