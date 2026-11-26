@@ -76,10 +76,12 @@ export function randomTempleName(rng: () => number = Math.random): string {
 export const NAME_MAX_CHARS = 16
 
 /**
- * 本機先整理玩家輸入的名字：去控制字元與頭尾空白、最多 16 個字；空白時用隨機法號（不再顯示成「訪客」）。
- * 伺服器仍會再清理一次，結果以伺服器為準。
+ * 本機先整理玩家輸入的名字：去控制字元、看不見的格式字元（零寬、雙向覆寫與隔離、BOM；與伺服器 clean_name、
+ * net/protocol.ts 的 sanitizeChat 同一組）與頭尾空白、最多 16 個字；空白時用隨機法號（不再顯示成「訪客」）。
+ * 伺服器仍會再清理一次，結果以伺服器為準。（不 import protocol.ts：mock 伺服器以 Node 直接載入本檔。）
  */
 export function normalizeName(name: string, rng: () => number = Math.random): string {
-  const s = [...name.replace(/\p{Cc}/gu, '').trim()].slice(0, NAME_MAX_CHARS).join('').trim()
+  const cleaned = name.replace(/[​-‏‪-‮⁦-⁩﻿]/gu, '').replace(/\p{Cc}/gu, '')
+  const s = [...cleaned.trim()].slice(0, NAME_MAX_CHARS).join('').trim()
   return s || randomTempleName(rng)
 }

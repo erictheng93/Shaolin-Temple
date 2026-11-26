@@ -780,9 +780,19 @@ pub fn decode_cars(bytes: &[u8]) -> Option<(u16, Vec<CarState>)> {
     Some((ack, cars))
 }
 
-/// 名稱清理（`hello` 與 `rename` 共用）：去控制字元、去前後空白、最多 16 個 Unicode 字元，空白時為「訪客」。
+/// 看不見的格式字元：零寬（U+200B..U+200F，含 LRM／RLM）、雙向嵌入與覆寫（U+202A..U+202E）、
+/// 雙向隔離（U+2066..U+2069）、BOM（U+FEFF）。名字與聊天都移除，否則可做出隱形名字或反轉文字冒名。
+fn is_hidden_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// 名稱清理（`hello` 與 `rename` 共用）：去控制字元與看不見的格式字元、去前後空白、最多 16 個 Unicode 字元，
+/// 空白時為「訪客」。
 pub fn clean_name(name: &str) -> String {
-    let filtered: String = name.chars().filter(|c| !c.is_control()).collect();
+    let filtered: String = name
+        .chars()
+        .filter(|&c| !(c.is_control() || is_hidden_format(c)))
+        .collect();
     let name: String = filtered.trim().chars().take(16).collect();
     if name.is_empty() {
         "訪客".into()
@@ -800,9 +810,7 @@ pub fn clean_chat(text: &str) -> String {
     for c in text.chars() {
         if c.is_whitespace() {
             pending_space = count > 0;
-        } else if !(c.is_control()
-            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'))
-        {
+        } else if !(c.is_control() || is_hidden_format(c)) {
             let needed = if pending_space { 2 } else { 1 };
             if count + needed > CHAT_MAX_CHARS {
                 break;
@@ -829,9 +837,17 @@ mod tests {
             ("　\n", "訪客"),
             ("😀😀", "😀😀"),
             ("12345678901234567", "1234567890123456"),
+            // 看不見的格式字元：只有它們時落回「訪客」；夾在中間的移除；不佔 16 字的名額
+            ("\u{200B}\u{FEFF}\u{200D}", "訪客"),
+            ("\u{202E}nimda\u{202C}", "nimda"),
+            ("\u{2066}慧\u{200F}明\u{2069}", "慧明"),
         ] {
             assert_eq!(clean_name(input), expected);
         }
+        assert_eq!(
+            clean_name(&format!("{}慧明", "\u{200B}".repeat(16))),
+            "慧明"
+        );
         assert_eq!(clean_name(&"😀".repeat(17)).chars().count(), 16);
     }
 

@@ -344,14 +344,15 @@ impl Metrics {
     }
 }
 
-/// 比較權杖時不因第一個不同字元就提早返回。
+/// 比對權杖：兩邊先取 SHA-256 成固定 32 bytes，再以 `subtle` 常數時間比較。
+/// 比較的長度與迴圈次數不隨權杖長度變化，也不靠手寫迴圈（編譯器可能把它最佳化成提早返回）。
 fn token_matches(expected: &str, given: &str) -> bool {
-    let (a, b) = (expected.as_bytes(), given.as_bytes());
-    let mut diff = a.len() ^ b.len();
-    for (i, x) in a.iter().enumerate() {
-        diff |= usize::from(x ^ b.get(i).copied().unwrap_or(0));
-    }
-    diff == 0
+    use sha2::{Digest, Sha256};
+    use subtle::ConstantTimeEq;
+    Sha256::digest(expected.as_bytes())
+        .as_slice()
+        .ct_eq(Sha256::digest(given.as_bytes()).as_slice())
+        .into()
 }
 
 pub async fn handler(State(state): State<crate::AppState>, headers: HeaderMap) -> Response {
@@ -376,4 +377,23 @@ pub async fn handler(State(state): State<crate::AppState>, headers: HeaderMap) -
         state.metrics.render(),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_matches;
+
+    #[test]
+    fn token_matches_only_the_exact_token() {
+        assert!(token_matches("s3cret-token", "s3cret-token"));
+        for given in [
+            "",
+            "s3cret-toke",
+            "s3cret-tokenX",
+            "S3cret-token",
+            "x3cret-token",
+        ] {
+            assert!(!token_matches("s3cret-token", given), "{given:?}");
+        }
+    }
 }

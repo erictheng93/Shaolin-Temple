@@ -68,6 +68,13 @@ describe('normalizeName', () => {
     expect([...normalizeName('😀'.repeat(20))]).toHaveLength(16)
   })
 
+  it('去看不見的格式字元（零寬、雙向覆寫與隔離、BOM），只剩它們時用隨機法號', () => {
+    expect(normalizeName('​﻿‍', () => 0)).toBe(TEMPLE_NAMES[0])
+    expect(normalizeName('‮nimda‬')).toBe('nimda')
+    expect(normalizeName('⁦慧‏明⁩')).toBe('慧明')
+    expect(normalizeName('​'.repeat(16) + '慧明')).toBe('慧明')
+  })
+
   it('空白時用隨機法號，不是「訪客」', () => {
     expect(normalizeName('   ', () => 0)).toBe(TEMPLE_NAMES[0])
     expect(TEMPLE_NAMES).toContain(normalizeName(''))

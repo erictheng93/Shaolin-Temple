@@ -62,8 +62,10 @@ const pick = ([a, b]) => a + Math.random() * (b - a)
 // 聊天（與正式伺服器相同的規則）：清理（空白壓縮、移除控制與雙向覆寫字元、截到 80 字元）、突發 3 則每 2 秒補 1 則、全房廣播含發話者。
 // 這裡刻意不 import protocol.ts（它的相對匯入沒有副檔名，Node 直接載入會失敗），規則重寫一份，兩邊由測試與正式伺服器的固定資料對照。
 const CHAT_MAX_CHARS = 80
+// 看不見的格式字元：零寬（U+200B..U+200F）、雙向覆寫（U+202A..U+202E）與隔離（U+2066..U+2069）、BOM；聊天與名字共用。
+const HIDDEN_FORMAT = /[​-‏‪-‮⁦-⁩﻿]/gu
 const sanitizeChat = (text) =>
-  Array.from(String(text).replace(/[​-‏‪-‮⁦-⁩﻿]/gu, '').replace(/\s+/gu, ' ').replace(/\p{Cc}/gu, '').trim())
+  Array.from(String(text).replace(HIDDEN_FORMAT, '').replace(/\s+/gu, ' ').replace(/\p{Cc}/gu, '').trim())
     .slice(0, CHAT_MAX_CHARS)
     .join('')
     .trim()
@@ -89,9 +91,12 @@ const broadcastChat = (from, raw) => {
   if (text) broadcast({ t: 'chat', id: from.id, text, at: now() })
 }
 const BOT_LINES = ['阿彌陀佛', '早安', '這裡好安靜', '鐘聲真好聽', '南無觀世音菩薩', '今天天氣真好', '來上炷香吧', '心靜自然涼']
-/** 名字清理（與正式伺服器相同）：去控制字元、trim、最多 16 個 Unicode 字元，空白變「訪客」。 */
+/** 名字清理（與正式伺服器相同）：去控制字元與看不見的格式字元、trim、最多 16 個 Unicode 字元，空白變「訪客」。 */
 const cleanName = (raw) => {
-  const s = [...String(typeof raw === 'string' ? raw : '').replace(/\p{Cc}/gu, '').trim()].slice(0, 16).join('').trim()
+  const s = [...String(typeof raw === 'string' ? raw : '').replace(HIDDEN_FORMAT, '').replace(/\p{Cc}/gu, '').trim()]
+    .slice(0, 16)
+    .join('')
+    .trim()
   return s || '訪客'
 }
 const authOf = (session) => (session === 'mock.google' ? 'google' : session === 'mock.line' ? 'line' : 'guest')
