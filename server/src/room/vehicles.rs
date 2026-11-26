@@ -434,9 +434,8 @@ impl Room {
         let sync_msg = ServerMessage::Sync { m: vec![tuple(p)] };
         self.send_to(id, sync_msg, now);
 
+        // set_occupied(false) 已把輸入清成 None；不可再 set_input，否則 step() 每步仍走駕駛分支、喚醒剛體，空車無法休眠。
         self.vehicles.set_occupied(c, false);
-        self.vehicles
-            .set_input(c, DriveInput { dir: 0.0, mag: 0.0 });
         let fade_at = self.session_ms(now) + p_params.fade.idle_ms as f64;
         let remove_at = now + Duration::from_millis(p_params.fade.idle_ms + p_params.fade.fade_ms);
         let mut kind = 0;

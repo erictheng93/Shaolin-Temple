@@ -2214,3 +2214,30 @@ async fn always_open_session_sends_fair_open_after_welcome() {
             .any(|m| matches!(m, ServerMessage::Fair { .. }))
     );
 }
+
+// 行進中下車：dismount 不可把輸入設回 Some（否則每步 set_linvel(.., true) 喚醒剛體），空車要能休眠。
+#[test]
+fn car_dismounted_while_moving_falls_asleep() {
+    let now = Instant::now();
+    let mut room = Room::new(1, cfg(), Arc::new(Metrics::default()));
+    let (tx, _rx) = mpsc::channel(256);
+    let who = room.join("A".into(), AuthKind::Guest, 0, tx, now).unwrap();
+    let counter = &params().booth.counter;
+    {
+        let p = room.live(&who).unwrap();
+        (p.x, p.z) = (counter.x as f64, counter.z as f64);
+    }
+    room.claim(&who, 0, now);
+    let c = room.live(&who).unwrap().riding.expect("claim must succeed");
+    room.drive(&who, 1, DIR_EAST, 255, now);
+    for _ in 0..10 {
+        room.physics_step(now);
+    }
+    room.dismount(&who.id, now);
+    assert!(room.vehicles.any_awake(), "car should still be rolling");
+    for _ in 0..300 {
+        room.physics_step(now);
+    }
+    assert!(room.cars.contains_key(&c));
+    assert!(!room.vehicles.any_awake(), "empty car must fall asleep");
+}
