@@ -24,6 +24,8 @@ reqwest = { version = "0.13.5", default-features = false, features = ["rustls", 
 # 選 hmac 0.12／sha2 0.10：與已在 Cargo.lock 的 sha1 0.10（tungstenite）共用 digest 0.10，不多一份。
 hmac = "0.12.1"
 sha2 = "0.10.9"
+# /metrics 權杖的常數時間比對（src/metrics.rs）；2.6 已是 hmac／digest 的間接依賴，不多一份。
+subtle = "2.6.1"
 # url-safe base64；0.22 已是 tungstenite 的間接依賴。
 base64 = "0.22.1"
 # 物理引擎（src/vehicles）：與前端 @dimforge/rapier3d-compat 0.21.0 同一版核心（該 npm 版本由 rapier 0.36.0 的提交發布），
