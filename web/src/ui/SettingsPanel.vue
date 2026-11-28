@@ -301,6 +301,8 @@ function reloadNow() {
 .backdrop {
   position: absolute;
   inset: 0;
+  /* 疊在所有 HUD 與領車視窗之上（層級見 App.vue 的 .notice） */
+  z-index: 50;
   display: grid;
   place-items: center;
   padding: 16px;

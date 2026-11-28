@@ -248,8 +248,13 @@ function toggleMute() {
   opacity: 1;
 }
 
+/*
+ * 疊放層級（都在 .stage 內）：HUD 不設或 10（上車鈕、廟會標籤）→ 直向開車提示 20 → 領車視窗 40
+ * → 設定面板 50 → 系統提示 60 → toast 70（不攔點擊，開著設定也看得到回饋）。
+ */
 .notice {
   position: absolute;
+  z-index: 60;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
