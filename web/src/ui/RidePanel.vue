@@ -219,6 +219,11 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
 @media (pointer: coarse) {
   .key-hint { display: none; }
 }
+/* 橫向矮畫面：右側欄從底部往上排（說話 → 上車 → 廟會），廟會區不碰右上的工具鈕（見 ChatPanel.vue） */
+@media (orientation: landscape) and (max-height: 500px) {
+  .ride-btn { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 52px); }
+  .session-box { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 104px); }
+}
 
 /* ---- 領車視窗 ---- */
 .claim-veil {
@@ -425,6 +430,26 @@ onBeforeUnmount(() => timer && clearTimeout(timer))
   .hint { display: none; }
   .prize { margin: 4px 0 10px; padding: 18px 12px 10px; }
   .prize-name { font-size: 1.25rem; }
+}
+
+/*
+ * 更矮的橫向畫面（瀏覽器工具列佔掉高度，例如 720×268）：小沙彌縮小坐進卡片左上角、與標題同一列，
+ * 收緊留白，讓「抽一台！」與抽中結果不用捲動就看得到。
+ */
+@media (orientation: landscape) and (max-height: 400px) {
+  .claim-veil { padding: 8px max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left)); }
+  .claim-card { margin-top: 0; padding: 8px 14px 10px; border-radius: 22px; }
+  .monk { top: 4px; left: 12px; transform: none; scale: 0.62; transform-origin: 0 0; animation-name: bob-corner; }
+  .title { min-height: 40px; margin: 0 0 2px; padding: 0 52px; line-height: 40px; }
+  .bubble { margin: 6px 0 8px; }
+  .bubble::before { left: 30px; }
+  .odds { margin-bottom: 8px; }
+  .session-note { margin-bottom: 2px; }
+  .prize { margin: 12px 0 8px; padding: 14px 10px 8px; }
+  .prize-name { font-size: 1.15rem; }
+}
+@keyframes bob-corner {
+  50% { transform: translateY(-3px); }
 }
 
 @media (prefers-reduced-motion: reduce) {

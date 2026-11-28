@@ -271,4 +271,26 @@ onBeforeUnmount(() => {
     display: none;
   }
 }
+
+/*
+ * 橫向矮畫面（手機橫拿、瀏覽器還有工具列）：右側欄改成從底部往上排（說話 → 上車 → 廟會），動作列縮小並讓出兩側，
+ * 搖桿提示圈貼底；聊天紀錄的高度收到提示圈上方，收起時只留最新幾則（舊的從上緣裁掉）。
+ */
+@media (orientation: landscape) and (max-height: 500px) {
+  .talk {
+    bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .log {
+    /* 紀錄上緣（頂部列下方）到搖桿提示圈上緣（下緣偏移 + 圈高 120px + 8px 間隔）之間 */
+    max-height: min(34dvh, 320px, calc(100dvh - max(12px, env(safe-area-inset-top)) - 60px - max(12px, env(safe-area-inset-bottom)) - 128px));
+  }
+
+  .log:not(.scroll) {
+    overflow: hidden;
+    justify-content: flex-end;
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 1.2em);
+    mask-image: linear-gradient(to bottom, transparent, #000 1.2em);
+  }
+}
 </style>

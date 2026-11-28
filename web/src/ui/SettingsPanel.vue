@@ -463,4 +463,25 @@ legend:is(:lang(en), :lang(vi)) {
   height: 20px;
   accent-color: var(--accent);
 }
+
+/* 橫向矮畫面：面板用滿高度，標題列（含關閉鈕）捲動時固定在上方，隨時按得到 */
+@media (orientation: landscape) and (max-height: 500px) {
+  .backdrop {
+    padding: 8px max(8px, env(safe-area-inset-right)) 8px max(8px, env(safe-area-inset-left));
+  }
+
+  .sheet {
+    max-height: calc(100dvh - 16px);
+    padding: 0 20px 16px;
+  }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0 -20px 8px;
+    padding: 8px 20px;
+    background: rgb(24, 26, 32);
+  }
+}
 </style>

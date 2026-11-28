@@ -161,6 +161,13 @@ function onEnd(e: PointerEvent) {
   opacity: 0.55;
 }
 
+/* 橫向矮畫面：提示圈貼底，不碰頂部列與左上聊天紀錄（動作列在橫向會讓出左側，見 ActionBar.vue） */
+@media (orientation: landscape) and (max-height: 500px) {
+  .base.idle {
+    bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+
 .knob {
   position: absolute;
   left: 50%;

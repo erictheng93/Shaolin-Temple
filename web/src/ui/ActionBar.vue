@@ -216,4 +216,19 @@ const progress = (a: UiAction) => (a.readyAt > now.value ? (a.readyAt - now.valu
     height: 56px;
   }
 }
+
+/* 橫向矮畫面：按鈕縮小（仍 ≥ 44px），兩側讓給搖桿提示圈（左）與說話、上車鈕（右），放不下時橫向捲動 */
+@media (orientation: landscape) and (max-height: 500px) {
+  .bar {
+    bottom: max(12px, env(safe-area-inset-bottom));
+    gap: 8px;
+    padding: 6px;
+    max-width: calc(100% - 2 * (160px + max(env(safe-area-inset-left), env(safe-area-inset-right))));
+  }
+
+  .action {
+    width: 52px;
+    height: 52px;
+  }
+}
 </style>
