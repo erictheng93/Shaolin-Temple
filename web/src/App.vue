@@ -220,6 +220,11 @@ function toggleMute() {
   width: 100%;
   height: 100%;
   height: 100dvh;
+  /*
+   * 不允許雙指縮放與雙擊縮放：兩隻拇指同時按在 HUD 上時頁面不會被放大。縮放限制沿祖先鏈取交集，
+   * 內層的捲動區（設定面板、動作列、聊天紀錄）仍可捲；canvas 與搖桿自己的 touch-action: none 不受影響。
+   */
+  touch-action: pan-x pan-y;
 }
 
 .scene {
