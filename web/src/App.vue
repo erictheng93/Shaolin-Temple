@@ -110,6 +110,15 @@ watch(
 
 async function enter(name: string) {
   if (!core || entering.value) return
+  // 觸控裝置進場時進全螢幕（手機橫拿時瀏覽器工具列會吃掉大半高度）。要在使用者手勢內、await 之前呼叫；
+  // 不支援（iPhone Safari）或被拒絕都直接略過。
+  if (touch.value) {
+    try {
+      document.documentElement.requestFullscreen?.()?.catch(() => {})
+    } catch {
+      // 舊瀏覽器同步拋錯：略過
+    }
+  }
   entering.value = true
   settings.playerName = name
   try {
