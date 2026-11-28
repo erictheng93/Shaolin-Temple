@@ -110,6 +110,15 @@ watch(
 
 async function enter(name: string) {
   if (!core || entering.value) return
+  // 觸控裝置進場時進全螢幕（手機橫拿時瀏覽器工具列會吃掉大半高度）。要在使用者手勢內、await 之前呼叫；
+  // 不支援（iPhone Safari）或被拒絕都直接略過。
+  if (touch.value) {
+    try {
+      document.documentElement.requestFullscreen?.()?.catch(() => {})
+    } catch {
+      // 舊瀏覽器同步拋錯：略過
+    }
+  }
   entering.value = true
   settings.playerName = name
   try {
@@ -220,6 +229,11 @@ function toggleMute() {
   width: 100%;
   height: 100%;
   height: 100dvh;
+  /*
+   * 不允許雙指縮放與雙擊縮放：兩隻拇指同時按在 HUD 上時頁面不會被放大。縮放限制沿祖先鏈取交集，
+   * 內層的捲動區（設定面板、動作列、聊天紀錄）仍可捲；canvas 與搖桿自己的 touch-action: none 不受影響。
+   */
+  touch-action: pan-x pan-y;
 }
 
 .scene {
@@ -243,8 +257,13 @@ function toggleMute() {
   opacity: 1;
 }
 
+/*
+ * 疊放層級（都在 .stage 內）：HUD 不設或 10（上車鈕、廟會標籤）→ 直向開車提示 20 → 領車視窗 40
+ * → 設定面板 50 → 系統提示 60 → toast 70（不攔點擊，開著設定也看得到回饋）。
+ */
 .notice {
   position: absolute;
+  z-index: 60;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);

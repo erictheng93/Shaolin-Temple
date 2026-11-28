@@ -53,6 +53,8 @@ beforeEach(() => {
   FakeSocket.instances = []
   vi.stubGlobal('window', { addEventListener() {}, removeEventListener() {} })
   vi.stubGlobal('WebSocket', FakeSocket)
+  // Node 25 起有全域 sessionStorage，前一個測試存的 resumeToken 會留到下一個；預設當作沒有。
+  vi.stubGlobal('sessionStorage', undefined)
   // 退避取上限（第 n 次 = 500 × 2^n − 1 ms），讓「至少等 5 秒」與一般退避可以分辨。
   vi.spyOn(Math, 'random').mockReturnValue(0.999999)
   client = new NetworkClient({ url: 'ws://x', name: 'n' })

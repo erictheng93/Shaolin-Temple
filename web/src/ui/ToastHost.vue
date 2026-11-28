@@ -21,6 +21,8 @@ defineProps<{ toasts: Array<{ id: number; text: string }> }>()
   justify-items: center;
   width: min(420px, calc(100% - 32px));
   pointer-events: none;
+  /* 最上層（層級見 App.vue 的 .notice） */
+  z-index: 70;
 }
 
 .toast {
