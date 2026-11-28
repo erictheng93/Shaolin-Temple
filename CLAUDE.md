@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `web/`：Vite 8 + Vue 3.5 + TypeScript + 直接操作 Three.js 的前端，已可運作。
 - `server/`：Rust + Axum 後端，進度見 docs/BACKEND_TASKS.md。前端開發時仍可用 `web/scripts/mock-server.mjs` 測試多人功能，它實作與正式伺服器相同的協定。
 - 移動：觸控裝置（`(any-pointer: coarse)`）用 `ui/Joystick.vue` 浮動式虛擬搖桿（畫面左下約 45%×45% 為觸控區，橫向時以 `min-height` 保證容納閒置提示圈，類比輸出、死區 0.12，直接呼叫 `GameCore.setMoveStick()`，非零時優先於鍵盤；換算在 `game/input/stick.ts`；場景切換開始時以 `suspended`（`UiState.fading`）放開搖桿，與鍵盤一樣要重新按下才會再走）；桌機用 WASD／方向鍵，或滑鼠點擊地面以尋路走過去（顯示目標標記；點到主殿建築時走向殿門）。點擊移動只接受滑鼠與觸控筆（`InputController` 依 `pointerType` 忽略手指點擊），觸控裝置只用搖桿。進出主殿是走進出入口範圍觸發。`stepMover` 的方向輸入長度 ≤ 1 時速度按比例（半推半速），> 1 時正規化（鍵盤對角仍是全速）。
+- HUD 版面（各元件 scoped CSS 的絕對定位）：整個介面不可選取文字、不跳長按選單（`style.css`，`input`／`textarea` 例外），`.stage` 以 `touch-action: pan-x pan-y` 擋雙指與雙擊縮放；疊放層級 HUD ≤ 10 → 直向開車提示 20 → 領車視窗 40 → 設定面板 50 → 系統提示 60 → toast 70（見 `App.vue` 的 `.notice`）。橫向矮畫面 `(orientation: landscape) and (max-height: 500px)` 另有一組排法：右側欄由下往上（說話 → 上車 → 廟會）、動作列縮為 52px 並讓出兩側、搖桿提示圈貼底、聊天紀錄限高、設定面板標題列固定；`max-height: 400px` 以下領車視窗的小沙彌縮進卡片左上角。觸控裝置按下入寺時呼叫 `requestFullscreen`，失敗就略過。
 - 玩法：參拜（`gameplay/modules/worship.ts`）——合十、跪拜（殿內走到空蒲團叩拜三次）、誦經（殿內走到空蒲團跪坐敲木魚 24 秒，可提前起身，`modules/chant.ts`）、上香（走到最近的香爐前三拜後插香）、敲鐘（庭院走到鐘亭前拉撞木撞鐘，`modules/bell.ts`）；庭院碰碰車（`game/vehicles/`，後端 `server/src/vehicles/`）——庭院西南側車檔（booth）借車（`claim`，冷卻 20 秒）、空車靠近手勢上車（`ride`）、虛擬搖桿／鍵盤駕駛（`drive`，前後油門＋轉向）、車車剛體碰撞與彈性回彈（restitution 0.6）、大於 2.5 m/s 撞擊步行玩家具備撞飛與 3 秒無敵保護（`knock`）、閒置 60 秒下車、空車 15 秒淡出回收。計分、持久化等尚未定義。
 
 ## 指令（皆在 `web/` 執行）
